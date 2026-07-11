@@ -50,7 +50,17 @@ bash $AESOP_ROOT/daemons/run-watchdog.sh &
 
 Runs every 150s: discovers changed repos, stashes uncommitted work, pushes backups to `backup/wip-*` branches, runs secret-scan gate.
 
-#### 3. Launch the TUI dashboard
+#### 3. Launch the dashboard
+
+**Recommended: Web Dashboard** (modern, responsive interface)
+
+```bash
+python $AESOP_ROOT/ui/serve.py
+```
+
+Opens `http://localhost:8770` with real-time fleet status, agent tracking, alerts, and inbox.
+
+**Alternative: TUI Dashboard** (terminal-based)
 
 ```bash
 # On Windows:
@@ -60,7 +70,7 @@ Start-Process "C:\Program Files\Git\git-bash.exe" -ArgumentList '-c', 'bash /c/U
 bash ~/aesop/dash/watchdog-gui.sh &
 ```
 
-Real-time display: repo sync status, fleet heartbeats, security alerts, backup events.
+See `ui/README.md` for web dashboard configuration and troubleshooting.
 
 #### 4. Arm the monitor loop
 
