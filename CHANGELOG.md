@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Dashboard Integrations
+- **`dash/dash-extra.mjs`**: Fleet agent detector scans transcripts for running agents, enables web dashboard agent panel. Detects agents in last 12 minutes, color-codes by alert severity, outputs JSON for REST endpoint or TUI text for terminal.
+- **`tools/secret_scan.py`**: Pre-push secret/credential detection gate with comprehensive pattern library (PEM keys, AWS/GitHub/Slack/OpenAI tokens, .env patterns, credential filenames). Supports `--staged`, `--history`, and direct path scanning. Pragma escape hatch for allow-pattern-docs. Exit 1 blocks push on findings.
+
+### Improved
+- Web dashboard now properly detects and displays running subagents via `dash-extra.mjs`
+- Secret-scan gate now active in watchdog cycle; blocks any push with unscanned credentials
+
 ## [1.0.0] - 2026-07-11
 
 ### Added
