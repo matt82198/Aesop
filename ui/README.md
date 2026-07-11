@@ -45,6 +45,33 @@ python $AESOP_ROOT/ui/serve.py
 5. **Security Alerts**: Unreviewed lines from `scan/SECURITY-ALERTS.log` (skips NOTE:/RESOLVED-FP)
 6. **Main-Thread Prompts**: Last ~12 messages from newest session JSONL in transcripts root
 
+### Agent Details
+
+Click any agent row in the **Fleet Agents** panel to expand and view full dispatch details:
+
+- **Dispatcher**: Who launched this agent (main thread or parent agent)
+- **Model**: LLM model used for the agent
+- **Messages**: Total NDJSON message count in transcript
+- **Prompt**: Full dispatch prompt (expandable container with scroll)
+
+#### API: `/agent?id=<agent_id>`
+
+GET endpoint returns JSON with agent metadata:
+
+```json
+{
+  "id": "a77b995bcdb9",
+  "dispatch_prompt": "full prompt text here...",
+  "dispatcher": "main thread",
+  "model": "haiku",
+  "message_count": 42,
+  "first_seen": 1720700000,
+  "last_activity": 1720700300
+}
+```
+
+**Note**: Agent IDs are prefix-matched via glob (truncated IDs in the dashboard resolve to full transcripts on disk).
+
 ### Inbox Contract
 
 POST `/submit` appends timestamped line to `state/ui-inbox.md`:

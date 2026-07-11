@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from time import time
@@ -249,6 +250,86 @@ def get_alerts():
     return alerts
 
 
+def extract_agent_dispatch_prompt(agent_id):
+    """
+    Extract dispatch prompt and metadata from agent output file.
+    Returns dict with prompt, dispatcher, model, activity times, and message count.
+    Robust: missing/invalid file -> {error: "..."}
+
+    CRITICAL: Use prefix-matching via glob, not exact match. The dashboard supplies
+    truncated agent IDs; files on disk carry full IDs (e.g., a77b995bcdb953e9c.output).
+    """
+    try:
+        # Prefix-match: search in TRANSCRIPTS_ROOT for files matching agent_id*.output
+        if not TRANSCRIPTS_ROOT.exists():
+            return {"error": f"transcripts root not found at {TRANSCRIPTS_ROOT}"}
+
+        # Glob for matching files (prefix-match handles truncated IDs)
+        matches = sorted(
+            TRANSCRIPTS_ROOT.glob(f"**/{agent_id}*.output"),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )
+        if not matches:
+            return {"error": f"transcript not found for {agent_id}"}
+        output_file = matches[0]
+
+        dispatch_prompt = None
+        message_count = 0
+        model = None
+        parent_uuid = None
+        first_seen = None
+        last_activity = None
+
+        # Parse NDJSON (one JSON per line)
+        with open(output_file, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+            message_count = len(lines)
+
+            # Get file mtime for activity time
+            stat = output_file.stat()
+            first_seen = int(stat.st_mtime)
+            last_activity = int(stat.st_mtime)
+
+            # First line should be type="user" with the dispatch prompt
+            if lines:
+                try:
+                    first_line = json.loads(lines[0])
+                    if first_line.get('type') == 'user':
+                        msg = first_line.get('message', {})
+                        dispatch_prompt = msg.get('content', '')
+                        parent_uuid = first_line.get('parentUuid')
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            # Scan for model info in assistant messages
+            for line in lines[1:20]:  # Check first ~20 lines
+                try:
+                    obj = json.loads(line)
+                    if obj.get('type') == 'assistant' and not model:
+                        if 'model' in obj:
+                            model = obj.get('model')
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+        if not dispatch_prompt:
+            return {"error": f"no dispatch prompt found"}
+
+        # Infer dispatcher: if parentUuid is null, it's main thread; otherwise parent agent
+        dispatcher = "main thread" if parent_uuid is None else "parent agent"
+
+        return {
+            "id": agent_id,
+            "dispatch_prompt": dispatch_prompt,
+            "dispatcher": dispatcher,
+            "model": model or "unknown",
+            "message_count": message_count,
+            "first_seen": first_seen,
+            "last_activity": last_activity,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ==============================================================================
 # HTTP Server
 # ==============================================================================
@@ -266,6 +347,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_html()
         elif self.path == "/data":
             self.serve_data()
+        elif self.path.startswith("/agent?"):
+            self.serve_agent()
         else:
             self.send_error(404)
 
@@ -310,7 +393,27 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         @media (max-width: 1200px) { .grid { grid-template-columns: 1fr; } }
 
         .panel { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; }
-        .panel-title { font-size: 12px; color: #8ac; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; }
+        .panel-title { font-size: 12px; color: #8ac; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+        .panel-title-emoji { font-size: 14px; }
+
+        /* Agent row expand/collapse */
+        .agent-row { cursor: pointer; padding: 8px; margin-bottom: 4px; background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 3px; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; }
+        .agent-row:hover { background: #151515; border-color: #444; }
+        .agent-row.expanded { background: #1a1a1a; border-color: #8ac; }
+        .agent-status-icon { font-size: 12px; width: 14px; }
+        .agent-row-header { flex: 1; font-size: 12px; display: flex; gap: 12px; align-items: center; }
+        .agent-id-badge { color: #8ac; font-weight: bold; }
+        .agent-age { color: #666; font-size: 11px; }
+        .agent-preview { color: #999; font-size: 11px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .agent-expand-toggle { color: #666; font-size: 11px; transition: transform 0.2s ease; }
+        .agent-row.expanded .agent-expand-toggle { transform: rotate(90deg); }
+
+        .agent-details { display: none; margin-top: 8px; padding: 12px; background: #0f0f0f; border-left: 3px solid #8ac; border-radius: 2px; max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+        .agent-row.expanded .agent-details { display: block; max-height: 600px; }
+        .detail-row { margin-bottom: 8px; font-size: 11px; }
+        .detail-label { color: #8ac; font-weight: bold; display: inline-block; width: 100px; }
+        .detail-value { color: #ccc; word-break: break-all; }
+        .dispatch-prompt { background: #0a0a0a; border: 1px solid #333; border-radius: 2px; padding: 8px; margin-top: 6px; max-height: 300px; overflow-y: auto; font-size: 11px; color: #ccc; font-family: 'Monaco', 'Menlo', monospace; white-space: pre-wrap; word-wrap: break-word; }
 
         .item { padding: 8px 0; font-size: 12px; border-bottom: 1px solid #2a2a2a; }
         .item:last-child { border-bottom: none; }
@@ -384,7 +487,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         <div class="grid">
             <div class="panel">
-                <div class="panel-title">Fleet Agents (Last 2 Min)</div>
+                <div class="panel-title">
+                    <span class="panel-title-emoji">⚡</span>
+                    <span>Fleet Agents (<span id="running-agents-count">0</span> active)</span>
+                </div>
                 <div id="agents-list" class="loading">—</div>
             </div>
 
@@ -412,7 +518,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         </div>
 
         <div style="text-align: center; margin-top: 30px; color: #666; font-size: 11px;">
-            Auto-refresh every 3s · Dashboard
+            Auto-refresh every 3s · Dashboard · Click agent rows to inspect dispatches
         </div>
     </div>
 
@@ -454,15 +560,56 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 const runningAgents = (data.agents || []).filter(a => a.status === 'running').length;
                 document.getElementById('running-count').textContent = runningAgents;
 
-                // Agents
+                // Agents with expandable details
                 const agentsList = document.getElementById('agents-list');
+                document.getElementById('running-agents-count').textContent = (data.agents || []).length;
                 if (data.agents && data.agents.length > 0) {
-                    agentsList.innerHTML = data.agents.map(a =>
-                        `<div class="item fade-in"><span class="item-id">${sanitize(a.id)}</span><span class="item-age">${a.age_s}s</span><span class="item-status status-${a.status}">${a.status}</span><br><span style="color: #999;">${sanitize((a.hint || '').substring(0, 60))}</span></div>`
-                    ).join('');
+                    agentsList.innerHTML = data.agents.map(a => {
+                        const statusEmoji = a.status === 'running' ? '🟢' : a.status === 'done' ? '⚪' : '⚠️';
+                        const preview = (a.hint || '').substring(0, 60).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        return `<div class="agent-row fade-in" data-agent-id="${sanitize(a.id)}">
+                            <span class="agent-status-icon">${statusEmoji}</span>
+                            <div class="agent-row-header">
+                                <span class="agent-id-badge">${sanitize(a.id)}</span>
+                                <span class="agent-age">${a.age_s}s</span>
+                                <span class="agent-preview">${preview}</span>
+                            </div>
+                            <span class="agent-expand-toggle">▶</span>
+                            <div class="agent-details" style="display: none;"></div>
+                        </div>`;
+                    }).join('');
+                    // Attach click handlers for expansion
+                    document.querySelectorAll('.agent-row').forEach(row => {
+                        row.addEventListener('click', async function(e) {
+                            e.stopPropagation();
+                            const agentId = this.dataset.agentId;
+                            this.classList.toggle('expanded');
+                            const detailsDiv = this.querySelector('.agent-details');
+                            if (this.classList.contains('expanded') && !detailsDiv.innerHTML) {
+                                // Fetch details on first expand
+                                try {
+                                    const resp = await fetch('/agent?id=' + encodeURIComponent(agentId));
+                                    const details = await resp.json();
+                                    if (details.error) {
+                                        detailsDiv.innerHTML = `<div class="detail-row"><span class="detail-label">Error:</span> <span class="detail-value">${sanitize(details.error)}</span></div>`;
+                                    } else {
+                                        const uptime = Math.floor((Date.now() / 1000 - details.last_activity) / 60);
+                                        detailsDiv.innerHTML = `
+                                            <div class="detail-row"><span class="detail-label">Dispatcher:</span> <span class="detail-value">${sanitize(details.dispatcher)}</span></div>
+                                            <div class="detail-row"><span class="detail-label">Model:</span> <span class="detail-value">${sanitize(details.model)}</span></div>
+                                            <div class="detail-row"><span class="detail-label">Messages:</span> <span class="detail-value">${details.message_count}</span></div>
+                                            <div class="detail-row"><span class="detail-label">Prompt:</span></div>
+                                            <div class="dispatch-prompt">${sanitize(details.dispatch_prompt)}</div>
+                                        `;
+                                    }
+                                } catch (e) {
+                                    detailsDiv.innerHTML = `<div class="detail-row" style="color: #f44;">Failed to fetch details: ${sanitize(e.message)}</div>`;
+                                }
+                            }
+                        });
+                    });
                 } else {
-                    agentsList.textContent = '(no active agents)';
-                    agentsList.style.color = '#666';
+                    agentsList.innerHTML = '<div style="color: #666; font-size: 12px;">💤 No active agents — fleet is idle</div>';
                 }
 
                 // Repos
@@ -575,6 +722,35 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+
+    def serve_agent(self):
+        """Serve agent dispatch prompt and metadata via GET /agent?id=<agent_id>"""
+        try:
+            # Parse query string
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            agent_id = params.get('id', [None])[0]
+
+            if not agent_id:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "missing id parameter"}).encode('utf-8'))
+                return
+
+            # Extract dispatch prompt and metadata
+            data = extract_agent_dispatch_prompt(agent_id)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
     def handle_submit(self):
         """Handle /submit POST."""
