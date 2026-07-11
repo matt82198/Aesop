@@ -50,27 +50,37 @@ bash $AESOP_ROOT/daemons/run-watchdog.sh &
 
 Runs every 150s: discovers changed repos, stashes uncommitted work, pushes backups to `backup/wip-*` branches, runs secret-scan gate.
 
-#### 3. Launch the dashboard
+#### 3. Launch the Web Dashboard (Primary Interface)
 
-**Recommended: Web Dashboard** (modern, responsive interface)
+The web dashboard is the recommended way to monitor your fleet. It provides real-time observability, security alerts, and inbox integration in a modern, responsive interface.
 
 ```bash
 python $AESOP_ROOT/ui/serve.py
 ```
 
-Opens `http://localhost:8770` with real-time fleet status, agent tracking, alerts, and inbox.
+Opens `http://localhost:8770` with:
+- Real-time daemon heartbeats and liveness
+- Active subagent tracking
+- Security alerts panel
+- Recent events log
+- Inbox for orchestrator communication
+- Repository sync status
 
-**Alternative: TUI Dashboard** (terminal-based)
+See `ui/README.md` for configuration, environment variables, and troubleshooting.
+
+#### (Optional) Legacy TUI Dashboard
+
+If you prefer a terminal-based interface:
 
 ```bash
-# On Windows:
+# On Windows (in a dedicated terminal):
 Start-Process "C:\Program Files\Git\git-bash.exe" -ArgumentList '-c', 'bash /c/Users/you/aesop/dash/watchdog-gui.sh'
 
 # On Unix:
 bash ~/aesop/dash/watchdog-gui.sh &
 ```
 
-See `ui/README.md` for web dashboard configuration and troubleshooting.
+Note: The TUI is maintained for backward compatibility but is not actively developed. The web dashboard is recommended for new deployments.
 
 #### 4. Arm the monitor loop
 
