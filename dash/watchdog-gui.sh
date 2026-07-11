@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fleet watchdog TUI dashboard. Realtime ~1s refresh. CRLF-safe (no line continuations).
+# Fleet watchdog TUI dashboard. Double-buffered no-flicker render. 4s refresh. CRLF-safe (no line continuations).
 # Launch in its own window: bash aesop/dash/watchdog-gui.sh
 # Set AESOP_ROOT=/path/to/aesop and TRACKED_REPOS before running.
 
@@ -20,15 +20,84 @@ BLOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 SLOG="$AESOP_ROOT/state/SECURITY-ALERTS.log"
 HB="$AESOP_ROOT/state/.watchdog-heartbeat"
 REPOS_FILE="$AESOP_ROOT/state/.watchdog-repos.json"
+HB_DIR="$AESOP_ROOT/state/.heartbeats"
 
 SPINNER=0
+FIRST_FRAME=1
 
 # Trap Ctrl-C to restore cursor and exit cleanly
-trap 'printf "\e[?25h"; clear; exit 0' INT TERM
-printf '\e[?25l'
+trap 'printf "\033[?25h"; exit 0' INT TERM
+printf '\033[?25l'
+
+get_hb_threshold() {
+  local name="$1"
+  case "$name" in
+    *monitor*) echo 3600;;
+    *watchdog*) echo 300;;
+    *) echo 300;;
+  esac
+}
+
+render_frame() {
+  local FRAME=""
+  FRAME="${FRAME}${B}${C}== FLEET WATCHDOG${X}\n"
+  FRAME="${FRAME}  ${SPIN_CHAR} $(date '+%a %H:%M:%S')  Daemon: $WD  ${R}HIGH:$HI${X} ${Y}MED:$ME${X}${X}\n"
+  FRAME="${FRAME}\n"
+  FRAME="${FRAME}${B}  REPOS BACKED UP${X}\n"
+  if [ -f "$REPOS_FILE" ]; then
+    repos_data=$(cat "$REPOS_FILE" 2>/dev/null)
+    if [ "$repos_data" != "[]" ] 2>/dev/null; then
+      REPOS_LINES=$(echo "$repos_data" | jq -r '.[] | "    \(.repo) \(.state) \(.age)"' 2>/dev/null)
+      if [ -n "$REPOS_LINES" ]; then
+        FRAME="${FRAME}${REPOS_LINES}\n"
+      else
+        FRAME="${FRAME}    ${D}(repos unavailable)${X}\n"
+      fi
+    else
+      FRAME="${FRAME}    ${D}(no touched repos yet)${X}\n"
+    fi
+  else
+    FRAME="${FRAME}    ${D}(no status)${X}\n"
+  fi
+  FRAME="${FRAME}\n"
+  FRAME="${FRAME}${B}  HEARTBEATS${X}\n"
+  HB_FOUND=0
+  if [ -d "$HB_DIR" ] && [ -n "$(ls -A "$HB_DIR" 2>/dev/null)" ]; then
+    for hb_file in "$HB_DIR"/*; do
+      if [ -f "$hb_file" ]; then
+        name=$(basename "$hb_file")
+        epoch=$(head -1 "$hb_file" 2>/dev/null | grep -o '^[0-9]*')
+        if [ -n "$epoch" ] && [ "$epoch" -gt 0 ]; then
+          HB_FOUND=1
+          age=$(( now - epoch ))
+          threshold=$(get_hb_threshold "$name")
+          if [ "$age" -lt "$threshold" ]; then
+            status="${G}ALIVE${X} ${D}age:${age}s${X}"
+          else
+            status="${R}STALE${X} ${D}age:${age}s${X}"
+          fi
+          FRAME="${FRAME}    $name  $status\n"
+        fi
+      fi
+    done
+  fi
+  if [ "$HB_FOUND" -eq 0 ]; then
+    FRAME="${FRAME}    ${D}(none)${X}\n"
+  fi
+  FRAME="${FRAME}\n"
+  FRAME="${FRAME}${B}  RECENT EVENTS${X}\n"
+  if [ -s "$BLOG" ]; then
+    BACKUP_LINES=$(tail -3 "$BLOG" 2>/dev/null | sed 's/^/    /')
+    FRAME="${FRAME}${BACKUP_LINES}\n"
+  else
+    FRAME="${FRAME}    ${D}(none)${X}\n"
+  fi
+  FRAME="${FRAME}\n"
+  FRAME="${FRAME}${D}  Ctrl-C to exit  ·  4s refresh${X}\n"
+  echo -ne "$FRAME"
+}
 
 while true; do
-  TICK_TIME=$(date '+%Y-%m-%d %H:%M:%S')
   SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
   SPINNER_IDX=$(( SPINNER % 10 ))
   SPIN_CHAR="${SPINNER_CHARS:$SPINNER_IDX:1}"
@@ -46,56 +115,27 @@ while true; do
     AGE=99999
   fi
 
-  if [ "$AGE" -lt 200 ]; then
-    WD="${G}* ALIVE${X} ${D}(${AGE}s ago)${X}"
+  WD_THRESH=$(get_hb_threshold "watchdog")
+  if [ "$AGE" -lt "$WD_THRESH" ]; then
+    WD="${G}ALIVE${X} ${D}(${AGE}s)${X}"
   else
-    WD="${R}* STALE/DOWN${X}"
+    WD="${R}STALE${X}"
   fi
 
-  # Count security alerts (example: scan SECURITY-ALERTS.log)
-  HI=$(grep -v '^RESOLVED-FP' "$SLOG" 2>/dev/null | grep -c ' HIGH ')
-  HI=${HI:-0}
-  ME=$(grep -v '^RESOLVED-FP' "$SLOG" 2>/dev/null | grep -c ' MED ')
-  ME=${ME:-0}
+  HI=$(grep -v '^RESOLVED-FP' "$SLOG" 2>/dev/null | grep -c ' HIGH '); HI=${HI:-0}
+  ME=$(grep -v '^RESOLVED-FP' "$SLOG" 2>/dev/null | grep -c ' MED '); ME=${ME:-0}
 
-  clear
-  echo "${B}${C}==================================================================${X}"
-  echo "${B}  FLEET WATCHDOG   ·   Aesop Orchestration Harness${X}"
-  echo "${B}${C}==================================================================${X}"
-  printf "  ${SPIN_CHAR} %s  Last refresh: %s  (realtime 1s)\n\n" "$(date '+%a %H:%M:%S')" "$TICK_TIME"
-
-  echo "${B}  WATCHDOG STATUS${X}"
-  printf "    %s\n\n" "$WD"
-
-  echo "${B}  FLEET REPOS${X}"
-  if [ -f "$REPOS_FILE" ]; then
-    repos_data=$(cat "$REPOS_FILE" 2>/dev/null)
-    if [ "$repos_data" != "[]" ] 2>/dev/null; then
-      echo "$repos_data" | jq -r '.[] | "    \(.repo) \(.state) \(.age)"' 2>/dev/null || echo "    ${D}(failed to parse repos)${X}"
-    else
-      echo "    ${D}(no touched repos yet)${X}"
-    fi
+  if [ "$FIRST_FRAME" -eq 1 ]; then
+    printf '\033[2J'
+    FIRST_FRAME=0
   else
-    echo "    ${D}(no status file yet)${X}"
+    printf '\033[H'
   fi
-  echo
 
-  echo "${B}  RECENT BACKUP EVENTS${X}"
-  if [ -s "$BLOG" ]; then
-    tail -3 "$BLOG" 2>/dev/null | sed 's/^/    /'
-  else
-    echo "    ${D}(none yet)${X}"
-  fi
-  echo
+  render_frame | while IFS= read -r line; do
+    printf '%b\033[K\n' "$line"
+  done
+  printf '\033[J'
 
-  printf "${B}  SECURITY / ALERTS${X}   ${R}HIGH:%s${X}  ${Y}MED:%s${X}\n" "$HI" "$ME"
-  if [ -s "$SLOG" ]; then
-    grep -v '^RESOLVED-FP' "$SLOG" 2>/dev/null | tail -5 | awk -v R="$R" -v Y="$Y" -v D="$D" -v X="$X" '{c=X; if($0 ~ /SUPPRESSED-FP/) c=D; else if($0 ~ / HIGH /) c=R; else if($0 ~ / MED /) c=Y; print "    " c $0 X}'
-  else
-    echo "    ${G}no alerts yet${X}"
-  fi
-  echo
-
-  echo "${D}  REALTIME 1s refresh  ·  Ctrl-C to exit${X}"
-  sleep 1
+  sleep 4
 done
