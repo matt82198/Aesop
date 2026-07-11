@@ -4,6 +4,10 @@
 
 The naming is a conceit: Aesop directs the Fables (the AI models). Like the tortoise and the hare, Aesop favors the slow, deliberate orchestrator directing a fleet of fast, cheap agents toward reliable outcomes.
 
+## Origin
+
+Aesop began as damage control: an endpoint-security agent kept deleting work mid-session, so everything was forced into git—committed continuously, pushed constantly, reconstructable from nothing but the remotes. What started as a survival mechanism against a machine that wiped itself grew into a full multi-agent orchestration system—and one worth sharing.
+
 ## What it is
 
 A filesystem-first orchestration system that:
