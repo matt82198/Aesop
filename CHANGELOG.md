@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Security alerts panel with unreviewed event tracking
 - Inbox integration for direct orchestrator communication
 - Agent tracking with status and runtime hints
+- **Agent detail expansion**: Click agent rows to view full dispatch prompts, dispatcher, model, and message counts
+- **GET /agent endpoint**: RESTful query for agent metadata and full dispatch details
 - Repository synchronization status display
 - Recent events log with the latest 8 backup operations
 - Transcript integration showing main-thread conversation history
