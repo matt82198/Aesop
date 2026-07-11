@@ -68,7 +68,7 @@ $ bash /path/to/aesop/daemons/backup-fleet.sh
 [2026-07-11 10:30:16] SentinelOne deletes git.exe (false positive on automation)
 $ git fetch -q
 bash: git: command not found
-[2026-07-11 10:30:17] BLOCKED: tr-sample-tracker
+[2026-07-11 10:30:17] BLOCKED: my-project-repo
 ```
 
 **Recovery:**
