@@ -1,0 +1,180 @@
+# Aesop Dispatch Model — Cost & Orchestration Patterns
+
+## The fable conceit
+
+In Aesop's Fables, Aesop (the narrator) directs the characters (tortoise, hare, fox, etc.) through moral tales. Here, **Aesop (the orchestrator)** directs a fleet of **Fables (the subagents)** toward reliable task completion.
+
+The tortoise represents deliberate, resourceful thinking; the hare, quick speed. Together (slow orchestrator + fast subagents), they're unbeatable.
+
+## Cost model
+
+### Baseline: all-Opus fleet
+
+```
+5 tasks × 10 min each × Opus cost (~60 tokens/min for reasoning)
+= 5 × 10 × 60 = 3,000 tokens/session
+```
+
+### Aesop dispatch: Opus + 5 Haiku
+
+```
+1 orchestrator (Opus, 5 min thinking)  = 5 × 60 = 300 tokens
+5 subagents (Haiku, 2 min each)        = 5 × 2 × 20 = 200 tokens
+Total                                   = 500 tokens/session
+= **83% savings** vs all-Opus
+```
+
+### Scaling to 10 parallel domains
+
+```
+1 orchestrator (Opus, 8 min)       = 480 tokens
+10 subagents (Haiku, 3 min each)   = 600 tokens
+Total                              = 1,080 tokens
+= **90% savings** vs 10 Opus tasks
+```
+
+## Dispatch patterns
+
+### Pattern 1: Fan-out (wide parallelism)
+
+**Use case**: 10 independent tasks with no dependencies.
+
+```
+Orchestrator
+├─ Haiku-1: Test domain (write test, red → green)
+├─ Haiku-2: Build domain (compile, package)
+├─ Haiku-3: Docs domain (README, examples)
+├─ Haiku-4: Security domain (audit, review)
+└─ Haiku-5: Deployment domain (stage, verify)
+
+Total cost: 1 Opus + 5 Haiku ≈ $0.003 per session
+```
+
+### Pattern 2: Sequential with handoff
+
+**Use case**: Feature across 3 layers (API → DB → UI) with dependencies.
+
+```
+Orchestrator → Phase 1
+├─ Haiku-1: API spec + tests
+└─ (wait for Haiku-1 to complete)
+    → Phase 2
+    ├─ Haiku-2: DB schema (reads Haiku-1 output)
+    └─ (wait)
+        → Phase 3
+        ├─ Haiku-3: UI (reads both outputs)
+        └─ Haiku-4: Integration test
+        
+Orchestrator reassembles + QA
+Total cost: still 1 Opus + 4 Haiku = **90% savings**
+```
+
+### Pattern 3: Hierarchical (supervisor + workers)
+
+**Use case**: Complex codebase review (split into modules, each reviewed in parallel).
+
+```
+Orchestrator
+├─ Review-Supervisor (Sonnet, splits codebase into 5 modules)
+│  ├─ Haiku-1: auth module
+│  ├─ Haiku-2: api module
+│  ├─ Haiku-3: db module
+│  ├─ Haiku-4: ui module
+│  └─ Haiku-5: config module
+└─ (Sonnet synthesizes reviews into final report)
+
+Cost: 1 Opus + 1 Sonnet + 5 Haiku = ~$0.015 (still 75% savings)
+```
+
+## Decision flowchart
+
+When you have a new task, ask:
+
+```
+Is this task scoped to <5 min reasoning?
+├─ YES → Use Haiku subagent (cost: ~$0.0002)
+├─ NO → Can I decompose it into smaller tasks?
+│   ├─ YES → Fan-out to multiple Haiku (cost: $0.001–0.003)
+│   └─ NO → Use Opus (cost: ~$0.004)
+└─ Does this need final review/synthesis?
+    ├─ YES → Opus orchestrator does it (cost: ~$0.002)
+    └─ NO → Done (subagent output is final)
+```
+
+## Anti-patterns
+
+### ❌ All-Opus fleet
+
+**Cost**: 10× baseline. **Why**: throws CPU power at problems that are scoped.
+
+**Fix**: Decompose into Haiku-sized tasks.
+
+### ❌ Giant orchestrator context
+
+**Cost**: token waste, slower decisions. **Why**: reads full logs, commits, code diffs.
+
+**Fix**: Orchestrator reads STATE.md + BUILDLOG.md + git one-liners only. Delegate research to Haiku.
+
+### ❌ Silent hangs
+
+**Cost**: invisible waste (subagent stalls, orchestrator waits). **Why**: no heartbeat, no timeout.
+
+**Fix**: Heartbeat every 60s min. Watchdog respawns >200s stale. Orchestrator never waits>60s (spawn next task).
+
+### ❌ Cloud Python execution
+
+**Cost**: latency + complexity. **Why**: cloud runners add overhead, partial failure risk.
+
+**Fix**: All Python runs locally. Cloud agents spawn only for distributed compute (rare).
+
+## Token spend tracking
+
+### Log format (FLEET-LEDGER.md)
+
+```
+| timestamp           | domain   | subagent    | tokens | result      |
+|--|--|--|--|--|
+| 2024-01-15T10:30:00 | auth     | haiku       | 1200   | SUCCESS     |
+| 2024-01-15T10:35:00 | ui       | haiku       | 950    | SUCCESS     |
+| 2024-01-15T10:40:00 | test     | haiku       | 1100   | FAILED (1r) |
+| 2024-01-15T10:45:00 | test     | haiku       | 1050   | SUCCESS     |
+```
+
+### Cost signals to watch
+
+1. **Spend spike** (+20% baseline): investigate domain; may need larger model.
+2. **Respawn loop** (same domain 3+ times): subagent repeatedly failing; escalate to Sonnet or orchestrator review.
+3. **Serial bottleneck** (orchestrator >500 tokens): parallelism breaking down; split smaller or delegate.
+
+### Optimization levers
+
+- **Fan-out more tasks**: go from 2 Haiku to 5.
+- **Shift to Sonnet**: if 3 Haiku respawns in a row, use Sonnet once for harder task.
+- **Reduce orchestrator context**: read fewer files, shorter CLAUDE.md.
+- **Cache cardinal rules**: use prompt caching on base CLAUDE.md (reused every session).
+
+## Orchestrator role (the slow tortoise)
+
+- **Reading**: STATE.md (phase + next steps), BUILDLOG.md (latest 10 entries), git one-liners.
+- **Deciding**: which 3–5 Haiku to spawn, what task each gets, how to reassemble results.
+- **Waiting**: while subagents run in parallel, orchestrator uses time to:
+  - Brief user on progress.
+  - Spot-check one Haiku output.
+  - Plan next phase.
+- **Synthesizing**: reads Haiku results, updates STATE.md, decides next phase or declares done.
+
+**Golden rule**: Orchestrator thinks 5–10 min per hour of wallclock time (while agents run). Never blocks; never waits idle.
+
+## Subagent role (the swift fables)
+
+- **Scoped task**: <5 min pure reasoning per task.
+- **Clear acceptance criteria**: from orchestrator brief.
+- **Output**: append to BUILDLOG.md, return result to orchestrator.
+- **Failure**: log reason, don't retry (orchestrator decides retry).
+- **Speed**: finish in <2 min if possible; alert orchestrator if >5 min (break task smaller).
+
+**Golden rule**: Subagents stay cheap and fast. If a Haiku takes >10 min, you've scoped too large.
+
+---
+
+**Summary**: Aesop's dispatch model trades a small amount of orchestration complexity for **10× cost savings** and **4× speed** (via parallelism). It works by keeping subagents small, orchestrator lean, and feedback constant.

@@ -1,0 +1,27 @@
+# State and transient files
+state/
+*.log
+*heartbeat*
+.fleet-repos.json
+.signal-state.json
+.fleet-ledger-harvest.json
+.fleet-prompts-seen.json
+
+# Local configuration (users create their own aesop.config.json)
+aesop.config.json
+.env
+.env.local
+
+# Ledger and runtime data
+ledger/
+*-BACKUP.log
+*.jsonl
+
+# System artifacts
+.git/
+.DS_Store
+*.swp
+*~
+node_modules/
+__pycache__/
+*.pyc
