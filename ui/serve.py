@@ -871,8 +871,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .item-id { color: #8ac; font-weight: bold; }
         .item-age { color: #999; margin: 0 8px; }
         .item-status { padding: 2px 6px; border-radius: 2px; font-size: 10px; font-weight: bold; }
-        .status-running { background: #0a0; color: #000; }
-        .status-done { background: #666; color: #fff; }
+        .status-running { background: #88f; color: #000; }
+        .status-done { background: #0a0; color: #000; }
 
         .inbox-box { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; margin-bottom: 20px; }
         .inbox-label { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 8px; }
@@ -883,9 +883,20 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .inbox-button:disabled { background: #555; cursor: not-allowed; }
         .inbox-status { font-size: 11px; color: #0a0; margin-top: 4px; display: none; }
 
+        /* Alert box styling: distinct alarm treatment when alerts exist */
         .alerts-box { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; }
+        .alerts-box.has-alerts { border-color: #f44; border-width: 2px; background: #1a0a0a; }
+        .alerts-box.has-high-alerts { border-color: #f44; border-width: 2px; background: #1a0808; }
+        .alerts-box.has-med-alerts { border-color: #f80; border-width: 2px; background: #1a1008; }
         .alert-line { font-size: 11px; padding: 4px 0; color: #f44; font-family: monospace; }
+        .alert-line.severity-high { color: #f44; font-weight: bold; }
+        .alert-line.severity-med { color: #f80; font-weight: bold; }
         .alert-none { color: #666; }
+
+        /* Alert count in header: scales with severity */
+        #alert-count { color: #999; }
+        #alert-count.alarm-high { color: #f44; font-weight: bold; }
+        #alert-count.alarm-med { color: #f80; font-weight: bold; }
 
         .messages-box { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; max-height: 400px; overflow-y: auto; }
         .message { padding: 8px 0; border-bottom: 1px solid #2a2a2a; font-size: 11px; }
@@ -1046,6 +1057,15 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         }
 
         // ---- header (watchdog / monitor / alert count) --------------------
+        function getAlertSeverity(alerts) {
+            // Scan alert lines for severity keywords (HIGH takes precedence over MED)
+            if (!alerts || !alerts.lines || alerts.lines.length === 0) return 'none';
+            const text = alerts.lines.join(' ').toUpperCase();
+            if (text.includes('HIGH')) return 'high';
+            if (text.includes('MED') || text.includes('MEDIUM')) return 'med';
+            return 'low';
+        }
+
         function patchHeader(data) {
             const watchdog = data.watchdog || {};
             const watchdogAlive = document.getElementById('watchdog-alive');
@@ -1059,7 +1079,15 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             monitorAlive.className = 'status-' + (monitor.alive || 'unknown').toLowerCase();
             document.getElementById('monitor-age').textContent = monitor.age >= 0 ? monitor.age + 's' : '—';
 
-            document.getElementById('alert-count').textContent = (data.alerts && data.alerts.count) || 0;
+            // Alert count: color scales with severity
+            const alertCount = document.getElementById('alert-count');
+            const count = (data.alerts && data.alerts.count) || 0;
+            alertCount.textContent = count;
+            alertCount.className = ''; // Reset classes
+            if (count > 0) {
+                const severity = getAlertSeverity(data.alerts);
+                alertCount.classList.add('alarm-' + severity);
+            }
         }
 
         function patchHeaderRunningCount(agents) {
@@ -1242,10 +1270,37 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         function patchAlerts(alerts) {
             const alertsList = document.getElementById('alerts-list');
+            const alertsBox = document.querySelector('.alerts-box');
+
+            // Defensive: ensure alerts-box exists before styling it
+            if (alertsBox) {
+                // Reset alerts-box styling
+                alertsBox.className = 'alerts-box';
+
+                if (alerts && alerts.lines && alerts.lines.length > 0) {
+                    // Determine highest severity to style the container
+                    const text = alerts.lines.join(' ').toUpperCase();
+                    if (text.includes('HIGH')) {
+                        alertsBox.classList.add('has-high-alerts');
+                    } else if (text.includes('MED') || text.includes('MEDIUM')) {
+                        alertsBox.classList.add('has-med-alerts');
+                    } else {
+                        alertsBox.classList.add('has-alerts');
+                    }
+                }
+            }
+
             if (alerts && alerts.lines && alerts.lines.length > 0) {
-                alertsList.innerHTML = alerts.lines.map(line =>
-                    `<div class="alert-line">${sanitize(line.substring(0, 120))}</div>`
-                ).join('');
+                alertsList.innerHTML = alerts.lines.map(line => {
+                    const upperLine = line.toUpperCase();
+                    let severity = '';
+                    if (upperLine.includes('HIGH')) {
+                        severity = 'severity-high';
+                    } else if (upperLine.includes('MED') || upperLine.includes('MEDIUM')) {
+                        severity = 'severity-med';
+                    }
+                    return `<div class="alert-line ${severity}">${sanitize(line.substring(0, 120))}</div>`;
+                }).join('');
             } else {
                 alertsList.innerHTML = '<div class="alert-none">(no alerts)</div>';
             }
