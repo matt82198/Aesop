@@ -16,15 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Agent Behavior as Source Code — Five Pillars
 
-#### Dashboard Integrations
-- **`dash/dash-extra.mjs`**: Fleet agent detector scans transcripts for running agents, enables web dashboard agent panel. Detects agents in last 12 minutes, color-codes by alert severity, outputs JSON for REST endpoint or TUI text for terminal.
-- **`tools/secret_scan.py`**: Pre-push secret/credential detection gate with comprehensive pattern library (PEM keys, AWS/GitHub/Slack/OpenAI tokens, .env patterns, credential filenames). Supports `--staged`, `--history`, and direct path scanning. Pragma escape hatch for allow-pattern-docs. Exit 1 blocks push on findings.
-
-### Improved
-- Web dashboard now properly detects and displays running subagents via `dash-extra.mjs`
-- Secret-scan gate now active in watchdog cycle; blocks any push with unscanned credentials
+1. **Onboarding-by-clone** — [CLAUDE-TEMPLATE.md](./CLAUDE-TEMPLATE.md), [docs/MEMORY-TEMPLATE.md](./docs/MEMORY-TEMPLATE.md); brain scaffolding via `bin/cli.js`.
+2. **Guardrails-in-code** — [hooks/pre-push-policy.sh](./hooks/pre-push-policy.sh) branch discipline + secret-scan gate; audit trail in [state/SECURITY-AUDIT.log](./state/SECURITY-AUDIT.log).
+3. **Behavioral PRs** — [.github/pull_request_template.md](./.github/pull_request_template.md), [docs/BEHAVIORAL-PR-REVIEW.md](./docs/BEHAVIORAL-PR-REVIEW.md), [CONTRIBUTING.md](./CONTRIBUTING.md) enforcement and process.
+4. **Forensic replay** — [tools/agent-forensics.sh](./tools/agent-forensics.sh) (`--diff behavior-surface` mode), [docs/FORENSICS.md](./docs/FORENSICS.md) git-bisect recipes.
+5. **Cross-machine continuity** — [docs/RESTORE.md](./docs/RESTORE.md) reconstitution playbook.
 
 ## [1.0.0] - 2026-07-11
 

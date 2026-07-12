@@ -30,6 +30,16 @@ A filesystem-first orchestration system that:
 - **Refinement monitor**: standing Haiku loop that watches orchestration health and auto-acts on rule friction.
 - **TUI dashboard**: real-time fleet status, security alerts, heartbeat liveness.
 
+## Behavior as Code: Five Pillars
+
+Aesop ships behavior as versioned, portable, diffable filesystem artifacts in git—enabling review, versioning, inheritance, enforcement, and forensics over how agents work. The implementation consists of five integrated capabilities:
+
+1. **Onboarding-by-clone** — [CLAUDE-TEMPLATE.md](./CLAUDE-TEMPLATE.md) and [docs/MEMORY-TEMPLATE.md](./docs/MEMORY-TEMPLATE.md) scaffold team brains; sync via `bin/cli.js`. The pre-push hook is **auto-installed during scaffold**.
+2. **Guardrails-in-code** — [hooks/pre-push-policy.sh](./hooks/pre-push-policy.sh) enforces branch discipline and secret-scanning gates; auto-installed into `.git/hooks/pre-push` during scaffold (idempotent, preserves customizations); audit trail in [state/SECURITY-AUDIT.log](./state/SECURITY-AUDIT.log).
+3. **Behavioral PRs** — [.github/pull_request_template.md](./.github/pull_request_template.md) enforces behavioral-change descriptions; [docs/BEHAVIORAL-PR-REVIEW.md](./docs/BEHAVIORAL-PR-REVIEW.md) provides the checklist; [CONTRIBUTING.md](./CONTRIBUTING.md) documents the process.
+4. **Forensic replay** — [tools/agent-forensics.sh](./tools/agent-forensics.sh) reconstructs behavior at any commit with `--diff behavior-surface` mode; [docs/FORENSICS.md](./docs/FORENSICS.md) shows git-bisect recipes.
+5. **Cross-machine continuity** — [docs/RESTORE.md](./docs/RESTORE.md) reconstitution playbook for recovery on new machines.
+
 ## Install & Quick Start
 
 ### Option 1: npm (Recommended for quick scaffolding)
@@ -54,6 +64,8 @@ python ui/serve.py
 ```
 
 Open `http://localhost:8770` to monitor your fleet.
+
+**Pre-push hook active by default:** The scaffold automatically installs the pre-push policy hook into `.git/hooks/pre-push`. It enforces branch protection (no direct pushes to main/master) and secret scanning. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for details and customization.
 
 Alternatively, install globally:
 ```bash
@@ -189,14 +201,30 @@ Edit `aesop.config.json`:
 - Tune watchdog and monitor cycle times.
 - Disable secret-scan if you don't have `tools/secret_scan.py` yet.
 
-### 2. Create required directories
+### 2. Initialize your brain (Claude Code team memory)
+
+The team brain is your private copy of `CLAUDE.md` and `MEMORY.md` that lives in `~/.claude/`:
+
+```bash
+# Create the memory directory
+mkdir -p ~/.claude/memory
+
+# Copy templates and customize
+cp CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md    # Edit domains and team info
+cp docs/MEMORY-TEMPLATE.md ~/.claude/MEMORY.md  # Add your team facts
+```
+
+Edit `~/.claude/CLAUDE.md` to reflect your project domains, team principles, and setup steps.
+Edit `~/.claude/MEMORY.md` to add your own facts (one file per fact in `~/.claude/memory/`).
+
+### 3. Create required directories
 
 ```bash
 mkdir -p ~/aesop/state
 mkdir -p ~/.heartbeats
 ```
 
-### 3. (Optional) Add your secret-scan script
+### 4. (Optional) Add your secret-scan script
 
 If you have a security scanner, drop it at `aesop/tools/secret_scan.py`. The watchdog will call it before pushing.
 
@@ -207,7 +235,7 @@ import sys
 sys.exit(0)  # TODO: implement secret scanning
 ```
 
-### 4. Start the daemon
+### 5. Start the daemon
 
 ```bash
 export AESOP_ROOT=$HOME/aesop
@@ -216,13 +244,13 @@ bash $AESOP_ROOT/daemons/run-watchdog.sh &
 
 Test mode: `bash $AESOP_ROOT/daemons/run-watchdog.sh --once`
 
-### 5. Launch the dashboard
+### 6. Launch the dashboard
 
 ```bash
 bash ~/aesop/dash/watchdog-gui.sh
 ```
 
-### 6. Arm the monitor (optional)
+### 7. Arm the monitor (optional)
 
 If you're using Claude Code, add this to your orchestrator loop:
 ```bash
@@ -266,6 +294,28 @@ Daemons write epoch-seconds to `.heartbeat` files. The dashboard reads these to 
 - `state/` and `.log` files are git-ignored (keep runtime data local).
 - Implement `tools/secret_scan.py` with your own security rules.
 - Use `secret_scan.py` as a gate on every push (don't bypass).
+
+### Pre-Push Hook: Local Convenience Defense Only
+
+The pre-push hook (`hooks/pre-push-policy.sh`) enforces branch discipline and secret scanning **locally**. It is **bypassable**:
+- Any developer can use `git push --no-verify` to skip it.
+- The audit log is stored locally and can be edited or deleted.
+
+**For real enforcement, pair with server-side branch protection** (e.g., GitHub protected branches):
+
+1. **GitHub Protected Branches**: Navigate to Settings > Branches and create a rule for `main` with:
+   - ✓ Require pull request reviews before merging
+   - ✓ Require status checks to pass before merging
+   - ✓ Require branches to be up to date before merging
+   - ✓ Restrict pushes to (Admins only)
+
+2. **Audit Log Integrity**: The hook maintains a hash-chain audit log (each event includes SHA-256 of the previous entry). Verify integrity with:
+   ```bash
+   bash hooks/pre-push-policy.sh --verify-audit-log
+   ```
+   **Note**: This detects accidental corruption but is not cryptographic protection against a determined attacker with file system access. For production auditability, centralize logs to an immutable remote service (CloudWatch, Datadog, or a dedicated log server).
+
+See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for full configuration details.
 
 ## Extension points
 

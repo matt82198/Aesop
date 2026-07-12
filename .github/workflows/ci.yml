@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Run tests
+        run: npm test
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Secret scan
+        run: python tools/secret_scan.py .
+
+      - name: Shell syntax check
+        run: |
+          git ls-files '*.sh' | while read file; do
+            bash -n "$file" || exit 1
+          done
+
+      - name: Node syntax check
+        run: |
+          git ls-files '*.mjs' | while read file; do
+            node --check "$file" || exit 1
+          done

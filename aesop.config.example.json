@@ -1,47 +1,36 @@
 {
-  "description": "Aesop configuration example. Copy to aesop.config.json and customize for your setup.",
-  "aesop_root": "/path/to/aesop",
-  "brain_root": "/path/to/your/brain",
-  "scripts_root": "/path/to/your/scripts",
-  "temp_root": "/path/to/temp/scratch",
+  "description": "Aesop configuration. Precedence: environment variables > config file > built-in defaults.",
+  "_paths": {
+    "aesop_root": "Set via AESOP_ROOT env var (no config key)",
+    "brain_root": "Set via BRAIN_ROOT env var; default: {aesop_root}/../.claude",
+    "scripts_root": "Set via SCRIPTS_ROOT env var; default: {aesop_root}/../scripts",
+    "temp_root": "Set via TEMP_ROOT env var; default: system temp + /claude",
+    "state_root": "Set via AESOP_STATE_ROOT env var; default: {aesop_root}/state"
+  },
+  "brain_root": "/path/to/brain (optional; overrides default)",
+  "scripts_root": "/path/to/scripts (optional; overrides default)",
+  "temp_root": "/path/to/temp/scratch (optional; overrides default)",
+  "state_root": "/path/to/state (optional; overrides default)",
+  "transcripts_root": "~/.claude/projects (or override via AESOP_TRANSCRIPTS_ROOT env var)",
   "repos": [
     {
       "path": "/path/to/project1",
       "name": "project1",
+      "url": "https://github.com/user/project1.git",
       "primary_branch": "main",
       "backup_branch": "backup/wip"
     },
     {
       "path": "/path/to/project2",
       "name": "project2",
+      "url": "git@github.com:user/project2.git",
       "primary_branch": "main",
       "backup_branch": "backup/wip"
     }
   ],
-  "watchdog": {
-    "cycle_seconds": 150,
-    "heartbeat_threshold_seconds": 200,
-    "enable_secret_scan": true,
-    "secret_scan_script": "tools/secret_scan.py"
-  },
   "monitor": {
-    "enable": true,
-    "cycle_seconds": 3600,
-    "heartbeat_threshold_seconds": 3600,
-    "memory_staleness_days": 30,
     "log_max_lines": 500,
-    "log_max_kb": 40
-  },
-  "dashboard": {
-    "refresh_seconds": 1,
-    "enable_jq_parsing": true,
-    "theme": "dark"
-  },
-  "cardinal_rules": {
-    "subagent_model": "haiku",
-    "orchestrator_model": "opus",
-    "tdd_first": true,
-    "never_push_main": true,
-    "secret_scan_gates_push": true
+    "log_max_kb": 40,
+    "extended_signals": false
   }
 }

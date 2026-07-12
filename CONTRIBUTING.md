@@ -95,6 +95,29 @@ Aesop is designed for integration testing rather than extensive unit tests. Befo
    - Use Claude Code with the modified Aesop configuration
    - Spawn a test Haiku subagent and verify heartbeat updates
 
+## Proposing Behavioral Changes
+
+If your PR modifies **operational rules, agent configuration, monitoring behavior, or memory conventions** (anything that changes how the orchestration harness operates), you are proposing a behavioral change and must follow this process:
+
+1. **Stage changes via PROPOSALS.md**: The monitor's signal collection (`monitor/collect-signals.mjs`) can emit structured proposals for rule or behavior changes. These proposals enter a human-review queue in `monitor/PROPOSALS.md`.
+
+2. **Complete the PR template**: Use the **"Behavioral change?"** section in [`.github/pull_request_template.md`](.github/pull_request_template.md) to document:
+   - Which rule or behavior changed
+   - Impact radius (which agents/components are affected)
+   - How the change was tested
+   - Rollback plan
+
+3. **Reference the review checklist**: Reviewers will use [`docs/BEHAVIORAL-PR-REVIEW.md`](docs/BEHAVIORAL-PR-REVIEW.md) to verify:
+   - Rule alignment with cardinal rules
+   - Blast radius assessment
+   - Verification and testing steps
+   - Rollback & recovery plan
+   - Single-writer discipline (if PROPOSALS.md/ACTIONS.log touched)
+
+4. **Merge only after review**: Behavioral changes go through the standard PR review but require explicit mention of rule changes and impact assessment before approval.
+
+**See also:** `monitor/CHARTER.md` for how the monitor categorizes signal actions (AUTO vs PROPOSE tier).
+
 ## Security & Code Review
 
 ### Secret Scanning

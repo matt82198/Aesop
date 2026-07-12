@@ -6,12 +6,29 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Configuration from environment
+// Configuration: env var > config file > built-in default
+// Helper: load aesop.config.json if it exists
+function loadConfigFile(aesopRoot) {
+  try {
+    const configPath = path.join(aesopRoot, 'aesop.config.json');
+    if (fs.existsSync(configPath)) {
+      return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+  } catch {
+    // Parse error or file doesn't exist; ignore
+  }
+  return {};
+}
+
 const AESOP_ROOT = process.env.AESOP_ROOT || path.join(process.env.HOME || '.', 'aesop');
+const config = loadConfigFile(AESOP_ROOT);
+
 const TRANSCRIPTS_ROOT = path.resolve(
-  process.env.AESOP_TRANSCRIPTS_ROOT || path.join(process.env.HOME || '.', '.claude', 'projects')
+  process.env.AESOP_TRANSCRIPTS_ROOT ||
+  config.transcripts_root ||
+  path.join(process.env.HOME || '.', '.claude', 'projects')
 );
-const SCAN_DIR = path.join(AESOP_ROOT, 'scan');
+const SCAN_DIR = path.join(AESOP_ROOT, 'state');
 const ALERTS_LOG = path.join(SCAN_DIR, 'SECURITY-ALERTS.log');
 
 // ANSI colors for TUI output
@@ -29,6 +46,12 @@ const c = {
 const now = Date.now();
 const out = [];
 
+// Activity window: only include files modified within the last 12 minutes
+const ACTIVITY_WINDOW = 12 * 60 * 1000;
+
+// Depth limit to match monitor's equivalent (prevent unbounded recursion on growing tree)
+const MAX_DEPTH = 6;
+
 // Read alerts log if present
 let slog = [];
 try {
@@ -37,14 +60,27 @@ try {
   }
 } catch {}
 
-// Recursively walk directory tree to find agent-*.jsonl files
-function walk(dir, accumulator) {
+// Recursively walk directory tree to find agent-*.jsonl files.
+// Respects depth limit and prunes old directories (mtime older than activity window).
+function walk(dir, accumulator, depth = 0) {
+  // Stop recursion if depth exceeds limit
+  if (depth > MAX_DEPTH) return;
+
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        walk(fullPath, accumulator);
+        // Check directory mtime: skip descending into stale directories
+        let dirMtime = 0;
+        try {
+          dirMtime = fs.statSync(fullPath).mtimeMs;
+        } catch {}
+
+        // Only descend if directory was modified recently (within activity window)
+        if (now - dirMtime < ACTIVITY_WINDOW) {
+          walk(fullPath, accumulator, depth + 1);
+        }
       } else if (/^agent-.*\.jsonl$/.test(entry.name)) {
         accumulator.push(fullPath);
       }

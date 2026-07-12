@@ -4,39 +4,97 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // === Configuration ===
-// Load from environment or aesop.config.json; fall back to safe defaults.
-const AESOP_ROOT = process.env.AESOP_ROOT || '.';
-const BRAIN_ROOT = process.env.BRAIN_ROOT || path.join(AESOP_ROOT, '..', '.claude');
-const SCRIPTS_ROOT = process.env.SCRIPTS_ROOT || path.join(AESOP_ROOT, '..', 'scripts');
-const TEMP_ROOT = process.env.TEMP_ROOT || path.join(AESOP_ROOT, '..', 'AppData', 'Local', 'Temp', 'claude');
-const MON = path.join(AESOP_ROOT, 'monitor');
-const STATE_DIR = path.join(AESOP_ROOT, 'state');
+// Helper: load aesop.config.json if it exists
+function loadConfigFile(aesopRoot) {
+  try {
+    const configPath = path.join(aesopRoot, 'aesop.config.json');
+    if (fs.existsSync(configPath)) {
+      return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+  } catch {
+    // Parse error or file doesn't exist; ignore
+  }
+  return {};
+}
 
-// Optional: load aesop.config.json for repo list
+// Precedence: env var > config file > built-in default
+const AESOP_ROOT = process.env.AESOP_ROOT || '.';
+const config = loadConfigFile(AESOP_ROOT);
+
+const BRAIN_ROOT = process.env.BRAIN_ROOT ||
+  config.brain_root ||
+  path.join(AESOP_ROOT, '..', '.claude');
+
+const SCRIPTS_ROOT = process.env.SCRIPTS_ROOT ||
+  config.scripts_root ||
+  path.join(AESOP_ROOT, '..', 'scripts');
+
+const TEMP_ROOT = process.env.TEMP_ROOT ||
+  config.temp_root ||
+  path.join(os.tmpdir(), 'claude');
+
+const STATE_DIR = process.env.AESOP_STATE_ROOT ||
+  config.state_root ||
+  path.join(AESOP_ROOT, 'state');
+
+const MON = path.join(AESOP_ROOT, 'monitor');
+
+// Config-driven thresholds and feature flags
 let repos = [];
 let logThresholds = { maxLines: 500, maxKb: 40 };
-try {
-  const configPath = path.join(AESOP_ROOT, 'aesop.config.json');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  if (config.repos && Array.isArray(config.repos)) {
-    repos = config.repos.map(r => r.path);
-  }
-  if (config.monitor && config.monitor.log_max_lines) {
-    logThresholds.maxLines = config.monitor.log_max_lines;
-  }
-  if (config.monitor && config.monitor.log_max_kb) {
-    logThresholds.maxKb = config.monitor.log_max_kb;
-  }
-} catch {
-  // No config file or parse error; use defaults
+let extendedSignals = false;
+
+if (config.repos && Array.isArray(config.repos)) {
+  repos = config.repos.map(r => r.path);
 }
+if (config.monitor && config.monitor.log_max_lines) {
+  logThresholds.maxLines = config.monitor.log_max_lines;
+}
+if (config.monitor && config.monitor.log_max_kb) {
+  logThresholds.maxKb = config.monitor.log_max_kb;
+}
+
+// Precedence: env > config > default
+// AESOP_EXTENDED_SIGNALS env var takes precedence
+if (process.env.AESOP_EXTENDED_SIGNALS !== undefined) {
+  extendedSignals = process.env.AESOP_EXTENDED_SIGNALS === 'true' || process.env.AESOP_EXTENDED_SIGNALS === '1';
+} else if (config.monitor && config.monitor.extended_signals !== undefined) {
+  extendedSignals = config.monitor.extended_signals;
+}
+// else default is false (already set above)
 
 const now = Date.now();
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
+
+// === Single-instance guard: check own heartbeat at startup ===
+// If heartbeat is <300s old and AESOP_MONITOR_FORCE is not set, skip this cycle (another instance is running)
+if (!process.env.AESOP_MONITOR_FORCE) {
+  const heartbeatPath = path.join(MON, '.monitor-heartbeat');
+  try {
+    const content = fs.readFileSync(heartbeatPath, 'utf8').trim();
+    const epoch = parseInt(content.split('\n')[0], 10);
+    if (epoch) {
+      const beatAge = now - epoch * 1000;
+      const MONITOR_THRESHOLD = 300e3; // 300 seconds
+      if (beatAge < MONITOR_THRESHOLD) {
+        // Heartbeat is recent; another instance is running. Skip this cycle.
+        console.log(`[skip] Monitor already running (heartbeat: ${(beatAge / 1000).toFixed(0)}s ago, threshold: ${MONITOR_THRESHOLD / 1000}s)`);
+        process.exit(0);
+      }
+    }
+  } catch {
+    // Heartbeat file doesn't exist or is unreadable; proceed with cycle
+  }
+}
 
 // === Utilities ===
 const sh = (cmd, cwd) => {
@@ -242,6 +300,8 @@ function detectJunkScripts() {
       .slice(0, 8)
       .map(x => `${age(x.ageMs)} ${x.fp.split(/[/\\]/).slice(-2).join('/')}`),
     recentCount: tempScripts.filter(x => now - x.ageMs < HOUR).length,
+    // Store all temp scripts for AUTO quarantine action
+    _scripts: tempScripts,
   };
   return junk;
 }
@@ -350,17 +410,212 @@ function checkUnreviewedPrompts() {
   return 0;
 }
 
+// === AUTO Actions ===
+// Log rotation: invoke rotate_logs.py if available and log needs rotation
+function performAutoLogRotation(logFiles, actionsLogPath) {
+  // rotate_logs.py is in tools directory (sibling to monitor)
+  let rotateLogsPy = path.join(path.dirname(MON), 'tools', 'rotate_logs.py');
+
+  // Fallback: look in SCRIPTS_ROOT if not found in tools
+  if (!fs.existsSync(rotateLogsPy)) {
+    rotateLogsPy = path.join(SCRIPTS_ROOT, 'rotate_logs.py');
+  }
+
+  // Fallback: look in the actual aesop source directory (for tests/CI environments)
+  if (!fs.existsSync(rotateLogsPy)) {
+    // Try to find the real aesop tools directory by looking for the real monitor/CHARTER.md
+    const realMonitorCharter = path.join(__dirname, 'CHARTER.md');
+    if (fs.existsSync(realMonitorCharter)) {
+      rotateLogsPy = path.join(__dirname, '..', 'tools', 'rotate_logs.py');
+    }
+  }
+
+  if (!fs.existsSync(rotateLogsPy)) {
+    // rotate_logs.py not available; skip (fail-open per CHARTER.md)
+    return [];
+  }
+
+  const rotatedLogs = [];
+  const logsNeedingRotation = logFiles.filter(l => l.needsRotation);
+
+  for (const log of logsNeedingRotation) {
+    if (!log.exists) continue;
+    let logPath;
+    if (log.name === 'ACTIONS.log') {
+      logPath = path.join(MON, log.name);
+    } else {
+      logPath = log.name.startsWith('/') ? log.name : path.join(STATE_DIR, log.name);
+    }
+
+    try {
+      // Invoke rotate_logs.py with thresholds from config
+      const cmd = `python "${rotateLogsPy}" "${logPath}" --max-lines ${logThresholds.maxLines} --max-bytes ${Math.floor(logThresholds.maxKb * 1024)}`;
+      execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+      rotatedLogs.push(log.name);
+
+      // Log the AUTO action
+      const timestamp = new Date(now).toISOString();
+      fs.appendFileSync(actionsLogPath, `[${timestamp}] AUTO action: Log rotation invoked for ${log.name}\n`, 'utf8');
+    } catch (e) {
+      // Log rotation failed; fail-open (log the error but continue)
+      const timestamp = new Date(now).toISOString();
+      fs.appendFileSync(actionsLogPath, `[${timestamp}] AUTO action FAILED: Log rotation for ${log.name}: ${e.message}\n`, 'utf8');
+    }
+  }
+
+  return rotatedLogs;
+}
+
+// Junk quarantine: move old temp scripts to monitor/quarantine/ with manifest
+function performAutoJunkQuarantine(junkScripts, quarantineDir, manifestPath) {
+  if (!Array.isArray(junkScripts) || junkScripts.length === 0) {
+    return { quarantined: 0 };
+  }
+
+  let quarantinedCount = 0;
+  const manifestLines = [];
+
+  // Read existing manifest if it exists
+  let existingManifest = '';
+  if (fs.existsSync(manifestPath)) {
+    try {
+      existingManifest = fs.readFileSync(manifestPath, 'utf8');
+    } catch {
+      // Ignore read errors
+    }
+  }
+
+  // Create quarantine directory if needed
+  try {
+    fs.mkdirSync(quarantineDir, { recursive: true });
+  } catch {
+    // Directory creation failed; skip quarantine
+    return { quarantined: 0 };
+  }
+
+  // Quarantine each old junk script
+  for (const junkItem of junkScripts) {
+    if (junkItem.quarantinable && fs.existsSync(junkItem.fp)) {
+      try {
+        const basename = path.basename(junkItem.fp);
+        const quarantinePath = path.join(quarantineDir, basename);
+
+        // Copy (not move) to quarantine to avoid issues with long paths or multiple instances
+        fs.copyFileSync(junkItem.fp, quarantinePath);
+
+        // Record in manifest
+        const timestamp = new Date(now).toISOString();
+        const manifestLine = `${timestamp}\t${basename}\t${junkItem.fp}\t${junkItem.size}\tbytes\n`;
+        manifestLines.push(manifestLine);
+
+        quarantinedCount++;
+      } catch (e) {
+        // Quarantine failed for this item; continue with others
+      }
+    }
+  }
+
+  // Append new entries to manifest
+  if (manifestLines.length > 0) {
+    try {
+      if (!existingManifest) {
+        // Write header
+        fs.writeFileSync(manifestPath, 'timestamp\tfilename\tsource_path\tsize_bytes\tunit\n', 'utf8');
+      }
+      fs.appendFileSync(manifestPath, manifestLines.join(''), 'utf8');
+    } catch {
+      // Manifest write failed; continue
+    }
+  }
+
+  return { quarantined: quarantinedCount };
+}
+
+// === Proposal Emission ===
+// Append PROPOSE-tier signals to monitor/PROPOSALS.md (idempotent per signal key)
+function emitProposal(signalKey, problem, suggestedChange) {
+  const proposalsPath = path.join(MON, 'PROPOSALS.md');
+  const timestamp = new Date(now).toISOString();
+
+  // Read existing proposals to check for duplicate
+  let existingContent = '';
+  try {
+    existingContent = fs.readFileSync(proposalsPath, 'utf8');
+  } catch {
+    // File doesn't exist yet; start fresh
+    if (!fs.existsSync(MON)) {
+      fs.mkdirSync(MON, { recursive: true });
+    }
+  }
+
+  // Check if this signal key already has an entry (idempotency check)
+  if (existingContent.includes(`**Signal:** ${signalKey}`)) {
+    // Entry already exists; skip to avoid duplicates
+    return;
+  }
+
+  // Append new proposal entry
+  const proposal = `
+## ${signalKey} — ${timestamp}
+
+**Signal:** ${signalKey}
+
+**Problem:**
+${problem}
+
+**Suggested change:**
+${suggestedChange}
+
+---
+`;
+
+  try {
+    fs.appendFileSync(proposalsPath, proposal, 'utf8');
+  } catch (e) {
+    // Fail-open: log to BRIEF instead of crashing
+    console.error(`Failed to write PROPOSALS.md: ${e.message}`);
+  }
+}
+
 // === Main ===
 const staleLoops = checkHeartbeats();
 const gitState = checkGitState();
 const memory = checkMemoryFreshness();
 const logFiles = checkLogFiles();
-const junk = detectJunkScripts();
-const strayRepo = detectStrayRepoScripts();
+
+// Extended signal checks (5, 6, 8, 10) — skipped if extended_signals is OFF
+const junk = extendedSignals ? detectJunkScripts() : { skipped: true };
+const strayRepo = extendedSignals ? detectStrayRepoScripts() : { skipped: true };
+
 const alerts = checkSecurityAlerts();
-const respawnWatch = detectRespawnWatch();
+
+const respawnWatch = extendedSignals ? detectRespawnWatch() : { skipped: true };
 const { cycleCount, costTick } = trackCostCadence();
-const unreviewedPrompts = checkUnreviewedPrompts();
+const unreviewedPrompts = extendedSignals ? checkUnreviewedPrompts() : { skipped: true };
+
+// === Perform AUTO Actions ===
+// (Executed before emitting signals, so outputs reflect actions taken)
+const actionsLogPath = path.join(MON, 'ACTIONS.log');
+
+// Ensure MON directory and ACTIONS.log exist
+try {
+  fs.mkdirSync(MON, { recursive: true });
+  if (!fs.existsSync(actionsLogPath)) {
+    fs.writeFileSync(actionsLogPath, '', 'utf8');
+  }
+} catch {
+  // Ignore directory creation errors
+}
+
+// AUTO: Log rotation
+performAutoLogRotation(logFiles, actionsLogPath);
+
+// AUTO: Junk quarantine (only run if junk check was not skipped)
+const quarantineDir = path.join(MON, 'quarantine');
+const manifestPath = path.join(quarantineDir, 'MANIFEST.tsv');
+if (!junk.skipped && junk._scripts && junk.quarantinable > 0) {
+  performAutoJunkQuarantine(junk._scripts, quarantineDir, manifestPath);
+}
 
 const signals = {
   timestamp: new Date(now).toISOString(),
@@ -422,39 +677,49 @@ if (needsRotation.length === 0) {
 }
 brief.push('');
 
-brief.push('## Junk-script sprawl (temp/scratch)');
-brief.push(`- ${junk.total} total scripts, ${(junk.bytes / 1024).toFixed(0)}kb`);
-brief.push(`  Quarantinable (>24h, not live): ${junk.quarantinable}`);
-if (junk.oldest.length > 0) {
-  brief.push('  Oldest:');
-  for (const o of junk.oldest) {
-    brief.push(`    ${o}`);
+// Extended signals section (if disabled, just note they're off; if enabled, show details)
+if (extendedSignals) {
+  brief.push('## Junk-script sprawl (temp/scratch)');
+  brief.push(`- ${junk.total} total scripts, ${(junk.bytes / 1024).toFixed(0)}kb`);
+  brief.push(`  Quarantinable (>24h, not live): ${junk.quarantinable}`);
+  if (junk.oldest.length > 0) {
+    brief.push('  Oldest:');
+    for (const o of junk.oldest) {
+      brief.push(`    ${o}`);
+    }
   }
-}
-if (strayRepo.length > 0) {
+  if (strayRepo.length > 0) {
+    brief.push('');
+    brief.push('## Stray repo scripts (7d)');
+    for (const s of strayRepo) {
+      brief.push(`- ${s}`);
+    }
+  }
   brief.push('');
-  brief.push('## Stray repo scripts (7d)');
-  for (const s of strayRepo) {
-    brief.push(`- ${s}`);
-  }
+} else {
+  brief.push('## Extended signal checks');
+  brief.push('Checks 5 (junk-script sprawl), 6 (stray-repo scripts), 8 (respawn-watch), 10 (unreviewed-prompts) are **extended (off)** — enable via `monitor.extended_signals: true` in aesop.config.json or `AESOP_EXTENDED_SIGNALS=true`.');
+  brief.push('');
 }
-brief.push('');
 
 brief.push('## Security');
 brief.push(`- Alert log: ${alerts.count} entries, ${alerts.highMedCount} HIGH/MED`);
 brief.push('');
 
-brief.push('## Respawn watch (Rule 6 retry cap)');
-if (respawnWatch.length === 0) {
-  brief.push('✓ No retry-cap breaches (all signatures ≤3 occurrences).');
-} else {
-  brief.push(`⚠ **${respawnWatch.length} signature(s) exceeded 3-attempt limit:**`);
-  for (const rw of respawnWatch) {
-    brief.push(`  - ${rw.warning}`);
+// Respawn watch (check 8 — extended)
+if (extendedSignals) {
+  brief.push('## Respawn watch (Rule 6 retry cap)');
+  if (respawnWatch.length === 0) {
+    brief.push('✓ No retry-cap breaches (all signatures ≤3 occurrences).');
+  } else {
+    brief.push(`⚠ **${respawnWatch.length} signature(s) exceeded 3-attempt limit:**`);
+    for (const rw of respawnWatch) {
+      brief.push(`  - ${rw.warning}`);
+    }
+    brief.push('  (Note: distinguish legitimate fan-outs from identical retries; manual review recommended.)');
   }
-  brief.push('  (Note: distinguish legitimate fan-outs from identical retries; manual review recommended.)');
+  brief.push('');
 }
-brief.push('');
 
 brief.push('## Cost tracking');
 brief.push(`- Cycle: ${cycleCount}${costTick ? ' — tick recorded' : ''}`);
@@ -463,18 +728,72 @@ if (costTick) {
 }
 brief.push('');
 
-brief.push('## Unreviewed prompts');
-brief.push(`- ${unreviewedPrompts} new prompt(s) awaiting semantic review`);
-brief.push('');
+// Unreviewed prompts (check 10 — extended)
+if (extendedSignals) {
+  brief.push('## Unreviewed prompts');
+  brief.push(`- ${unreviewedPrompts} new prompt(s) awaiting semantic review`);
+  brief.push('');
+}
 
 brief.push('_Refinement points → act per CHARTER.md (AUTO safe, PROPOSE rule changes). Goal is fixed._');
 
-// Write outputs
+// === Emit PROPOSE-tier proposals ===
+// Only emit for signals that warrant user review per CHARTER.md action tiers
+
+// Proposals for extended checks (only if extended_signals is ON)
+if (extendedSignals) {
+  if (respawnWatch.length > 0) {
+    emitProposal(
+      'respawn-watch-breach',
+      `Rule 6 retry cap breached: ${respawnWatch.length} agent signature(s) appeared >3 times in recent spawn history. This indicates either an intentional parallel fan-out or a hung-agent loop.`,
+      `Review FLEET-LEDGER.md to distinguish legitimate concurrent spawns from identical retries. If retries are unintentional, investigate root cause and add guardrails to prevent re-dispatch. Consider updating monitoring thresholds or retry strategy.`
+    );
+  }
+
+  if (strayRepo.length > 0) {
+    emitProposal(
+      'stray-repo-scripts',
+      `${strayRepo.length} script file(s) committed to repo root in past 7 days: ${strayRepo.join(', ')}. Scripts should live in dedicated src/ or scripts/ paths, not repo root.`,
+      `Move stray scripts to proper paths per project discipline. Update CONTRIBUTING.md if repo structure is ambiguous. Add pre-commit hook or CI check to enforce.`
+    );
+  }
+}
+
+// Core proposals (always emitted)
+if (alerts.highMedCount > 0) {
+  emitProposal(
+    'security-alerts-high-med',
+    `${alerts.highMedCount} HIGH/MED security alert(s) in SECURITY-ALERTS.log. These may indicate real vulnerabilities, credential exposure, or false positives requiring review.`,
+    `Review each HIGH/MED entry in SECURITY-ALERTS.log. Distinguish real issues (fix immediately) from false positives (mark SUPPRESSED-FP). Update scanning rules if needed to reduce noise.`
+  );
+}
+
+if (memory.staleCount > 0) {
+  emitProposal(
+    'stale-memory-files',
+    `${memory.staleCount} memory file(s) older than 30 days: ${memory.staleMemories.join(', ')}. Stale memory may indicate obsolete project context or abandoned projects.`,
+    `Review stale memory files in keeper. Consolidate, archive, or delete per project lifecycle. Update memory refresh schedule if projects are active but infrequently updated.`
+  );
+}
+
+// Write outputs atomically
 try {
   fs.mkdirSync(MON, { recursive: true });
-  fs.writeFileSync(path.join(MON, 'BRIEF.md'), brief.join('\n'), 'utf8');
-  fs.writeFileSync(path.join(MON, 'SIGNALS.json'), JSON.stringify(signals, null, 2), 'utf8');
+
+  // Atomic write for BRIEF.md: write to .tmp, then rename
+  const briefPath = path.join(MON, 'BRIEF.md');
+  const briefTmpPath = briefPath + '.tmp';
+  fs.writeFileSync(briefTmpPath, brief.join('\n'), 'utf8');
+  fs.renameSync(briefTmpPath, briefPath);
+
+  // Atomic write for SIGNALS.json: write to .tmp, then rename
+  const signalsPath = path.join(MON, 'SIGNALS.json');
+  const signalsTmpPath = signalsPath + '.tmp';
+  fs.writeFileSync(signalsTmpPath, JSON.stringify(signals, null, 2), 'utf8');
+  fs.renameSync(signalsTmpPath, signalsPath);
+
   fs.writeFileSync(path.join(MON, '.monitor-heartbeat'), String(Math.floor(now / 1000)), 'utf8');
+  fs.writeFileSync(path.join(MON, '.signal-state.json'), JSON.stringify({ cycleCount }, null, 2), 'utf8');
   const summaryLine = `stale-loops: ${staleLoops.length}, repos-dirty: ${gitState.filter(g => g.dirty > 0).length}, stale-mem: ${memory.staleCount}, logs-need-rotation: ${needsRotation.length}, junk-quarantinable: ${junk.quarantinable}, stray-repo-scripts: ${strayRepo.length}, alerts-high-med: ${alerts.highMedCount}, respawn-watch: ${respawnWatch.length}, cycle: ${cycleCount}`;
   console.log(summaryLine);
 } catch (e) {

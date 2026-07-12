@@ -14,7 +14,9 @@
     "tools/",
     "ui/",
     "docs/",
+    "hooks/",
     "aesop.config.example.json",
+    "CLAUDE-TEMPLATE.md",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -45,5 +47,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "scripts": {}
+  "scripts": {
+    "test": "node --test tests/**/*.test.mjs"
+  }
 }
