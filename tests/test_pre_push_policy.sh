@@ -89,15 +89,30 @@ printf '\n=== Finding 3: stdin loop hangs on tty + drops final line without newl
   export AESOP_ROOT="$TEST_ROOT/aesop_stdin"
   mkdir -p "$AESOP_ROOT/state"
 
-  # Test 3a: Final line without newline should be handled
-  printf 'refs/heads/feature/test abc123 refs/heads/feature/test def456' | {
-    if check_branch_policy >/dev/null 2>&1; then
-      printf 'PASS: Final line without newline handled correctly\n'
-    else
-      printf 'FAIL: Failed to handle final line without newline\n'
-      exit 1
-    fi
-  }
+  # Create isolated git repo on feature branch to hermetically test check_branch_policy
+  # (avoids dependency on ambient git HEAD, which may be main during CI push events)
+  ISOLATED_REPO="$TEST_ROOT/aesop_stdin_repo"
+  mkdir -p "$ISOLATED_REPO"
+  (
+    cd "$ISOLATED_REPO" || exit 1
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    echo "dummy" > file.txt
+    git add file.txt
+    git commit -q -m "initial"
+    git checkout -q -b feature/isolated
+
+    # Test 3a: Final line without newline should be handled
+    printf 'refs/heads/feature/test abc123 refs/heads/feature/test def456' | {
+      if check_branch_policy >/dev/null 2>&1; then
+        printf 'PASS: Final line without newline handled correctly\n'
+      else
+        printf 'FAIL: Failed to handle final line without newline\n'
+        exit 1
+      fi
+    }
+  )
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
