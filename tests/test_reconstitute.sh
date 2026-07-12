@@ -278,10 +278,15 @@ test_item4_e2e_reconstitute() {
   git init --bare "$fixture2" > /dev/null 2>&1
 
   # Populate fixture1
+  # Local, repo-scoped identity: CI runners have no global git user.name/
+  # user.email configured, and "git commit" fails loudly (exit 128) without
+  # one, which kills this whole test file under set -e.
   (
     cd "$tmpdir"
     git clone "$fixture1" workdir1 > /dev/null 2>&1
     cd workdir1
+    git config user.email "test@example.com"
+    git config user.name "Test User"
     echo "repo1 content" > README.md
     git add README.md
     git commit -m "initial commit" > /dev/null 2>&1
@@ -293,6 +298,8 @@ test_item4_e2e_reconstitute() {
     cd "$tmpdir"
     git clone "$fixture2" workdir2 > /dev/null 2>&1
     cd workdir2
+    git config user.email "test@example.com"
+    git config user.name "Test User"
     echo "repo2 content" > README.md
     git add README.md
     git commit -m "initial commit" > /dev/null 2>&1

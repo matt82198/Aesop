@@ -362,6 +362,147 @@ class TestSizeAndBinaryBypassDetection(unittest.TestCase):
             os.unlink(temp_path)
 
 
+class TestSkipCompiledArtifacts(unittest.TestCase):
+    """Compiled Python artifacts (.pyc, .pyo, __pycache__) should be skipped.
+
+    Rationale: bytecode is generated from source files which are already scanned.
+    Scanning bytecode produces false positives because regex patterns (like the
+    PEM detection regex) appear as literals in the compiled code. This test
+    verifies that path-based scanning skips these artifacts.
+    """
+
+    def test_pyc_file_skipped_even_with_pattern(self):
+        """A .pyc file with embedded pattern bytes should NOT be flagged."""
+        # Create a temp directory with both source and compiled artifacts
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Create a real .py source file WITH a secret (should be flagged)
+            dummy_pem = _j("-----BEGIN RSA ", "PRIVATE", " KEY-----")
+            source_file = tmpdir_path / "test_module.py"
+            source_file.write_text(
+                f"# Source file\n{dummy_pem}\nkey_data = 'xxx'\n",
+                encoding="utf-8"
+            )
+
+            # Create __pycache__ directory
+            pycache_dir = tmpdir_path / "__pycache__"
+            pycache_dir.mkdir()
+
+            # Create a .pyc file with the same pattern embedded as bytes
+            # (simulating what Python compiler would create)
+            pyc_file = pycache_dir / "test_module.cpython-312.pyc"
+            # .pyc format: magic (4 bytes) + timestamp (4 bytes) + bytecode
+            # We'll just write raw bytes containing the PEM pattern
+            pyc_content = b"\x00\x00\x00\x00\x00\x00\x00\x00" + dummy_pem.encode("utf-8") + b"\x00"
+            pyc_file.write_bytes(pyc_content)
+
+            # Scan the directory
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), str(tmpdir)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Should find the pattern in the SOURCE file
+            self.assertIn(
+                "pem_private_key",
+                result.stdout,
+                "Should detect PEM pattern in .py source file"
+            )
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"Should exit 1 (found secret in source). stdout: {result.stdout}"
+            )
+
+            # Should NOT report the .pyc file findings
+            # (the key indicator is that we only have 1 finding, not 2)
+            lines = [l for l in result.stdout.split("\n") if l.startswith("HIGH ")]
+            high_findings = [l for l in lines if "pem_private_key" in l]
+
+            self.assertEqual(
+                len(high_findings),
+                1,
+                f"Should find PEM only in source, not in .pyc. "
+                f"Findings: {high_findings}"
+            )
+            # Verify the finding is in the source file, not in __pycache__
+            self.assertNotIn(
+                "__pycache__",
+                result.stdout,
+                "Should NOT report findings from __pycache__ directory"
+            )
+
+    def test_pycache_directory_completely_skipped(self):
+        """__pycache__ directory should be completely skipped during path traversal."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Create __pycache__ with a .pyc containing a pattern
+            pycache_dir = tmpdir_path / "__pycache__"
+            pycache_dir.mkdir()
+
+            dummy_pem = _j("-----BEGIN RSA ", "PRIVATE", " KEY-----")
+            pyc_file = pycache_dir / "fake.cpython-312.pyc"
+            pyc_file.write_bytes(dummy_pem.encode("utf-8"))
+
+            # Create a clean source file
+            source_file = tmpdir_path / "clean.py"
+            source_file.write_text("# Clean file\nprint('hello')\n", encoding="utf-8")
+
+            # Scan should exit 0 (no findings)
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), str(tmpdir)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"Should exit 0 when only __pycache__ has patterns. "
+                f"stdout: {result.stdout}"
+            )
+            self.assertIn(
+                "CLEAN",
+                result.stdout,
+                "Should report CLEAN when only __pycache__ has patterns"
+            )
+            self.assertNotIn(
+                "__pycache__",
+                result.stdout,
+                "Should not mention __pycache__ in output"
+            )
+
+    def test_pyo_file_skipped(self):
+        """A .pyo file should also be skipped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            dummy_pem = _j("-----BEGIN RSA ", "PRIVATE", " KEY-----")
+            pyo_file = tmpdir_path / "test.pyo"
+            pyo_file.write_bytes(dummy_pem.encode("utf-8"))
+
+            # Scan should exit 0
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), str(tmpdir)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"Should exit 0 and skip .pyo file. stdout: {result.stdout}"
+            )
+            self.assertIn("CLEAN", result.stdout)
+            self.assertNotIn(".pyo", result.stdout)
+
+
 class TestScannerSelfScanClean(unittest.TestCase):
     """The scanner must scan its OWN source clean with ZERO pragma reliance.
 
