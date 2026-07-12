@@ -133,7 +133,7 @@ while true; do
   fi
 
   render_frame | while IFS= read -r line; do
-    printf '%b\033[K\n' "$line"
+    printf '%s\033[K\n' "$line"
   done
   printf '\033[J'
 
