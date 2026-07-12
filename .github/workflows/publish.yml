@@ -1,0 +1,50 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Ensure npm supports OIDC trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Scan for secrets before publish
+        run: |
+          python3 tools/secret_scan.py .
+
+      - name: Determine dist-tag from version
+        id: tag
+        run: |
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          if [[ "$VERSION" =~ - ]]; then
+            echo "tag=beta" >> $GITHUB_OUTPUT
+            echo "Using dist-tag: beta (prerelease version: $VERSION)"
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "Using dist-tag: latest (stable version: $VERSION)"
+          fi
+
+      - name: Publish to npm with OIDC
+        run: |
+          npm publish --access public --tag "${{ steps.tag.outputs.tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm_token || '' }}
