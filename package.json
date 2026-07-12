@@ -46,6 +46,5 @@
     "access": "public"
   },
   "scripts": {
-    "prepublishOnly": "node -e \"try { require('child_process').execSync('python tools/secret_scan.py', { cwd: process.cwd() }); } catch (e) { console.warn('Warning: secret_scan.py not available or failed. Proceeding anyway.'); }\""
   }
 }
