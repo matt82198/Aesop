@@ -73,39 +73,59 @@ BEFORE any WIP (per standing order). Branch-per-item; UI items → frontend spec
 playwright acceptance gate. Overlaps folded (annotated `[lenses: …]`). All HIGH/P0 items
 below were empirically reproduced by the reporting lens, not just read.
 
-## P0 — correctness / security (reproduced exploits; do first)
+## P0 — correctness / security (reproduced exploits; do first, 2026-07-12 all merged)
 
-- ⬜ **[js+bash] Lock release has no ownership check (3 files)** — `releaseLock()` in
+- ✅ **[js+bash] Lock release has no ownership check (3 files)** — `releaseLock()` in
   `tools/proposals.mjs:87-95` + `monitor/collect-signals.mjs:603-611` and `release_audit_lock`
   in `hooks/pre-push-policy.sh:53-57` all `rm -rf` unconditionally; a slow-but-alive holder
   reclaimed as stale deletes the reclaimer's LIVE lock → mutual exclusion broken, concurrent
   writers into PROPOSALS.md/SIGNALS.json/audit-log. Same class PR #23 fixed in run-watchdog.sh.
-  [lenses: js#1 P0, shell#B]. ACC: marker/pid ownership check before rm + two-holder test in each.
-- ⬜ **[sec] Path traversal / arbitrary file read via `GET /agent?id=`** — id spliced unescaped
+  [lenses: js#1 P0, shell#B]. PR #37.
+- ✅ **[sec] Path traversal / arbitrary file read via `GET /agent?id=`** — id spliced unescaped
   into glob `**/{id}*.output`; no `..`/metachar reject, no `is_relative_to` check, no token.
   PoC: `id=../outside_secret/leaked` → 200 + file content; `id=*` enumerates every transcript.
-  `ui/serve.py:524-601,1474-1501`. [lenses: security#1]. ACC: reject `/ \ .. *?[]`; resolve +
-  is_relative_to(TRANSCRIPTS_ROOT); regression test.
-- ⬜ **[bash+sec] reconstitute.sh validate_target symlink/junction-blind** — logical `cd+pwd`
+  `ui/serve.py:524-601,1474-1501`. [lenses: security#1]. PR #38.
+- ✅ **[bash+sec] reconstitute.sh validate_target symlink/junction-blind** — logical `cd+pwd`
   (no `-P`) → junction inside fleet root escapes containment; real `git clone` landed OUTSIDE
   fleet root (defeats PR #27). SAME function also false-REJECTS a legit target when its parent
   dir doesn't exist yet. `tools/reconstitute.sh:111-124`. [lenses: shell#A HIGH + shell#F MED].
-  ACC: physical-path resolve (realpath -m style, walk to existing ancestor); junction-escape
-  reject test + nested-new-dir accept test.
-- ⬜ **[sec] bin/cli.js scaffold: symlinked `.git` escapes hooks guard** — PR #24 guarded
+  PR #40.
+- ✅ **[sec] bin/cli.js scaffold: symlinked `.git` escapes hooks guard** — PR #24 guarded
   `.git/hooks` + `pre-push` but not `.git` itself; symlinked `.git` in a shared starter folder
   → hook written OUTSIDE targetDir (PoC write-through). `bin/cli.js:75-97,243-267`.
-  [lenses: security#3]. ACC: lstat gitDir + allowlisted entries, reject symlinks; test.
-- ⬜ **[test] test-run-watchdog.sh not hermetic — P0 regression test asserts nothing** — runs
+  [lenses: security#3]. PR #39.
+- ✅ **[test] test-run-watchdog.sh not hermetic — P0 regression test asserts nothing** — runs
   against the REAL checkout (races the live daemon); Test 3 (guards the PR #23 lock-ownership
   P0) builds its decoy lock at an unused tmp path, so staleness-aging is a silent no-op and
   every hard assert degrades to a warning. `tests/test-run-watchdog.sh:8-9,171-174,205`.
-  [lenses: shell#E HIGH]. ACC: export AESOP_ROOT=$TMP_DIR per invocation; exit-1 paths fire.
-- ⬜ **[ui] /submit inbox write encoding corruption breaks INBOX pipeline (Windows)** —
+  [lenses: shell#E HIGH]. PR #41.
+- ✅ **[ui] /submit inbox write encoding corruption breaks INBOX pipeline (Windows)** —
   header `write_text()` (no `encoding=`) → cp1252 em-dash `0x97`, appends use utf-8 → file not
   valid UTF-8; strict-utf-8 readers throw. Breaks the "orchestrator reads INBOX each turn" model
   on this exact OS. Repro'd end-to-end. `ui/serve.py:1591-1598`. [lenses: frontend#1 P0].
-  ACC: `encoding='utf-8'` (+ LF newline) + playwright decode test.
+  PR #36.
+
+## CI-repair wave (infrastructure, 2026-07-12 all merged)
+
+**Root cause**: CI had never executed any test/scan suite (bash -n fast-failed on .mjs files
+every run). Fixing the gate exposed + fixed 5 pre-existing Linux-only defects. Main push-CI
+now fully green (all 8 test/scan steps).
+
+- ✅ **[ci] bash -n → node --check for .mjs syntax step** — syntax gate now accurate. PR #42 (folded into #45).
+- ✅ **[ci] node --test hang-proof** — job timeout-minutes, --test-force-exit/--test-timeout,
+  per-spawn timeouts; fixed listener-attach race in proposals.test.mjs concurrent-race test. PR #43 (folded into #45).
+- ✅ **[shell] Suite green on Linux** — pre-push-policy.sh sourceable (BASH_SOURCE guard) + plain
+  source in test; fixed scaffold test symlink truncation; repo-local git identity in reconstitute
+  tests. PR #44 (folded into #45).
+- ✅ **[py] secret_scan.py skip __pycache__/.pyc** — compiled artifacts no longer scanned. PR #45.
+- ✅ **[shell] test_pre_push_policy.sh branch-policy test isolation** — isolated from ambient git HEAD
+  so push-on-main CI passes. PR #46.
+
+**Follow-ups (open for wave 7):**
+- 🔵 **[hardening] proposals.mjs acquireLock fail-open** — proceeds unlocked after ~500ms under real
+  lock contention; data-loss candidate.
+- 📝 **[meta] CI-never-ran root cause (noted for forensics)** — bash -n only; CI gate never executed
+  any suite for the repo's life. Fixed in this wave; now documented in landing log.
 
 ## P1 — hardening / real bugs
 
@@ -219,5 +239,8 @@ below were empirically reproduced by the reporting lens, not just read.
   frontend-eng 5+1, design 9, honest CLEAN+4-docs = 40 raw → **26 unique** after dedupe
   (ownership-check ×3-files, /events-exhaustion ×2, verify-audit-lock ×2, scroll/selection ×2,
   path-resolution family ×2). NOT clean → this is wave 6.
+- 2026-07-12: **Wave-6 P0 + CI-repair landed on main, push-CI fully green.** Wave 6 P0: 6/6 merged
+  (#36–#41); CI-repair wave (#42–#46) fixed 5 Linux-only defects exposed by enabling the gate.
+  Root cause: bash -n-only CI never ran any suite for repo's life. All 8 test/scan steps now green.
 - Audit cadence: audit #2 found real work → loop continues. Loop ends after 2 consecutive clean
   audits; the next audit after wave 6 lands is audit #3.
