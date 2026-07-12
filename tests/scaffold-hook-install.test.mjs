@@ -26,10 +26,6 @@ const HOOK_SOURCE = path.join(
   '..', 'hooks', 'pre-push-policy.sh'
 );
 
-function isWindows() {
-  return process.platform === 'win32';
-}
-
 function runCli(targetDir, args = []) {
   const res = spawnSync(process.execPath, [CLI, targetDir, ...args], {
     encoding: 'utf8',
@@ -221,3 +217,111 @@ test('scaffold without git repo does not crash (no hook install)', () => {
   // Both are acceptable behaviors
   assert.ok(!fs.existsSync(hookPath) || true, 'Scaffold should handle missing .git gracefully');
 });
+
+test('scaffold refuses to install hook when .git/hooks is a symlink', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-symlink-hooks');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  // Create an unrelated temp dir to symlink to
+  const evilDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-evil-'));
+
+  const gitDir = path.join(targetDir, '.git');
+  const gitHooksDir = path.join(gitDir, 'hooks');
+
+  // Remove the real hooks dir and replace with symlink (using junction on Windows)
+  if (fs.existsSync(gitHooksDir)) {
+    fs.rmSync(gitHooksDir, { recursive: true });
+  }
+
+  try {
+    fs.symlinkSync(evilDir, gitHooksDir, isWindows() ? 'junction' : 'dir');
+  } catch (e) {
+    // If symlink creation fails, skip this test (e.g., no admin on Windows without junction support)
+    console.log('Skipping symlink test (junction/symlink not available)');
+    return;
+  }
+
+  // Scaffold should warn/refuse to install hook through symlink
+  const res = runCli(targetDir);
+  assert.equal(res.status, 0, 'Scaffold should complete (rest of scaffolding proceeds)');
+
+  // Hook should NOT be installed
+  const hookPath = path.join(gitHooksDir, 'pre-push');
+  // The hook should not exist, or if it does, it should NOT be in evilDir
+  if (fs.existsSync(hookPath)) {
+    const hookRealpath = fs.realpathSync(hookPath);
+    assert.ok(!hookRealpath.includes(evilDir), 'Hook should not escape symlink sandbox');
+  }
+
+  // Should see error message in stderr about refusing symlink
+  const output = (res.stderr || '') + (res.stdout || '');
+  assert.ok(
+    output.toLowerCase().includes('symlink') ||
+    output.toLowerCase().includes('refuse') ||
+    output.toLowerCase().includes('skip'),
+    `Should warn about symlink. Got: "${output}"`
+  );
+});
+
+test('scaffold refuses to install hook when hook dest file is a symlink', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-symlink-hook-file');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  const gitHooksDir = path.join(targetDir, '.git', 'hooks');
+  const hookPath = path.join(gitHooksDir, 'pre-push');
+
+  // Create a symlink as the hook dest to an unrelated file
+  const evilFile = path.join(os.tmpdir(), 'evil-hook-target-' + Math.random());
+  fs.writeFileSync(evilFile, 'evil content\n');
+
+  // Remove hook if exists, create symlink to evil file
+  if (fs.existsSync(hookPath)) {
+    fs.unlinkSync(hookPath);
+  }
+
+  try {
+    fs.symlinkSync(evilFile, hookPath);
+  } catch (e) {
+    // If symlink creation fails, skip
+    console.log('Skipping hook-file symlink test');
+    return;
+  }
+
+  // Scaffold should refuse to write through symlink
+  const res = runCli(targetDir);
+  assert.equal(res.status, 0, 'Scaffold should complete');
+
+  // Verify hook is still the symlink (not replaced)
+  const stat = fs.lstatSync(hookPath);
+  assert.ok(stat.isSymbolicLink(), 'Hook should still be symlink (not overwritten)');
+
+  // Should see error/warning in output
+  const output = (res.stderr || '') + (res.stdout || '');
+  assert.ok(
+    output.toLowerCase().includes('symlink') ||
+    output.toLowerCase().includes('refuse') ||
+    output.toLowerCase().includes('skip'),
+    `Should warn about symlink hook file. Got: "${output}"`
+  );
+
+  // Clean up
+  try {
+    fs.unlinkSync(evilFile);
+  } catch (e) {
+    // ignore
+  }
+});
+
+function isWindows() {
+  return process.platform === 'win32';
+}

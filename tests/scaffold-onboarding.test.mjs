@@ -39,6 +39,15 @@ function runCli(targetDir, args = []) {
   return res;
 }
 
+function runCliInDir(cwd, args = []) {
+  // Invoke CLI without a positional targetDir; uses default
+  const res = spawnSync(process.execPath, [CLI, ...args], {
+    encoding: 'utf8',
+    cwd: cwd
+  });
+  return res;
+}
+
 function createTestDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-onboard-test-'));
 }
@@ -228,4 +237,85 @@ test('full headless scaffold is complete and valid', () => {
 
   const config = JSON.parse(fs.readFileSync(configJson, 'utf8'));
   assert.ok(config.repos && config.repos.length > 0, 'Config should have repos');
+});
+
+test('targetDir defaults to aesop-fleet when --name provided without positional', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'aesop-fleet');
+
+  // Initialize git in tempDir so scaffolded aesop-fleet can have hooks
+  gitCmd(tempDir, 'git init');
+  gitCmd(tempDir, 'git config user.email "test@example.com"');
+  gitCmd(tempDir, 'git config user.name "Test User"');
+
+  // NO explicit target dir, only --name flag
+  // Should create ./aesop-fleet (default), not interpret "my-service" as targetDir
+  const res = runCliInDir(tempDir, ['--name', 'my-service']);
+  assert.equal(res.status, 0, `Scaffold with --name only should succeed. stderr: ${res.stderr}`);
+
+  // Verify created at default location
+  assert.ok(fs.existsSync(targetDir), `Default target dir "aesop-fleet" should be created`);
+  assert.ok(fs.existsSync(path.join(targetDir, 'CLAUDE.md')), 'CLAUDE.md should exist in default location');
+});
+
+test('targetDir defaults to aesop-fleet when --repos provided without positional', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'aesop-fleet');
+
+  // Initialize git in tempDir
+  gitCmd(tempDir, 'git init');
+  gitCmd(tempDir, 'git config user.email "test@example.com"');
+  gitCmd(tempDir, 'git config user.name "Test User"');
+
+  // NO explicit target dir, only --repos flag
+  // Should NOT scaffold into /tmp/x; should create ./aesop-fleet (default)
+  const res = runCliInDir(tempDir, ['--repos', '/tmp/test-repos']);
+  assert.equal(res.status, 0, `Scaffold with --repos only should succeed. stderr: ${res.stderr}`);
+
+  // Verify created at default location, NOT at /tmp/test-repos
+  assert.ok(fs.existsSync(targetDir), `Default target dir "aesop-fleet" should be created, not /tmp/test-repos`);
+  assert.ok(fs.existsSync(path.join(targetDir, 'daemons')), 'daemons/ should exist in default location');
+});
+
+test('explicit positional targetDir works with flags in any order', () => {
+  const tempDir = createTestDir();
+  const customDir = path.join(tempDir, 'my-custom-fleet');
+
+  // Initialize git first
+  gitCmd(tempDir, 'git init');
+  gitCmd(tempDir, 'git config user.email "test@example.com"');
+  gitCmd(tempDir, 'git config user.name "Test User"');
+
+  // Positional target dir BEFORE flags
+  const res = runCli(customDir, [
+    '--name', 'production',
+    '--domains', 'api,worker'
+  ]);
+  assert.equal(res.status, 0, `Scaffold with positional before flags should succeed. stderr: ${res.stderr}`);
+
+  assert.ok(fs.existsSync(customDir), `Custom target dir should be created`);
+  assert.ok(fs.existsSync(path.join(customDir, 'CLAUDE.md')), 'CLAUDE.md should exist in custom location');
+
+  const claudeContent = fs.readFileSync(path.join(customDir, 'CLAUDE.md'), 'utf8');
+  assert.ok(claudeContent.includes('production'), 'CLAUDE.md should have project name');
+});
+
+test('positional targetDir works AFTER flags', () => {
+  const tempDir = createTestDir();
+  const customDir = path.join(tempDir, 'another-fleet');
+
+  // Initialize git first
+  gitCmd(tempDir, 'git init');
+  gitCmd(tempDir, 'git config user.email "test@example.com"');
+  gitCmd(tempDir, 'git config user.name "Test User"');
+
+  // Positional target dir AFTER flags
+  const res = runCli(customDir, [
+    '--name', 'myapp',
+    '--domains', 'web,api'
+  ]);
+  assert.equal(res.status, 0, `Scaffold with positional after flags should succeed. stderr: ${res.stderr}`);
+
+  assert.ok(fs.existsSync(customDir), `Custom target dir should be created (positional after flags)`);
+  assert.ok(fs.existsSync(path.join(customDir, 'CLAUDE.md')), 'CLAUDE.md should exist');
 });
