@@ -45,5 +45,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "scripts": {}
+  "scripts": {
+    "test": "node --test tests/**/*.test.mjs"
+  }
 }
