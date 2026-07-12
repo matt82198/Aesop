@@ -832,8 +832,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         h1 { font-size: 20px; margin-bottom: 20px; color: #fff; }
         h2 { font-size: 14px; margin-top: 20px; margin-bottom: 10px; color: #8ac; font-weight: bold; }
 
-        .header { display: flex; gap: 20px; margin-bottom: 20px; padding: 12px; background: #1a1a1a; border-radius: 4px; }
-        .header-item { flex: 1; }
+        .header { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; padding: 12px; background: #1a1a1a; border-radius: 4px; }
+        .header-item { flex: 1 1 140px; min-width: 120px; }
         .header-label { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 4px; }
         .header-value { font-size: 14px; color: #fff; font-weight: bold; }
         .status-alive { color: #0a0; }
@@ -842,6 +842,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
         @media (max-width: 1200px) { .grid { grid-template-columns: 1fr; } }
+        /* Responsive header: items pack 2-per-row on narrow viewports instead of overflowing */
+        @media (max-width: 900px) { .header { gap: 12px; } .header-item { flex-basis: calc(50% - 12px); } }
 
         .panel { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; }
         .panel-title { font-size: 12px; color: #8ac; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
@@ -856,7 +858,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .agent-id-badge { color: #8ac; font-weight: bold; }
         .agent-age { color: #666; font-size: 11px; }
         .agent-preview { color: #999; font-size: 11px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .agent-expand-toggle { color: #666; font-size: 11px; transition: transform 0.2s ease; }
+        .agent-expand-toggle { color: #8ac; font-size: 14px; font-weight: bold; transition: transform 0.2s ease, color 0.2s ease; }
+        .agent-row:hover .agent-expand-toggle { color: #fff; }
         .agent-row.expanded .agent-expand-toggle { transform: rotate(90deg); }
 
         .agent-details { display: none; margin-top: 8px; padding: 12px; background: #0f0f0f; border-left: 3px solid #8ac; border-radius: 2px; max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
@@ -914,7 +917,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .backlog-progress-inflight { background: #88f; }
         .backlog-progress-empty { background: #333; flex: 1; }
         .backlog-stats { font-size: 11px; color: #999; }
-        .backlog-items { font-size: 11px; margin-top: 8px; max-height: 200px; overflow-y: auto; }
+        .backlog-items { font-size: 11px; margin-top: 8px; max-height: 200px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #555 #0a0a0a; }
+        /* Truncation cue: a scrollable (overflowing) tier gets a visible scrollbar + bottom fade so "more below" is obvious */
+        .backlog-items::-webkit-scrollbar { width: 8px; }
+        .backlog-items::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        .backlog-items::-webkit-scrollbar-track { background: #0a0a0a; }
+        .backlog-items.has-overflow { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent); }
         .backlog-item { padding: 4px 0; color: #ccc; display: flex; gap: 8px; align-items: flex-start; }
         .backlog-item-glyph { min-width: 14px; font-size: 12px; }
         .backlog-item-tag { color: #8ac; font-weight: bold; min-width: 60px; }
@@ -1423,6 +1431,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     itemEl.querySelector('.backlog-item-tag').textContent = item.tag;
                     itemEl.querySelector('.backlog-item-title').textContent = item.title;
                 });
+
+                // Truncation cue: fade the bottom when this tier's items overflow the 200px box (more below)
+                itemsContainer.classList.toggle('has-overflow', itemsContainer.scrollHeight > itemsContainer.clientHeight + 2);
             });
         }
 
