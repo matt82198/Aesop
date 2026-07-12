@@ -14,7 +14,7 @@ function createTempDir() {
 function runProposals(args, cwd) {
   const cmd = `node ${path.resolve('./tools/proposals.mjs')} ${args}`;
   try {
-    const output = execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const output = execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, killSignal: 'SIGKILL' }).trim();
     return { success: true, output };
   } catch (e) {
     return { success: false, output: e.stdout?.toString() || '', error: e.stderr?.toString() || e.message };
@@ -290,6 +290,8 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
     const acceptProcess = spawn('node', [proposalsPath, 'accept', 'signal-1', '--file', proposalsFile], {
       cwd: tempDir,
       stdio: 'pipe',
+      timeout: 30000,
+      killSignal: 'SIGKILL'
     });
 
     // While accept is running, append a new proposal (simulating emitProposal)
@@ -302,6 +304,10 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
     // Wait for accept to complete
     await new Promise((resolve, reject) => {
       acceptProcess.on('close', (code) => {
+        // Clean up streams to prevent lingering handles on Linux
+        acceptProcess.stdout?.destroy();
+        acceptProcess.stderr?.destroy();
+        acceptProcess.stdin?.destroy();
         if (code === 0) resolve();
         else reject(new Error(`Accept exited with code ${code}`));
       });
