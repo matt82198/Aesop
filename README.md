@@ -1,5 +1,8 @@
 # Aesop — Fable-Fleet Orchestration Harness
 
+[![npm](https://img.shields.io/npm/v/@matt82198/aesop/beta)](https://www.npmjs.com/package/@matt82198/aesop)
+[![license](https://img.shields.io/npm/l/@matt82198/aesop)](LICENSE)
+
 **Aesop** is an open-source orchestration harness for Claude Code, implementing a cost-optimized, self-healing multi-agent dispatch system. One orchestrator model (Opus/Sonnet) directs a fleet of cheap subagents (Haiku) across durable, observable machinery.
 
 The naming is a conceit: Aesop directs the Fables (the AI models). Like the tortoise and the hare, Aesop favors the slow, deliberate orchestrator directing a fleet of fast, cheap agents toward reliable outcomes.
@@ -23,9 +26,12 @@ A filesystem-first orchestration system that:
 
 ### Option 1: npm (Recommended for quick scaffolding)
 
+**Note:** Aesop is currently in beta. Install the prerelease version:
+
 ```bash
 # Create a new aesop fleet directory
-npx @matt82198/aesop my-fleet
+# Using @beta tag to install the latest prerelease version (0.1.0-beta.1)
+npx @matt82198/aesop@beta my-fleet
 cd my-fleet
 
 # Configure
@@ -40,6 +46,12 @@ python ui/serve.py
 ```
 
 Open `http://localhost:8770` to monitor your fleet.
+
+Alternatively, install globally:
+```bash
+npm install -g @matt82198/aesop@beta
+aesop my-fleet
+```
 
 ### Option 2: git clone (For development or full customization)
 
