@@ -39,7 +39,11 @@ FIXTURE_BACKLOG = """# Audit backlog — verify_dash fixture
 """
 
 AGENT_FULL_ID = "verifyagent0123456789ab"
-PROMPT_MARKER = "FIXTURE-PROMPT-MARKER: rebuild the flux capacitor"
+# Long, multi-line prompt so the .dispatch-prompt box (max-height 300px) actually
+# overflows and is scrollable — required to test scroll-position preservation.
+PROMPT_MARKER = "FIXTURE-PROMPT-MARKER: rebuild the flux capacitor\n" + "\n".join(
+    f"line {i}: recalibrate subsystem {i} and verify each tolerance band carefully"
+    for i in range(60))
 
 
 def free_port():
@@ -219,6 +223,74 @@ def main():
                     "expanded row lost after live updates"
             except Exception as e:
                 failures.append(f"(e) {e}")
+
+
+            # (f) scroll position and text selection survive live updates (bugfix P2 #1)
+            try:
+                # Expand an agent again to get its prompt box visible
+                expanded_row = page.query_selector(".agent-row.expanded")
+                if not expanded_row:
+                    # Re-expand if needed
+                    page.click(".agent-row")
+                    page.wait_for_selector(".agent-row.expanded", timeout=4000)
+
+                # Get the prompt box and scroll it down
+                prompt_box = page.query_selector(".agent-row.expanded .dispatch-prompt")
+                assert prompt_box is not None, "Prompt box not found"
+
+                # Scroll the prompt box to bottom
+                initial_scroll = page.evaluate(
+                    "document.querySelector('.agent-row.expanded .dispatch-prompt').scrollTop || 0")
+                page.evaluate(
+                    "document.querySelector('.agent-row.expanded .dispatch-prompt').scrollTop = 999")
+                scroll_before = page.evaluate(
+                    "document.querySelector('.agent-row.expanded .dispatch-prompt').scrollTop")
+                assert scroll_before > initial_scroll, f"Failed to scroll; before={initial_scroll}, after={scroll_before}"
+
+                # Trigger a live update by touching the backlog
+                bl = root / "AUDIT-BACKLOG.md"
+                content = bl.read_text(encoding="utf-8").replace(
+                    "## Landing log",
+                    "- ⬜ **[test] SCROLL-PERSIST-MARKER item.** live update.\n\n## Landing log")
+                bl.write_text(content, encoding="utf-8")
+
+                # Wait for the update to arrive
+                page.wait_for_function(
+                    "document.querySelector('#backlog-tiers').innerText.includes('SCROLL-PERSIST-MARKER')",
+                    timeout=8000)
+
+                # Check that scroll position survived the update
+                scroll_after = page.evaluate(
+                    "document.querySelector('.agent-row.expanded .dispatch-prompt').scrollTop")
+                assert scroll_after >= scroll_before - 2,                     f"Scroll position lost during live update: before={scroll_before}, after={scroll_after}"
+            except Exception as e:
+                failures.append(f"(f) scroll position/selection not preserved during live update: {e}")
+
+            # (g) promptCache eviction works: removed agents don't stay cached (bugfix P2 #2)
+            try:
+                # Get initial cache size
+                cache_size_before = page.evaluate("window.__getPromptCacheSize()")
+                assert cache_size_before > 0, "Cache should have entries for expanded agents"
+
+                # Change agent hint to force a new agent to appear
+                (root / "hint.txt").write_text("NEW-AGENT-AFTER-EVICT", encoding="utf-8")
+                (root / "transcripts" / "agent-evict-marker.jsonl").write_text("{}", encoding="utf-8")
+                page.wait_for_function(
+                    "document.querySelector('#agents-list').innerText.includes('NEW-AGENT-AFTER-EVICT')",
+                    timeout=8000)
+
+                # Now change it again to a different agent (old one gets removed from DOM)
+                (root / "hint.txt").write_text("FINAL-AGENT-STATE", encoding="utf-8")
+                (root / "transcripts" / "agent-final-marker.jsonl").write_text("{}", encoding="utf-8")
+                page.wait_for_function(
+                    "document.querySelector('#agents-list').innerText.includes('FINAL-AGENT-STATE')",
+                    timeout=8000)
+
+                # Cache should have evicted old entries
+                cache_size_after = page.evaluate("window.__getPromptCacheSize()")
+                assert cache_size_after <= cache_size_before + 1,                     f"Cache grew unbounded: before={cache_size_before}, after={cache_size_after}"
+            except Exception as e:
+                failures.append(f"(g) promptCache not evicting removed agents: {e}")
 
             # (a) console clean across the whole run
             time.sleep(1.0)

@@ -1109,6 +1109,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => '\\\\' + c);
         }
 
+        // Test hook: expose cache size for verify_dash.py
+        window.__getPromptCacheSize = function() { return promptCache.size; };
+
         function setConnectionStatus(connected) {
             document.getElementById('conn-live').style.display = connected ? '' : 'none';
             document.getElementById('conn-reconnecting').style.display = connected ? 'none' : '';
@@ -1166,44 +1169,74 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             const runtime = Math.floor((now - startTime) / 1000);
             const runtimeStr = runtime < 60 ? runtime + 's' : Math.floor(runtime / 60) + 'm';
 
-            detailsDiv.textContent = '';
+            // BUGFIX: Field-level patching — only update nodes whose content changed.
+            // Do NOT clear detailsDiv.textContent; instead update existing fields or
+            // append new ones. This preserves scroll position and text selection in the
+            // prompt box.
             const fields = [
                 ['Task:', agent.taskLabel || 'N/A'],
                 ['Status:', agent.status || 'unknown'],
                 ['Runtime:', runtimeStr],
                 ['Tokens:', String(agent.tokensUsed || 0)],
             ];
-            for (const [label, value] of fields) {
-                const rowEl = document.createElement('div');
-                rowEl.className = 'detail-row';
-                const labelEl = document.createElement('span');
-                labelEl.className = 'detail-label';
-                labelEl.textContent = label;
-                const valueEl = document.createElement('span');
-                valueEl.className = 'detail-value';
-                valueEl.textContent = value;
-                rowEl.appendChild(labelEl);
-                rowEl.appendChild(document.createTextNode(' '));
-                rowEl.appendChild(valueEl);
-                detailsDiv.appendChild(rowEl);
-            }
-            const promptLabelRow = document.createElement('div');
-            promptLabelRow.className = 'detail-row';
-            const promptLabel = document.createElement('span');
-            promptLabel.className = 'detail-label';
-            promptLabel.textContent = 'Prompt:';
-            promptLabelRow.appendChild(promptLabel);
-            detailsDiv.appendChild(promptLabelRow);
+            
+            // Ensure all detail rows exist and update values atomically
+            fields.forEach(([label, value]) => {
+                let rowEl = detailsDiv.querySelector(`[data-detail-label="${label}"]`);
+                if (!rowEl) {
+                    rowEl = document.createElement('div');
+                    rowEl.className = 'detail-row';
+                    rowEl.dataset.detailLabel = label;
+                    const labelEl = document.createElement('span');
+                    labelEl.className = 'detail-label';
+                    labelEl.textContent = label;
+                    const valueEl = document.createElement('span');
+                    valueEl.className = 'detail-value';
+                    valueEl.textContent = value;
+                    rowEl.appendChild(labelEl);
+                    rowEl.appendChild(document.createTextNode(' '));
+                    rowEl.appendChild(valueEl);
+                    detailsDiv.appendChild(rowEl);
+                } else {
+                    // Update value only if it changed
+                    const valueEl = rowEl.querySelector('.detail-value');
+                    if (valueEl && valueEl.textContent !== value) {
+                        valueEl.textContent = value;
+                    }
+                }
+            });
 
-            const promptBox = document.createElement('div');
-            promptBox.className = 'dispatch-prompt';
+            // Ensure prompt label row exists
+            let promptLabelRow = detailsDiv.querySelector('[data-detail-label="Prompt:"]');
+            if (!promptLabelRow) {
+                promptLabelRow = document.createElement('div');
+                promptLabelRow.className = 'detail-row';
+                promptLabelRow.dataset.detailLabel = 'Prompt:';
+                const promptLabel = document.createElement('span');
+                promptLabel.className = 'detail-label';
+                promptLabel.textContent = 'Prompt:';
+                promptLabelRow.appendChild(promptLabel);
+                detailsDiv.appendChild(promptLabelRow);
+            }
+
+            // Ensure prompt box exists and update only if content changed
+            let promptBox = detailsDiv.querySelector('.dispatch-prompt');
+            if (!promptBox) {
+                promptBox = document.createElement('div');
+                promptBox.className = 'dispatch-prompt';
+                detailsDiv.appendChild(promptBox);
+            }
+            
             // The list payload (dash-extra) has no prompt; the full dispatch prompt
             // comes from GET /agent?id=. Fetch once per agent and cache — push
             // updates re-render expanded rows, and must neither clobber a loaded
             // prompt nor refetch on every SSE event.
             const cached = promptCache.get(agent.id);
-            promptBox.textContent = (typeof cached === 'string') ? cached : 'Loading…';
-            detailsDiv.appendChild(promptBox);
+            const promptText = (typeof cached === 'string') ? cached : 'Loading…';
+            if (promptBox.textContent !== promptText) {
+                promptBox.textContent = promptText;
+            }
+            
             if (!promptCache.has(agent.id)) fetchDispatchPrompt(agent.id);
         }
 
@@ -1257,7 +1290,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             const newIds = new Set(latestAgents.map(a => a.id));
             container.querySelectorAll('[data-agent-id]').forEach(row => {
-                if (!newIds.has(row.dataset.agentId)) row.remove();
+                if (!newIds.has(row.dataset.agentId)) {
+                    // BUGFIX: Evict promptCache entries for agents no longer present
+                    promptCache.delete(row.dataset.agentId);
+                    row.remove();
+                }
             });
 
             latestAgents.forEach(a => {
