@@ -418,6 +418,66 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== P1 Bug2: compute_sha256 falls back to shasum when sha256sum is unavailable ===\n'
+(
+  expected="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"  # sha256("abc")
+  got=$(printf 'abc' | compute_sha256)
+  if [ "$got" != "$expected" ]; then
+    printf 'FAIL: compute_sha256 primary path produced wrong hash: %s\n' "$got"
+    exit 1
+  fi
+  # Force the fallback deterministically: shadow the `command` builtin so
+  # `command -v sha256sum` reports "not found" (simulates a shasum-only host
+  # like macOS/BSD). The old code hardcoded sha256sum at 4 of 5 sites and would
+  # emit an EMPTY hash here; the compute_sha256 helper must produce a real one.
+  command() {
+    if [ "${1:-}" = "-v" ] && [ "${2:-}" = "sha256sum" ]; then return 1; fi
+    builtin command "$@"
+  }
+  if builtin command -v shasum >/dev/null 2>&1; then
+    gotfb=$(printf 'abc' | compute_sha256)
+    if [ "$gotfb" != "$expected" ]; then
+      printf 'FAIL: compute_sha256 shasum-fallback produced wrong hash: %s\n' "$gotfb"
+      exit 1
+    fi
+    printf 'PASS: compute_sha256 falls back to shasum and yields the correct hash\n'
+  else
+    printf 'PASS: primary path correct (shasum absent; fallback path not exercisable here)\n'
+  fi
+)
+if [ $? -eq 0 ]; then test_passed=$((test_passed + 1)); else test_failed=$((test_failed + 1)); fi
+
+printf '\n=== P1 Bug1: verify_audit_log holds the write lock (no false truncation vs concurrent append) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_verify_lock"
+  mkdir -p "$AESOP_ROOT/state"
+  log="$AESOP_ROOT/state/SECURITY-AUDIT.log"
+  log_block "seed_1" >/dev/null 2>&1
+  log_block "seed_2" >/dev/null 2>&1
+  bad=0
+  i=0
+  while [ "$i" -lt 6 ]; do
+    log_block "concurrent_$i" >/dev/null 2>&1 &
+    ap=$!
+    out=$(verify_audit_log "$log" 2>&1)
+    wait "$ap" 2>/dev/null
+    if printf '%s' "$out" | grep -qiE 'truncat|tamper|chain.*brok|brok.*chain'; then
+      bad=1
+    fi
+    i=$((i + 1))
+  done
+  if [ "$bad" -ne 0 ]; then
+    printf 'FAIL: verify_audit_log falsely reported truncation/tamper during a concurrent append (no lock)\n'
+    exit 1
+  fi
+  if [ -d "$AESOP_ROOT/state/.audit-log-lock" ]; then
+    printf 'FAIL: verify_audit_log left its .audit-log-lock behind (not released)\n'
+    exit 1
+  fi
+  printf 'PASS: verify_audit_log serializes via the write lock; no false truncation, lock released\n'
+)
+if [ $? -eq 0 ]; then test_passed=$((test_passed + 1)); else test_failed=$((test_failed + 1)); fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"
