@@ -521,16 +521,32 @@ def get_alerts():
     return alerts
 
 
+
+# agent_id is attacker-controlled (GET /agent?id=...) and is spliced into a glob
+# pattern below. Reject path-traversal segments and glob metacharacters before
+# the pattern is ever built — a bare "/", "\", "..", "*", "?", "[" or "]" has no
+# legitimate use in an agent id (ids are opaque hex-ish tokens).
+_AGENT_ID_FORBIDDEN = re.compile(r'\.\.|[/\\*?\[\]]')
+
+
 def extract_agent_dispatch_prompt(agent_id):
     """
     Extract dispatch prompt and metadata from agent output file.
     Returns dict with prompt, dispatcher, model, activity times, and message count.
     Robust: missing/invalid file -> {error: "..."}
+    Security: rejects agent_id containing path-traversal or glob-metacharacter
+    sequences before building any glob pattern, and refuses to return a match
+    that resolves outside TRANSCRIPTS_ROOT (defense in depth). Error results
+    carry "invalid": True when the input itself was rejected, so callers can
+    map that to an HTTP 400 rather than a plain 404.
 
     CRITICAL: Use prefix-matching via glob, not exact match. The dashboard supplies
     truncated agent IDs; files on disk carry full IDs (e.g., a77b995bcdb953e9c.output).
     """
     try:
+        if not agent_id or _AGENT_ID_FORBIDDEN.search(agent_id):
+            return {"error": "invalid agent id", "invalid": True}
+
         # Prefix-match: search in TRANSCRIPTS_ROOT for files matching agent_id*.output
         if not TRANSCRIPTS_ROOT.exists():
             return {"error": f"transcripts root not found at {TRANSCRIPTS_ROOT}"}
@@ -543,6 +559,20 @@ def extract_agent_dispatch_prompt(agent_id):
         if not matches:
             return {"error": f"transcript not found for {agent_id}"}
         output_file = matches[0]
+
+        # Containment check: the resolved match must stay inside TRANSCRIPTS_ROOT.
+        # Belt-and-suspenders alongside the input rejection above.
+        try:
+            is_contained = output_file.resolve().is_relative_to(TRANSCRIPTS_ROOT.resolve())
+        except AttributeError:
+            # Path.is_relative_to requires Python 3.9+; fall back for older runtimes.
+            try:
+                output_file.resolve().relative_to(TRANSCRIPTS_ROOT.resolve())
+                is_contained = True
+            except ValueError:
+                is_contained = False
+        if not is_contained:
+            return {"error": "resolved path outside transcripts root", "invalid": True}
 
         dispatch_prompt = None
         message_count = 0
@@ -1488,6 +1518,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             # Extract dispatch prompt and metadata
             data = extract_agent_dispatch_prompt(agent_id)
+
+            if "error" in data:
+                # Rejected input (path traversal, glob metacharacters, or a match
+                # that resolved outside TRANSCRIPTS_ROOT) -> 400. A well-formed id
+                # with no matching transcript -> 404. Never 200 on error.
+                status = 400 if data.get("invalid") else 404
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": data["error"]}).encode('utf-8'))
+                return
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
