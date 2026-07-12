@@ -92,7 +92,7 @@ def has_pragma(filepath):
 
 
 def is_binary_file(filepath):
-    """Check if file is binary (contains null bytes)."""
+    """Check if file is binary (contains null bytes in first 8KB)."""
     try:
         with open(filepath, "rb") as f:
             return b"\x00" in f.read(8192)
@@ -101,19 +101,9 @@ def is_binary_file(filepath):
 
 
 def should_skip_file(filepath):
-    """Check if file should be skipped (binary, too large, in .git/)."""
+    """Check if file should be skipped entirely (only .git/ directories)."""
     if ".git" in filepath.parts or ".git" in str(filepath):
         return True
-
-    try:
-        stat = filepath.stat()
-        if stat.st_size > 1024 * 1024:  # >1MB
-            return True
-        if is_binary_file(filepath):
-            return True
-    except Exception:
-        return True
-
     return False
 
 
@@ -150,6 +140,10 @@ def scan_file(filepath):
     Returns list of (line_num, rule, match_str, is_fatal).
     is_fatal=True for credential filenames and fatal rule categories;
     is_fatal=False only if pragma present AND rule is in SOFTENED_BY_PRAGMA.
+
+    Large files (>1MB) and binary files are scanned for FATAL_RULES patterns:
+    - Large files: scan first 1MB; emit SKIPPED-LARGE to stderr if file is larger
+    - Binary files: decode as latin-1; emit SKIPPED-BINARY to stderr if not fully scanned
     """
     # Rules that CAN be softened by pragma (doc-shaped rules only)
     SOFTENED_BY_PRAGMA = {"generic_secret_assignment", "env_access"}
@@ -163,6 +157,10 @@ def scan_file(filepath):
         "openai_anthropic_key",
         "connection_string",
     }
+
+    SIZE_THRESHOLD = 1024 * 1024  # 1MB
+    MAX_READ_SIZE = 2 * 1024 * 1024  # 2MB max to read
+    SCAN_PREFIX_SIZE = 1024 * 1024  # Scan first 1MB of large files
 
     findings = []
 
@@ -182,33 +180,95 @@ def scan_file(filepath):
             break
 
     try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            for line_num, line in enumerate(f, start=1):
-                for rule_name, (pattern, flags) in PATTERNS.items():
-                    # Skip env_assignment rule if not an .env-like file
-                    if rule_name == "env_assignment" and not is_env_file(filepath):
-                        continue
+        # Check file size and binary status
+        stat = filepath.stat()
+        file_size = stat.st_size
+        is_binary = is_binary_file(filepath)
+        is_large = file_size > SIZE_THRESHOLD
 
+        if is_large:
+            # Scan first 1MB of large file for FATAL_RULES
+            with open(filepath, "rb") as f:
+                content = f.read(SCAN_PREFIX_SIZE)
+
+            # Decode as latin-1 (handles any binary content)
+            try:
+                content_str = content.decode("latin-1")
+            except Exception:
+                content_str = content.decode("utf-8", errors="ignore")
+
+            # Emit skip notice to stderr
+            print(f"SKIPPED-LARGE {filepath} (scanned first {SCAN_PREFIX_SIZE // 1024}KB)", file=sys.stderr)
+
+            # Scan content for FATAL_RULES only
+            for line_num, line in enumerate(content_str.split("\n"), start=1):
+                for rule_name in FATAL_RULES:
+                    if rule_name not in PATTERNS:
+                        continue
+                    pattern, flags = PATTERNS[rule_name]
                     matches = re.finditer(pattern, line, flags)
                     for match in matches:
                         match_str = match.group(0)
-
-                        # Skip if it's a placeholder
                         if is_placeholder(match_str):
                             continue
+                        findings.append((line_num, rule_name, match_str, True))
 
-                        # Determine fatality based on rule category
-                        if rule_name in FATAL_RULES:
-                            # These are always fatal, pragma never applies
-                            is_fatal = True
-                        elif has_file_pragma and rule_name in SOFTENED_BY_PRAGMA:
-                            # Only these rules can be softened by pragma
-                            is_fatal = False
-                        else:
-                            # Other rules are fatal unless pragma and softened
-                            is_fatal = not has_file_pragma if rule_name in SOFTENED_BY_PRAGMA else True
+        elif is_binary:
+            # Scan binary file as latin-1 for FATAL_RULES only
+            with open(filepath, "rb") as f:
+                content = f.read(MAX_READ_SIZE)
 
-                        findings.append((line_num, rule_name, match_str, is_fatal))
+            # Decode as latin-1 (preserves all bytes)
+            try:
+                content_str = content.decode("latin-1")
+            except Exception:
+                content_str = content.decode("utf-8", errors="ignore")
+
+            # Emit skip notice to stderr
+            print(f"SKIPPED-BINARY {filepath} (scanned via latin-1)", file=sys.stderr)
+
+            # Scan content for FATAL_RULES only
+            for line_num, line in enumerate(content_str.split("\n"), start=1):
+                for rule_name in FATAL_RULES:
+                    if rule_name not in PATTERNS:
+                        continue
+                    pattern, flags = PATTERNS[rule_name]
+                    matches = re.finditer(pattern, line, flags)
+                    for match in matches:
+                        match_str = match.group(0)
+                        if is_placeholder(match_str):
+                            continue
+                        findings.append((line_num, rule_name, match_str, True))
+
+        else:
+            # Normal text file: scan all rules
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                for line_num, line in enumerate(f, start=1):
+                    for rule_name, (pattern, flags) in PATTERNS.items():
+                        # Skip env_assignment rule if not an .env-like file
+                        if rule_name == "env_assignment" and not is_env_file(filepath):
+                            continue
+
+                        matches = re.finditer(pattern, line, flags)
+                        for match in matches:
+                            match_str = match.group(0)
+
+                            # Skip if it's a placeholder
+                            if is_placeholder(match_str):
+                                continue
+
+                            # Determine fatality based on rule category
+                            if rule_name in FATAL_RULES:
+                                # These are always fatal, pragma never applies
+                                is_fatal = True
+                            elif has_file_pragma and rule_name in SOFTENED_BY_PRAGMA:
+                                # Only these rules can be softened by pragma
+                                is_fatal = False
+                            else:
+                                # Other rules are fatal unless pragma and softened
+                                is_fatal = not has_file_pragma if rule_name in SOFTENED_BY_PRAGMA else True
+
+                            findings.append((line_num, rule_name, match_str, is_fatal))
 
     except Exception:
         pass
