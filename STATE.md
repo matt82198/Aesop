@@ -15,13 +15,25 @@ agents work. Single-user survival hack → cross-team product.
   5. **Cross-machine continuity** — brain reconstitutes from remotes; compute disposable.
 - Orchestrator (Fable) main-thread; subagents Haiku; TDD-first; feature branch only.
 
-## Phase
-`final-catch` — all five pillars implemented, QA'd, committed, pushed 2026-07-12.
-QA fixes of note: RESTORE.md reset-ordering hazard; hook JSON escaping + AESOP_ROOT
-default; collector .signal-state.json persistence. Remaining: Fable final-catch on
-the branch diff, then PR feature/behavior-as-code → main.
+## Standing order (user, 2026-07-12)
+Rerun the refinement loop CONTINUOUSLY until tokens exhaust or gaps dry (2 consecutive
+audits finding nothing new). Each cycle: (1) collect wave results → QA (TDD evidence
+required for code) → commit+push per green item; (2) re-audit vs the five pillars +
+monitor/cost briefs → rank remaining gaps; (3) dispatch next Haiku wave (6-8 parallel,
+disjoint ownership, TDD-first). Proactive: never idle while agents run. On session
+death: resume from this file — waves in flight are listed under Phase.
 
-Implementation map (as shipped):
+## Phase
+`wave-2` — pillars v1 shipped + QA'd + pushed (through 2b15eec). Wave 2 in flight
+(7 implementers, TDD-first): npm test harness + collector tests; Claude model-policy
+hook; rotate_logs.py; reconstitute.sh; proposals.mjs lifecycle; CI workflow;
+launch_tui.py portability. Plus: dash-extra.mjs fix awaiting TDD test evidence
+(uncommitted until then); monitor cycle 7; standing 30-min wakeup armed.
+Wave-3 candidates (from audits, unclaimed): state/ auto-creation; BUILDLOG lifecycle
+doc; ACTIONS.log rotation wiring; commit-format check in pre-push hook; config key
+for fleet repo list (reconstitute TODO); INCIDENT-LOG correlation.
+
+Implementation map (wave 1, as shipped):
 1. onboarding: CLAUDE-TEMPLATE.md, docs/MEMORY-TEMPLATE.md, bin/cli.js, README.md
 2. policy: hooks/pre-push-policy.sh, docs/HOOK-INSTALL.md (audit → state/SECURITY-AUDIT.log)
 3. behavioral-PRs: .github/pull_request_template.md, docs/BEHAVIORAL-PR-REVIEW.md,
