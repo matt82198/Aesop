@@ -51,9 +51,15 @@ acquire_audit_lock() {
 }
 
 release_audit_lock() {
-  # Release the lock directory
+  # P0 fix: Release the lock directory only if we own it (pid matches)
   local lock_dir="$1"
-  rm -rf "$lock_dir" 2>/dev/null
+  if [ -f "$lock_dir/pid" ]; then
+    local lock_pid
+    lock_pid=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
+    if [ "$lock_pid" = "$$" ]; then
+      rm -rf "$lock_dir" 2>/dev/null
+    fi
+  fi
 }
 
 get_previous_hash() {
