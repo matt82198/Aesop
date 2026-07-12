@@ -5,12 +5,14 @@
     "brain_root": "Set via BRAIN_ROOT env var; default: {aesop_root}/../.claude",
     "scripts_root": "Set via SCRIPTS_ROOT env var; default: {aesop_root}/../scripts",
     "temp_root": "Set via TEMP_ROOT env var; default: system temp + /claude",
-    "state_root": "Set via AESOP_STATE_ROOT env var; default: {aesop_root}/state"
+    "state_root": "Set via AESOP_STATE_ROOT env var; default: {aesop_root}/state",
+    "fleet_root": "Set via AESOP_FLEET_ROOT env var; default: $HOME (security: validate clone targets remain under this root)"
   },
   "brain_root": "/path/to/brain (optional; overrides default)",
   "scripts_root": "/path/to/scripts (optional; overrides default)",
   "temp_root": "/path/to/temp/scratch (optional; overrides default)",
   "state_root": "/path/to/state (optional; overrides default)",
+  "fleet_root": "/path/to/fleet (optional; default $HOME; reconstitute.sh validates clone targets remain under this root)",
   "transcripts_root": "~/.claude/projects (or override via AESOP_TRANSCRIPTS_ROOT env var)",
   "repos": [
     {

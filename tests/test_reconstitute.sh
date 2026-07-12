@@ -29,13 +29,16 @@ test_item1_url_validation() {
   local tmpdir
   tmpdir=$(mktemp -d) || { echo "mktemp failed"; return 1; }
 
+  # Set fleet root to tmpdir so validation accepts our test paths
+  export AESOP_FLEET_ROOT="$tmpdir"
+
   # Test 1.1: ext:: prefix should be rejected
   echo "Test 1.1: Reject ext:: prefix"
-  cat > "$tmpdir/repos_1_1.txt" << 'EOF'
-ext::sh -c 'echo bad' /tmp/target1
+  cat > "$tmpdir/repos_1_1.txt" << EOF
+ext::sh -c 'echo bad' $tmpdir/target1
 EOF
 
-  output=$(timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_1.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_1.txt" 2>&1 || true)
 
   if echo "$output" | grep -qi "invalid\|error"; then
     assert_pass "ext:: rejected with error message"
@@ -47,11 +50,11 @@ EOF
 
   # Test 1.2: leading dash should be rejected
   echo "Test 1.2: Reject leading dash"
-  cat > "$tmpdir/repos_1_2.txt" << 'EOF'
--c /tmp/target2
+  cat > "$tmpdir/repos_1_2.txt" << EOF
+-c $tmpdir/target2
 EOF
 
-  output=$(timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_2.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_2.txt" 2>&1 || true)
 
   if echo "$output" | grep -qi "invalid\|error"; then
     assert_pass "leading dash rejected with error"
@@ -63,11 +66,11 @@ EOF
 
   # Test 1.3: Valid HTTPS should work
   echo "Test 1.3: Valid HTTPS URL works"
-  cat > "$tmpdir/repos_1_3.txt" << 'EOF'
-https://github.com/example/repo.git /tmp/clone1
+  cat > "$tmpdir/repos_1_3.txt" << EOF
+https://github.com/example/repo.git $tmpdir/clone1
 EOF
 
-  output=$(timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_3.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_3.txt" 2>&1 || true)
 
   if echo "$output" | grep -q "Would clone https://"; then
     assert_pass "Valid HTTPS accepted"
@@ -77,11 +80,11 @@ EOF
 
   # Test 1.4: Valid git@host:path should work
   echo "Test 1.4: Valid git@host:path URL works"
-  cat > "$tmpdir/repos_1_4.txt" << 'EOF'
-git@github.com:user/repo.git /tmp/clone2
+  cat > "$tmpdir/repos_1_4.txt" << EOF
+git@github.com:user/repo.git $tmpdir/clone2
 EOF
 
-  output=$(timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_4.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_4.txt" 2>&1 || true)
 
   if echo "$output" | grep -q "Would clone git@"; then
     assert_pass "Valid git@host:path accepted"
@@ -91,11 +94,11 @@ EOF
 
   # Test 1.5: Valid ssh:// should work
   echo "Test 1.5: Valid ssh:// URL works"
-  cat > "$tmpdir/repos_1_5.txt" << 'EOF'
-ssh://git@github.com/user/repo.git /tmp/clone3
+  cat > "$tmpdir/repos_1_5.txt" << EOF
+ssh://git@github.com/user/repo.git $tmpdir/clone3
 EOF
 
-  output=$(timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_5.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_5.txt" 2>&1 || true)
 
   if echo "$output" | grep -q "Would clone ssh://"; then
     assert_pass "Valid ssh:// accepted"
@@ -105,11 +108,11 @@ EOF
 
   # Test 1.6: SECURITY HOLE FIX - git@evil (no colon) should be rejected
   echo "Test 1.6: Reject git@evil without colon"
-  cat > "$tmpdir/repos_1_6.txt" << 'EOF'
-git@evil /tmp/clone4
+  cat > "$tmpdir/repos_1_6.txt" << EOF
+git@evil $tmpdir/clone4
 EOF
 
-  output=$(timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_6.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_6.txt" 2>&1 || true)
 
   if echo "$output" | grep -qi "invalid\|error"; then
     assert_pass "git@evil (no colon) rejected with error"
@@ -121,11 +124,11 @@ EOF
 
   # Test 1.7: Reject bare git@ alone
   echo "Test 1.7: Reject bare git@"
-  cat > "$tmpdir/repos_1_7.txt" << 'EOF'
-git@ /tmp/clone5
+  cat > "$tmpdir/repos_1_7.txt" << EOF
+git@ $tmpdir/clone5
 EOF
 
-  output=$(timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_7.txt" 2>&1 || true)
+  output=$(AESOP_FLEET_ROOT="$tmpdir" timeout 3 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_1_7.txt" 2>&1 || true)
 
   if echo "$output" | grep -qi "invalid\|error"; then
     assert_pass "bare git@ rejected with error"
@@ -304,134 +307,9 @@ test_item4_e2e_reconstitute() {
   printf "%s\t%s\n" "file://$fixture1" "$clone_dir1" > "$repos_file"
   printf "%s\t%s\n" "file://$fixture2" "$clone_dir2" >> "$repos_file"
 
-  # Create a simple wrapper script that calls reconstitute.sh with TEST_MODE
-  # We need to bypass the normal argument parsing to use local file:// URLs
-  local wrapper_script="$tmpdir/wrapper.sh"
-  cat > "$wrapper_script" << 'WRAPPER'
-#!/bin/bash
-set -euo pipefail
-TEST_MODE=1
-REPOS_FILE="$1"
-DRY_RUN=0
-
-# Define the validate_url and reconstruct_fleet functions from reconstitute.sh
-# but with TEST_MODE hardcoded to 1
-
-validate_url() {
-  local url="$1"
-  # Allow: https://, git@host:, ssh://, file:// (test mode only)
-  # Reject: leading dash, ext::, or other dangerous patterns
-  if [[ "$url" =~ ^(https://|git@[a-zA-Z0-9.-]+:|ssh://) ]]; then
-    return 0
-  fi
-  # Allow file:// and absolute paths only in test mode
-  if [ $TEST_MODE -eq 1 ]; then
-    if [[ "$url" =~ ^(file://|/) ]]; then
-      return 0
-    fi
-  fi
-  echo "Invalid URL: $url" >&2
-  return 1
-}
-
-reconstruct_fleet() {
-  local repos_to_process=""
-  local cloned_count=0
-  local fetched_count=0
-  local failed_count=0
-
-  if [ -n "$REPOS_FILE" ]; then
-    if [ ! -f "$REPOS_FILE" ]; then
-      echo "Error: repos file not found: $REPOS_FILE"
-      exit 1
-    fi
-    repos_to_process=$(<"$REPOS_FILE")
-  fi
-
-  if [ -z "$repos_to_process" ]; then
-    echo "No repos to process."
-    exit 0
-  fi
-
-  echo "Processing repos..."
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-
-    # Try to parse as tab-delimited first (url\ttarget)
-    if echo "$line" | grep -q $'\t'; then
-      url=$(echo "$line" | cut -f1)
-      target=$(echo "$line" | cut -f2-)
-    else
-      # Fall back to space-delimited (url target) for backward compatibility
-      url=$(echo "$line" | awk '{print $1}')
-      target=$(echo "$line" | awk '{print $2}')
-    fi
-
-    if [ -z "$target" ]; then
-      target="$line"
-      url=""
-    fi
-
-    if [ -z "$target" ]; then
-      continue
-    fi
-
-    # Validate URL if present
-    if [ -n "$url" ]; then
-      if ! validate_url "$url"; then
-        failed_count=$((failed_count + 1))
-        continue
-      fi
-    fi
-
-    if [ ! -d "$target" ]; then
-      if [ $DRY_RUN -eq 1 ]; then
-        if [ -n "$url" ]; then
-          echo "[DRY-RUN] Would clone $url to $target"
-        fi
-      else
-        if [ -n "$url" ]; then
-          echo "Cloning $url to $target..."
-          # Handle file:// URLs by stripping the prefix
-          local clone_url="$url"
-          if [[ "$clone_url" =~ ^file:// ]]; then
-            clone_url="${clone_url#file://}"
-          fi
-          git clone -- "$clone_url" "$target" 2>&1 | tail -1
-          if [ -d "$target/.git" ]; then
-            cloned_count=$((cloned_count + 1))
-          else
-            failed_count=$((failed_count + 1))
-          fi
-        fi
-      fi
-    else
-      if [ $DRY_RUN -eq 1 ]; then
-        echo "[DRY-RUN] Would fetch $target"
-      else
-        echo "Fetching $target..."
-        git -C "$target" fetch --all --quiet 2>&1 && fetched_count=$((fetched_count + 1)) || failed_count=$((failed_count + 1))
-      fi
-    fi
-  done <<< "$repos_to_process"
-
-  echo ""
-  echo "=== Summary ==="
-  echo "CLONED:  $cloned_count"
-  echo "FETCHED: $fetched_count"
-  echo "FAILED:  $failed_count"
-
-  if [ $failed_count -gt 0 ]; then
-    return 1
-  fi
-}
-
-reconstruct_fleet
-WRAPPER
-  chmod +x "$wrapper_script"
-
-  # Run the wrapper script
-  bash "$wrapper_script" "$repos_file" > /dev/null 2>&1 || true
+  # ISSUE 2 FIX: E2E test drives real reconstitute.sh script (not a wrapper)
+  # This ensures tests validate against the actual implementation
+  AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 bash "$RECONSTITUTE" --repos-file "$repos_file" > /dev/null 2>&1 || true
 
 
   # Verify both repos were cloned
@@ -492,8 +370,8 @@ WRAPPER
 
   echo "Test 4.3: Verify fetch works on existing clones"
 
-  # Re-run wrapper script on existing clones (should fetch)
-  bash "$wrapper_script" "$repos_file" > /dev/null 2>&1 || true
+  # Re-run real reconstitute.sh on existing clones (should fetch)
+  AESOP_FLEET_ROOT="$tmpdir" TEST_MODE=1 bash "$RECONSTITUTE" --repos-file "$repos_file" > /dev/null 2>&1 || true
 
   # Check that fetch worked by verifying git history
   # (check if we have any commits, not just on main/master)
