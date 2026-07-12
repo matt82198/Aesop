@@ -95,6 +95,27 @@ if (fs.existsSync(targetDir)) {
     console.error('Please choose a different target directory or remove the existing one.');
     process.exit(1);
   }
+
+  // SECURITY: A pre-existing allowlisted entry (e.g. ".git", "state") must be a real
+  // directory/file, never a symlink or junction. Following a symlinked entry here would
+  // let scaffolding escape targetDir entirely (e.g. a symlinked .git whose "hooks"
+  // subdirectory resolves outside targetDir). lstat (not stat) so the link itself is
+  // inspected rather than whatever it points to.
+  for (const item of contents) {
+    const itemPath = path.join(targetDir, item);
+    let itemLstat;
+    try {
+      itemLstat = fs.lstatSync(itemPath);
+    } catch (e) {
+      // lstat failed (race/permissions); nothing to check, move on
+      continue;
+    }
+    if (itemLstat.isSymbolicLink()) {
+      console.error(`Error: "${item}" in "${targetDir}" is a symlink (security risk).`);
+      console.error('Refusing to scaffold through a symlinked entry. Remove it and re-run.');
+      process.exit(1);
+    }
+  }
 } else {
   fs.mkdirSync(targetDir, { recursive: true });
 }
@@ -246,6 +267,20 @@ function installPrePushHook(targetDir, templateRoot) {
   if (!fs.existsSync(gitDir)) {
     // No git repo, skip hook installation silently
     return;
+  }
+
+  // SECURITY: Check if .git itself is a symlink/junction (refuse to follow it outside
+  // targetDir). This mirrors the gitHooksDir/hookDest checks below — .git is one path
+  // component higher and must be validated before anything derived from it is trusted.
+  try {
+    const gitDirLstat = fs.lstatSync(gitDir);
+    if (gitDirLstat.isSymbolicLink()) {
+      console.warn('⚠ Warning: .git is a symlink (security risk)');
+      console.warn('  Skipping hook installation. Please remove the symlink and re-run scaffold.');
+      return;
+    }
+  } catch (e) {
+    // lstat failed; proceed (may be a permission issue)
   }
 
   // Ensure hooks directory exists

@@ -334,6 +334,65 @@ test('scaffold refuses to install hook when hook dest file is a symlink', () => 
   }
 });
 
+test('scaffold refuses to follow a pre-existing symlinked .git in target dir (escape guard)', () => {
+  // Regression test for symlink-escape: PR #24 guarded .git/hooks and .git/hooks/pre-push
+  // being symlinks, but not .git itself. A pre-existing target dir with a symlinked/junction
+  // .git pointing outside the target must not cause any file to be written outside targetDir.
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-symlink-git');
+
+  // "attacker path" — arbitrary directory well outside the scaffold target
+  const evilDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-evil-gitdir-'));
+
+  // Pre-create the target dir (simulates a shared "starter" folder the victim already has)
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  const gitDir = path.join(targetDir, '.git');
+
+  try {
+    fs.symlinkSync(evilDir, gitDir, isWindows() ? 'junction' : 'dir');
+  } catch (e) {
+    // If symlink/junction creation fails (no privilege), skip gracefully
+    console.log('Skipping .git symlink-escape test (junction/symlink not available)');
+    return;
+  }
+
+  const res = runCli(targetDir);
+
+  // Nothing should ever be written inside the attacker-controlled directory
+  const escapedHookPath = path.join(evilDir, 'hooks', 'pre-push');
+  assert.ok(
+    !fs.existsSync(escapedHookPath),
+    `Hook must not be written outside targetDir (found at ${escapedHookPath})`
+  );
+
+  // The scaffold should reject the run outright rather than silently continuing
+  assert.notEqual(res.status, 0, 'Scaffold should refuse to proceed with a symlinked .git');
+
+  const output = (res.stderr || '') + (res.stdout || '');
+  assert.ok(
+    output.toLowerCase().includes('symlink'),
+    `Should warn/error about symlinked .git. Got: "${output}"`
+  );
+});
+
+test('scaffold into a clean pre-existing target dir still works (happy path preserved)', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-clean-preexisting');
+
+  // Pre-create an empty target dir (no .git, nothing) — must still scaffold fine
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  const res = runCli(targetDir);
+  assert.equal(res.status, 0, `Scaffold should succeed on a clean real dir. stderr: ${res.stderr}`);
+
+  const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
+  assert.ok(fs.existsSync(hookPath), 'Hook should still be installed for a real .git dir');
+});
+
 function isWindows() {
   return process.platform === 'win32';
 }

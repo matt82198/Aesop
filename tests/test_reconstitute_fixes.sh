@@ -164,6 +164,109 @@ EOF
   fi
 }
 
+# ===== ISSUE 4: Junction/symlink escape must be rejected (HIGH, Security) =====
+# validate_target must resolve target and fleet_root PHYSICALLY (no plain
+# logical cd+pwd), otherwise a directory symlink/junction planted inside the
+# fleet root that points outside it is normalized to a string that still
+# starts with "$fleet_root/" and is wrongly accepted. Repro:
+#   mklink /J fleet/junc real_escape_outside
+#   validate_target "$fleet/junc/pwned" "$fleet"   # must now return 1
+test_issue4_junction_escape_rejection() {
+  echo ""
+  echo "=== ISSUE 4: Junction/symlink escape rejected (HIGH, Security) ==="
+
+  local tmpdir
+  tmpdir=$(mktemp -d) || { echo "mktemp failed"; return 1; }
+  trap "rm -rf $tmpdir" RETURN
+
+  local fleet_root="$tmpdir/fleet"
+  local outside="$tmpdir/real_escape_outside"
+  mkdir -p "$fleet_root" "$outside"
+
+  local link="$fleet_root/junc"
+  local link_created=0
+
+  # Prefer a Windows junction (no admin privileges required). Use "//c" and
+  # "//J" (double-slash) so Git Bash/MSYS does not mangle the flags into
+  # path-like strings before handing them to cmd.exe.
+  if command -v cmd.exe > /dev/null 2>&1 && command -v cygpath > /dev/null 2>&1; then
+    local win_link win_target
+    win_link=$(cygpath -w "$link")
+    win_target=$(cygpath -w "$outside")
+    if cmd.exe //c mklink //J "$win_link" "$win_target" > /dev/null 2>&1; then
+      link_created=1
+    fi
+  fi
+
+  # Fall back to a POSIX symlink (Linux/macOS, or Git Bash with developer
+  # mode / admin privileges enabled).
+  if [ "$link_created" -eq 0 ]; then
+    if ln -s "$outside" "$link" > /dev/null 2>&1; then
+      link_created=1
+    fi
+  fi
+
+  if [ "$link_created" -eq 0 ]; then
+    echo "⚠ SKIP: platform cannot create a junction or symlink here; skipping escape test"
+    return 0
+  fi
+
+  git init --bare "$tmpdir/origin.bare" > /dev/null 2>&1
+
+  cat > "$tmpdir/repos_junction.txt" << EOF
+file://$tmpdir/origin.bare	$link/pwned
+EOF
+
+  echo "Test 4.1: Reject clone target reached via a junction/symlink escaping fleet root"
+
+  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 timeout 5 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_junction.txt" 2>&1 || true)
+
+  if echo "$output" | grep -qi "outside.*fleet\|escape\|invalid.*target"; then
+    assert_pass "Junction/symlink escape rejected with error"
+  elif ! echo "$output" | grep -q "Would clone"; then
+    assert_pass "Junction/symlink escape not processed"
+  else
+    assert_fail "Junction/symlink escape was allowed (SECURITY HOLE: clone would land outside fleet root)"
+  fi
+}
+
+# ===== ISSUE 5: Legit nested target with not-yet-existing parent (MEDIUM) =====
+# For a non-existent target whose PARENT also doesn't exist yet (a normal
+# first-time nested clone, e.g. $fleet/newgroup/newrepo where "newgroup" is
+# new), `cd "$(dirname ...)"` fails, the command substitution yields empty,
+# and the bogus "/basename" result gets rejected as "outside fleet root"
+# even though the target is perfectly legitimate.
+test_issue5_parent_dir_missing_acceptance() {
+  echo ""
+  echo "=== ISSUE 5: Legit target with not-yet-existing parent accepted (MEDIUM) ==="
+
+  local tmpdir
+  tmpdir=$(mktemp -d) || { echo "mktemp failed"; return 1; }
+  trap "rm -rf $tmpdir" RETURN
+
+  local fleet_root="$tmpdir/fleet"
+  mkdir -p "$fleet_root"
+
+  git init --bare "$tmpdir/origin.bare" > /dev/null 2>&1
+
+  # "newgroup" does not exist yet under fleet_root.
+  local target="$fleet_root/newgroup/newrepo"
+
+  cat > "$tmpdir/repos_newgroup.txt" << EOF
+file://$tmpdir/origin.bare	$target
+EOF
+
+  echo "Test 5.1: Accept nested target whose parent directory doesn't exist yet"
+
+  output=$(AESOP_FLEET_ROOT="$fleet_root" TEST_MODE=1 timeout 5 bash "$RECONSTITUTE" --dry-run --repos-file "$tmpdir/repos_newgroup.txt" 2>&1 || true)
+
+  if echo "$output" | grep -q "Would clone"; then
+    assert_pass "Legit target with missing parent dir accepted"
+  else
+    assert_fail "Legit target with missing parent dir rejected (FALSE REJECT BUG). Output: $output"
+  fi
+}
+
 # ===== ISSUE 3: Space-delimited legacy targets with spaces =====
 test_issue3_legacy_space_targets() {
   echo ""
@@ -228,6 +331,8 @@ main() {
 
   test_issue1_target_validation
   test_issue2_e2e_drives_real_script
+  test_issue4_junction_escape_rejection
+  test_issue5_parent_dir_missing_acceptance
   test_issue3_legacy_space_targets
 
   echo ""
