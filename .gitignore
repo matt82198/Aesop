@@ -1,5 +1,8 @@
 # State and transient files
 state/
+# Monitor runtime outputs (regenerated each cycle; PROPOSALS.md stays tracked — it is durable, human-reviewed)
+monitor/BRIEF.md
+monitor/SIGNALS.json
 *.log
 *heartbeat*
 .fleet-repos.json

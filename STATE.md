@@ -16,12 +16,22 @@ agents work. Single-user survival hack → cross-team product.
 - Orchestrator (Fable) main-thread; subagents Haiku; TDD-first; feature branch only.
 
 ## Phase
-`audit` — five read-only pillar auditors fanned out 2026-07-12; each returns
-WHAT EXISTS / GAPS / SMALLEST SHIPPABLE. Monitor + memory keeper running in background.
+`final-catch` — all five pillars implemented, QA'd, committed, pushed 2026-07-12.
+QA fixes of note: RESTORE.md reset-ordering hazard; hook JSON escaping + AESOP_ROOT
+default; collector .signal-state.json persistence. Remaining: Fable final-catch on
+the branch diff, then PR feature/behavior-as-code → main.
+
+Implementation map (as shipped):
+1. onboarding: CLAUDE-TEMPLATE.md, docs/MEMORY-TEMPLATE.md, bin/cli.js, README.md
+2. policy: hooks/pre-push-policy.sh, docs/HOOK-INSTALL.md (audit → state/SECURITY-AUDIT.log)
+3. behavioral-PRs: .github/pull_request_template.md, docs/BEHAVIORAL-PR-REVIEW.md,
+   CONTRIBUTING.md, monitor/collect-signals.mjs (os.tmpdir fix + PROPOSE-tier emission)
+4. forensics: tools/agent-forensics.sh, docs/FORENSICS.md
+5. continuity: docs/RESTORE.md
+Implementers verify but do NOT commit; orchestrator commits per green item after QA.
 
 ## NEXT STEPS
-1. Synthesize five audit briefs; rank smallest-shippable items by pillar impact.
-2. Dispatch Haiku implementers (disjoint file ownership, TDD where testable).
-3. QA loop (review → bugfix → lint) until green; Fable final-catch.
-4. Commit + push each green item (secret-scan gated); PR to main.
-5. Update this file at each phase boundary; append snapshots to BUILDLOG below convention.
+1. Collect implementer results; QA loop (review → bugfix → lint) until green.
+2. Fable final-catch on the full diff.
+3. Commit + push each green item (secret-scan gated); PR feature/behavior-as-code → main.
+4. Update this file at each phase boundary.
