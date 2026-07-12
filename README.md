@@ -1,7 +1,15 @@
-# Aesop — Fable-Fleet Orchestration Harness
+<p align="center">
+  <img src="https://raw.githubusercontent.com/matt82198/aesop/main/assets/logo.png" alt="Aesop" width="420">
+</p>
 
-[![npm](https://img.shields.io/npm/v/@matt82198/aesop/beta)](https://www.npmjs.com/package/@matt82198/aesop)
-[![license](https://img.shields.io/npm/l/@matt82198/aesop)](LICENSE)
+<p align="center">
+  <em>Fable-Fleet Orchestration Harness</em>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop/beta" alt="npm"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/npm/l/@matt82198/aesop" alt="license"></a>
+</p>
 
 **Aesop** is an open-source orchestration harness for Claude Code, implementing a cost-optimized, self-healing multi-agent dispatch system. One orchestrator model (Opus/Sonnet) directs a fleet of cheap subagents (Haiku) across durable, observable machinery.
 
