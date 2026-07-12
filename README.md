@@ -19,6 +19,44 @@ A filesystem-first orchestration system that:
 - **Refinement monitor**: standing Haiku loop that watches orchestration health and auto-acts on rule friction.
 - **TUI dashboard**: real-time fleet status, security alerts, heartbeat liveness.
 
+## Install & Quick Start
+
+### Option 1: npm (Recommended for quick scaffolding)
+
+```bash
+# Create a new aesop fleet directory
+npx @matt82198/aesop my-fleet
+cd my-fleet
+
+# Configure
+cp aesop.config.example.json aesop.config.json
+# Edit aesop.config.json with your paths and repos
+
+# Start the daemon
+bash daemons/run-watchdog.sh --once
+
+# Launch the dashboard
+python ui/serve.py
+```
+
+Open `http://localhost:8770` to monitor your fleet.
+
+### Option 2: git clone (For development or full customization)
+
+```bash
+git clone https://github.com/matt82198/aesop ~/aesop
+cd ~/aesop
+cp aesop.config.example.json aesop.config.json
+# Edit aesop.config.json with your paths and repos
+
+# Start the daemon
+export AESOP_ROOT=$HOME/aesop
+bash $AESOP_ROOT/daemons/run-watchdog.sh --once
+
+# Launch the dashboard
+python ui/serve.py
+```
+
 ## Architecture
 
 ### Directory layout

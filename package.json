@@ -1,0 +1,51 @@
+{
+  "name": "@matt82198/aesop",
+  "version": "0.1.0-beta.1",
+  "description": "Multi-agent orchestration for AI coding agents, designed to survive failure — a plain-file brain, git as the only durable layer, cheap subagent fleets, and guardrails enforced in code.",
+  "bin": {
+    "aesop": "bin/cli.js"
+  },
+  "type": "commonjs",
+  "files": [
+    "bin/",
+    "daemons/",
+    "dash/",
+    "monitor/",
+    "tools/",
+    "ui/",
+    "docs/",
+    "aesop.config.example.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "ai-agents",
+    "llm",
+    "claude",
+    "orchestration",
+    "multi-agent",
+    "developer-tools",
+    "resilience",
+    "template"
+  ],
+  "license": "MIT",
+  "author": "Matt Culliton",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matt82198/aesop.git"
+  },
+  "homepage": "https://github.com/matt82198/aesop",
+  "bugs": {
+    "url": "https://github.com/matt82198/aesop/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepublishOnly": "node -e \"try { require('child_process').execSync('python tools/secret_scan.py', { cwd: process.cwd() }); } catch (e) { console.warn('Warning: secret_scan.py not available or failed. Proceeding anyway.'); }\""
+  }
+}
