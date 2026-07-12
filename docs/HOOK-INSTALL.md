@@ -142,3 +142,64 @@ fi
 - Secret scanner: `tools/secret_scan.py`
 - Audit log location: `state/SECURITY-AUDIT.log` (git-ignored)
 - Cardinal rule: [CARDINAL-RULES.md](./CARDINAL-RULES.md)
+
+## Claude Code hooks
+
+Beyond git hooks, aesop ships policy for the agent harness itself.
+`hooks/claude/force-model-policy.mjs` is a Claude Code **PreToolUse** hook that
+enforces the "subagents are always Haiku" cardinal rule in code: every `Agent`
+or `Task` dispatch whose `model` is absent or non-compliant is rewritten to the
+policy model before the subagent launches. Versioned in git, it is org policy
+you can review, diff, and test — not a memo agents can forget.
+
+### What it enforces
+
+- **Model policy**: subagent dispatches run on `haiku` by default. If
+  `aesop.config.json` defines `cardinal_rules.subagent_model` (looked up in
+  `$AESOP_ROOT`, then the working directory), that model is enforced instead.
+- **Rewrite, not block**: non-compliant dispatches are allowed through with
+  `model` rewritten via the hook output contract
+  (`hookSpecificOutput.updatedInput`), so work proceeds at the right cost tier.
+- **Fail-open reliability**: malformed input produces no output and exit 0.
+  The hook never crashes the harness and never logs payload contents.
+
+### Registration (settings.json)
+
+Add to `.claude/settings.json` in the project (or `~/.claude/settings.json`
+for user-wide enforcement):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/hooks/claude/force-model-policy.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+If the hook lives outside the project (e.g., a shared policy checkout), use an
+absolute path to the `.mjs` file instead of `$CLAUDE_PROJECT_DIR`.
+
+### Escape hatch
+
+For dispatches that genuinely need a bigger model, include the literal marker
+`[[ALLOW-NON-HAIKU]]` anywhere in the subagent prompt. The hook passes the
+dispatch through untouched — and because the marker sits in the prompt, every
+opt-out is visible in the transcript and auditable after the fact.
+
+### Testing
+
+```bash
+node --test tests/force-model-policy.test.mjs
+```
+
+Covers the rewrite, escape-hatch, malformed-stdin, and config-override cases.

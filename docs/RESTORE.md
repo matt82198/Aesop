@@ -177,6 +177,41 @@ Or, if using your own process manager (systemd, supervisor, etc.), start it acco
 
 The watchdog will now run every 150 seconds, backing up any new changes and pushing them to origin.
 
+### Automated Bootstrap (Alternative to Manual Clone)
+
+Instead of manually cloning each repo in Step 7, you can use the reconstitute script to automate cloning and fetching:
+
+**Option A: Using aesop.config.json (recommended)**
+
+If your `aesop.config.json` includes a `repos` array, the script reads it automatically:
+
+```bash
+bash $AESOP_ROOT/tools/reconstitute.sh
+```
+
+**Option B: Using a repos file**
+
+Create a text file with one repo per line in the format `<url> <target-dir>`:
+
+```
+https://github.com/user/project1.git ~/project1
+https://github.com/user/project2.git ~/project2
+```
+
+Then run:
+
+```bash
+bash $AESOP_ROOT/tools/reconstitute.sh --repos-file repos.txt
+```
+
+**Dry-run mode** (preview actions without executing):
+
+```bash
+bash $AESOP_ROOT/tools/reconstitute.sh --dry-run
+```
+
+The script clones missing repos and fetches existing ones, printing a summary of cloned, fetched, and failed repos. Exit code 1 if any fail.
+
 ---
 
 ## 3. Recovering the Private Brain

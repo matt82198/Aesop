@@ -22,6 +22,55 @@ import time
 from pathlib import Path
 
 
+def resolve_git_bash_path():
+    r"""
+    Resolve git-bash.exe path portably in priority order:
+    1. env var AESOP_GIT_BASH (if set and exists)
+    2. shutil.which('git-bash') (on PATH)
+    3. Derived from shutil.which('git') -> ../git-bash.exe on Windows
+    4. Hardcoded default: C:\Program Files\Git\git-bash.exe
+
+    Raises FileNotFoundError with clear message if none found.
+    """
+    attempted = []
+
+    # 1. Check env var
+    env_path = os.environ.get("AESOP_GIT_BASH")
+    if env_path:
+        attempted.append(f"AESOP_GIT_BASH={env_path}")
+        if os.path.exists(env_path):
+            return env_path
+
+    # 2. Check which('git-bash')
+    which_bash = shutil.which("git-bash")
+    if which_bash:
+        attempted.append(f"which('git-bash')={which_bash}")
+        if os.path.exists(which_bash):
+            return which_bash
+
+    # 3. Derive from which('git')
+    which_git = shutil.which("git")
+    if which_git:
+        # git is typically at C:\Program Files\Git\cmd\git.exe
+        # We want C:\Program Files\Git\git-bash.exe (two levels up, then git-bash.exe)
+        git_path = Path(which_git)
+        derived_bash = git_path.parent.parent / "git-bash.exe"
+        attempted.append(f"derived from git={derived_bash}")
+        if derived_bash.exists():
+            return str(derived_bash)
+
+    # 4. Hardcoded default
+    default_path = r"C:\Program Files\Git\git-bash.exe"
+    attempted.append(f"default={default_path}")
+    if os.path.exists(default_path):
+        return default_path
+
+    # None found
+    raise FileNotFoundError(
+        "git-bash.exe not found. Tried (in order): " + ", ".join(attempted)
+    )
+
+
 def find_terminal():
     """
     Locate a terminal executable.
@@ -30,7 +79,7 @@ def find_terminal():
     command_builder_fn(script_path, title) returns command list to spawn.
     is_wt_bool: True if using wt.exe (needs bash process tracking); False if git-bash (stable pid).
     """
-    git_bash = r"C:\Program Files\Git\git-bash.exe"
+    git_bash = resolve_git_bash_path()
     wt_exe = shutil.which("wt.exe")
     bash_exe = r"C:\Program Files\Git\bin\bash.exe"
 
@@ -56,8 +105,7 @@ def find_terminal():
         return wt_exe, wt_cmd, True
 
     raise FileNotFoundError(
-        "Terminal not found. Tried: Git Bash at "
-        f"{git_bash}, Windows Terminal (wt.exe) with bash at {bash_exe}"
+        "Terminal not found. Tried: Git Bash, Windows Terminal (wt.exe) with bash at {bash_exe}"
     )
 
 

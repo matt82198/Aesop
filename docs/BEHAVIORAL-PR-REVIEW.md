@@ -80,3 +80,7 @@ For pull requests that modify operational rules, agent behavior, monitoring, or 
 - Minor documentation clarification
 - Additional edge case to test (not required, but good to consider)
 - Related code that could benefit from similar fix (out of scope for this PR, open separate issue)
+
+## Proposal lifecycle
+
+Use `node tools/proposals.mjs list` to review pending proposals in monitor/PROPOSALS.md. To approve a proposal, run `node tools/proposals.mjs accept <signal-key>` (moves block to PROPOSALS-LOG.md under `## ACCEPTED <timestamp>`); to decline, run `reject <signal-key>` instead. Both commands are idempotent: re-running on an already-moved proposal is a no-op.
