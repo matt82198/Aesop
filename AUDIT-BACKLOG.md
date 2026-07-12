@@ -187,7 +187,7 @@ with the ACCEPTANCE as its gate; commit per green item; flip the box. Subagents 
 
 ## Needs a user decision (⏸)
 
-- 🔵 **[honest] Collapse the 6 domain CLAUDE.md files into the root** (USER APPROVED 2026-07-12; first application REVERTED on disk by external process — reapplying; marker-reader fix survives in monitor commit) Honest-opinions
+- ✅ **[honest] Collapse the 6 domain CLAUDE.md files into the root** (USER APPROVED + landed 2026-07-12 @ cc3a716 after one external revert; lossless, 60/60 + smokes green) Honest-opinions
   calls them over-precise (<1K each) and DRY-violating. BUT this DIRECTLY CONTRADICTS
   cardinal rule 2 (recursive smallest-scope domain CLAUDE.md units) — which the user
   explicitly invoked today ("run a recursive haiku domain scope loop"). Genuine tension
