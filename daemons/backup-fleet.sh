@@ -3,6 +3,7 @@ set -uo pipefail
 # Backup fleet repos: stash uncommitted work, push unpushed commits to backup branches.
 # Runs every 150s from run-watchdog.sh. Abort on secret-scan failures.
 # Improvements: dot-directory discovery, path dedup, tracked-files-only secret scanning.
+# P2 FIX: JSON escaping for repo names and NUL-delimited internal protocol.
 
 AESOP_ROOT="${AESOP_ROOT:-.}"
 HEARTBEAT="$AESOP_ROOT/state/.watchdog-heartbeat"
@@ -12,6 +13,14 @@ REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
 date +%s > "$HEARTBEAT" 2>/dev/null
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*" | tee -a "$LOG"; }
+
+# P2 FIX: JSON escape function for safe string interpolation in JSON
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
 
 is_touched() {
   local repo="$1"
@@ -117,11 +126,11 @@ process_repo() {
         WIPREF="backup/wip-$(date +%Y%m%d)"
         if scan_tracked_files "$repo"; then
           if git push -qf origin "$COMMIT:refs/heads/$WIPREF" 2>/dev/null; then
-            printf 'SNAPSHOTTED|%s\n' "$name"
+            printf 'SNAPSHOTTED\0%s\n' "$name"
             exit 0
           fi
         else
-          printf 'BLOCKED|%s\n' "$name"
+          printf 'BLOCKED\0%s\n' "$name"
           exit 0
         fi
       fi
@@ -136,27 +145,27 @@ process_repo() {
         WIPREF="backup/master-wip-$(date +%Y%m%d)"
         if scan_tracked_files "$repo"; then
           if git push -qf origin "HEAD:refs/heads/$WIPREF" 2>/dev/null; then
-            printf 'SNAPSHOTTED|%s\n' "$name"
+            printf 'SNAPSHOTTED\0%s\n' "$name"
             exit 0
           fi
         else
-          printf 'BLOCKED|%s\n' "$name"
+          printf 'BLOCKED\0%s\n' "$name"
           exit 0
         fi
       else
         if scan_tracked_files "$repo"; then
           if git push -q origin "$branch" 2>/dev/null; then
-            printf 'PUSHED|%s\n' "$name"
+            printf 'PUSHED\0%s\n' "$name"
             exit 0
           fi
         else
-          printf 'BLOCKED|%s\n' "$name"
+          printf 'BLOCKED\0%s\n' "$name"
           exit 0
         fi
       fi
     fi
 
-    printf 'CLEAN|%s\n' "$name"
+    printf 'CLEAN\0%s\n' "$name"
   )
 }
 
@@ -184,14 +193,22 @@ $real_dir"
 
   if is_touched "$dir"; then
     result=$(process_repo "$dir")
-    IFS="|" read -r state name <<< "$result"
+    # P2 FIX: Parse NUL-delimited protocol to safely handle pipes in repo names
+    # Write to temp file to properly read NUL-delimited fields
+    temp_result=$(mktemp)
+    printf '%s' "$result" > "$temp_result"
+    # Read first field (state) and second field (name) using NUL delimiter
+    state=$(sed 's/\x0.*//' "$temp_result")
+    name=$(sed 's/^[^\x0]*\x0//' "$temp_result")
+    rm -f "$temp_result"
     [ -z "$state" ] && continue
     if [ "$first" = 1 ]; then
       first=0
     else
       echo "," >> "$temp_json"
     fi
-    printf '{"repo":"%s","state":"%s","age":"%s"}' "$name" "$state" "$(date -Iseconds)" >> "$temp_json"
+    # P2 FIX: JSON-escape all interpolated values before emitting
+    printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -Iseconds)" >> "$temp_json"
     log "$state: $name"
   fi
 done

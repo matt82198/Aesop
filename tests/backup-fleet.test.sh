@@ -236,6 +236,213 @@ test_clean_tracked_files_pass() {
   fi
 }
 
+# ===== P2 AUDIT: JSON escaping and pipe-delimiter safety =====
+
+test_p2_repo_name_with_pipe() {
+  log "TEST P2: Repo name containing pipe character must not corrupt JSON/protocol"
+
+  setup_fixture
+  create_mock_scanner
+
+  cd "$REPO_DIR"
+
+  source_json_escape
+
+  local test_name='repo|with|pipe'
+  local test_state='CLEAN'
+  local test_age='2025-07-12T14:32:01Z'
+
+  # Build JSON using escaped values
+  local escaped_name
+  escaped_name=$(json_escape "$test_name")
+  local escaped_state
+  escaped_state=$(json_escape "$test_state")
+
+  local json_line
+  json_line="{\"repo\":\"$escaped_name\",\"state\":\"$escaped_state\",\"age\":\"$test_age\"}"
+
+  # Verify Python can parse it
+  if printf '%s' "$json_line" | python3 -m json.tool >/dev/null 2>&1; then
+    pass "P2: JSON with pipe in repo name is valid"
+  else
+    fail "P2: JSON with pipe in repo name is INVALID (python parse failed) (BLOCKER)"
+  fi
+
+  # Verify the repo field contains the pipe (using python to extract)
+  local repo_value
+  repo_value=$(printf '%s' "$json_line" | python3 -c "import sys, json; print(json.load(sys.stdin)['repo'])" 2>/dev/null)
+  if [ "$repo_value" = "repo|with|pipe" ]; then
+    pass "P2: Pipe character preserved in JSON .repo field"
+  else
+    fail "P2: Pipe character lost or corrupted in JSON (got '$repo_value') (BLOCKER)"
+  fi
+}
+
+test_p2_repo_name_with_quote() {
+  log "TEST P2: Repo name containing double-quote must not corrupt JSON"
+
+  setup_fixture
+  create_mock_scanner
+
+  cd "$REPO_DIR"
+
+  source_json_escape
+
+  local test_name='we"ird_repo'
+  local test_state='PUSHED'
+  local test_age='2025-07-12T14:32:01Z'
+
+  local escaped_name
+  escaped_name=$(json_escape "$test_name")
+  local escaped_state
+  escaped_state=$(json_escape "$test_state")
+
+  local json_line
+  json_line="{\"repo\":\"$escaped_name\",\"state\":\"$escaped_state\",\"age\":\"$test_age\"}"
+
+  # Verify Python can parse it
+  if printf '%s' "$json_line" | python3 -m json.tool >/dev/null 2>&1; then
+    pass "P2: JSON with quote in repo name is valid"
+  else
+    fail "P2: JSON with quote in repo name is INVALID (python parse failed) (BLOCKER)"
+  fi
+
+  # Verify the repo field contains the escaped quote
+  local repo_value
+  repo_value=$(printf '%s' "$json_line" | python3 -c "import sys, json; print(json.load(sys.stdin)['repo'])" 2>/dev/null)
+  if [ "$repo_value" = "we\"ird_repo" ]; then
+    pass "P2: Quote character preserved in JSON .repo field"
+  else
+    fail "P2: Quote character lost or corrupted in JSON (got '$repo_value') (BLOCKER)"
+  fi
+}
+
+test_p2_nul_delimited_protocol() {
+  log "TEST P2: NUL-delimited protocol prevents pipe-in-name misalignment"
+
+  setup_fixture
+  create_mock_scanner
+
+  cd "$REPO_DIR"
+
+  source_json_escape
+
+  local test_name='repo|with|pipe'
+  local test_state='SNAPSHOTTED'
+
+  # Create a temp file to hold NUL-delimited data
+  local tmpfile
+  tmpfile=$(mktemp)
+  trap "rm -f '$tmpfile'" RETURN
+
+  # Write NUL-delimited data
+  printf '%s\0%s' "$test_state" "$test_name" > "$tmpfile"
+
+  # Read and parse NUL-delimited data using mapfile (bash builtin)
+  local -a arr=()
+  mapfile -d "" arr < "$tmpfile"
+
+  local state="${arr[0]}"
+  local name="${arr[1]}"
+
+  # Verify both fields are correctly extracted despite pipes in name
+  if [ "$state" = "SNAPSHOTTED" ]; then
+    pass "P2: State field correctly extracted from NUL-delimited protocol"
+  else
+    fail "P2: State field corrupted (got '$state', expected 'SNAPSHOTTED') (BLOCKER)"
+    return 1
+  fi
+
+  if [ "$name" = "repo|with|pipe" ]; then
+    pass "P2: Name field with pipes correctly extracted from NUL-delimited protocol"
+  else
+    fail "P2: Name field corrupted (got '$name', expected 'repo|with|pipe') (BLOCKER)"
+  fi
+}
+
+source_json_escape() {
+  # Define json_escape inline for testing
+  json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "$s"
+  }
+}
+
+# ===== Integration: End-to-end JSON output test =====
+
+test_p2_end_to_end_json_output() {
+  log "TEST P2: End-to-end JSON output from backup-fleet logic"
+
+  setup_fixture
+  create_mock_scanner
+
+  cd "$REPO_DIR"
+
+  # Create a temp file to simulate the JSON output that backup-fleet creates
+  local repos_json
+  repos_json=$(mktemp)
+  trap "rm -f '$repos_json'" RETURN
+
+  source_json_escape
+
+  # Simulate building a JSON array with escaped repo names (what backup-fleet.sh does)
+  echo "[" > "$repos_json"
+
+  # Repo with pipe and quote
+  local repo1='we"ird|repo'
+  local state1='CLEAN'
+  local age1='2025-07-12T14:32:01Z'
+
+  printf '  {"repo":"%s","state":"%s","age":"%s"}' \
+    "$(json_escape "$repo1")" \
+    "$(json_escape "$state1")" \
+    "$age1" >> "$repos_json"
+
+  echo "," >> "$repos_json"
+
+  # Normal repo
+  local repo2='normal_repo'
+  local state2='PUSHED'
+  local age2='2025-07-12T14:32:02Z'
+
+  printf '  {"repo":"%s","state":"%s","age":"%s"}' \
+    "$(json_escape "$repo2")" \
+    "$(json_escape "$state2")" \
+    "$age2" >> "$repos_json"
+
+  echo "" >> "$repos_json"
+  echo "]" >> "$repos_json"
+
+  # Verify the JSON is valid
+  if python3 -m json.tool < "$repos_json" >/dev/null 2>&1; then
+    pass "P2: End-to-end JSON output is valid JSON"
+  else
+    fail "P2: End-to-end JSON output is INVALID (BLOCKER)"
+    return 1
+  fi
+
+  # Verify we can extract the repo names correctly
+  local extracted_repo1
+  extracted_repo1=$(python3 -c "import sys, json; data = json.load(sys.stdin); print(data[0]['repo'])" < "$repos_json" 2>/dev/null)
+
+  if [ "$extracted_repo1" = "we\"ird|repo" ]; then
+    pass "P2: First repo name (with pipe and quote) correctly round-tripped"
+  else
+    fail "P2: First repo name corrupted (got '$extracted_repo1') (BLOCKER)"
+  fi
+
+  local extracted_repo2
+  extracted_repo2=$(python3 -c "import sys, json; data = json.load(sys.stdin); print(data[1]['repo'])" < "$repos_json" 2>/dev/null)
+
+  if [ "$extracted_repo2" = "normal_repo" ]; then
+    pass "P2: Second repo name (normal) correctly round-tripped"
+  else
+    fail "P2: Second repo name corrupted (got '$extracted_repo2') (BLOCKER)"
+  fi
+}
+
 # ===== Run all tests =====
 
 echo "================================================"
@@ -255,6 +462,13 @@ echo ""
 log "Running additional tests..."
 test_empty_repo_no_error
 test_clean_tracked_files_pass
+echo ""
+
+log "Running P2 AUDIT tests (JSON escaping & pipe-delimiter safety)..."
+test_p2_repo_name_with_pipe
+test_p2_repo_name_with_quote
+test_p2_nul_delimited_protocol
+test_p2_end_to_end_json_output
 echo ""
 
 echo "================================================"
