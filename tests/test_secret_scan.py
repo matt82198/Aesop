@@ -240,6 +240,128 @@ class TestPragmaNotSoftensFatalSecrets(unittest.TestCase):
             os.unlink(temp_path)
 
 
+class TestSizeAndBinaryBypassDetection(unittest.TestCase):
+    """Test that size/binary skip logic does NOT bypass FATAL_RULES detection.
+
+    Vulnerability: should_skip_file() previously skipped ALL checking for files >1MB
+    or containing null bytes, unconditionally returning empty findings. Now files
+    over the size threshold are scanned at least partially, and FATAL_RULES patterns
+    are checked over the raw bytes.
+    """
+
+    def test_large_file_with_aws_key_is_fatal(self):
+        """File >1MB with embedded AWS key should be FATAL (not skipped silently)."""
+        # AWS key assembled at runtime
+        dummy_aws = _j("AKIA", "IOSFODNN7EXAMPLE")
+
+        # Create a >1MB file with AWS key embedded early on
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("# Large file\n")
+            f.write(f"secret_key = '{dummy_aws}'\n")
+            # Pad to >1MB with repetitive content
+            padding = "x" * 1000
+            for i in range(1100):  # 1100 * 1000 = 1.1MB
+                f.write(f"data_{i} = '{padding}'\n")
+            temp_path = f.name
+
+        try:
+            # Verify file is >1MB
+            file_size = os.path.getsize(temp_path)
+            self.assertGreater(file_size, 1024 * 1024, f"Test file must be >1MB, got {file_size}")
+
+            findings = scan_file(Path(temp_path))
+
+            # Should detect the AWS key despite file size
+            aws_findings = [f for f in findings if f[1] == "aws_access_key"]
+            self.assertTrue(
+                len(aws_findings) > 0,
+                "AWS key should be detected in large file (not skipped by size)"
+            )
+
+            # Should be fatal
+            fatal_aws = [f for f in aws_findings if f[3] is True]
+            self.assertTrue(
+                len(fatal_aws) > 0,
+                "AWS key in large file should be FATAL"
+            )
+        finally:
+            os.unlink(temp_path)
+
+    def test_binary_file_with_aws_key_is_fatal(self):
+        """File with null bytes and embedded AWS key should be FATAL (not skipped silently)."""
+        # AWS key assembled at runtime
+        dummy_aws = _j("AKIA", "IOSFODNN7EXAMPLE")
+
+        # Create a file with embedded null bytes (binary)
+        # The AWS key is placed where it might be found
+        content = f"some binary junk\x00key = '{dummy_aws}'\x00more data"
+
+        with tempfile.NamedTemporaryFile(
+            mode="wb", suffix=".bin", delete=False
+        ) as f:
+            f.write(content.encode("latin-1"))
+            temp_path = f.name
+
+        try:
+            findings = scan_file(Path(temp_path))
+
+            # Should detect the AWS key despite binary nature
+            aws_findings = [f for f in findings if f[1] == "aws_access_key"]
+            self.assertTrue(
+                len(aws_findings) > 0,
+                "AWS key should be detected in binary file (not skipped by null bytes)"
+            )
+
+            # Should be fatal
+            fatal_aws = [f for f in aws_findings if f[3] is True]
+            self.assertTrue(
+                len(fatal_aws) > 0,
+                "AWS key in binary file should be FATAL"
+            )
+        finally:
+            os.unlink(temp_path)
+
+    def test_large_clean_file_reports_skip_status(self):
+        """Large clean file should exit 0 but report SKIPPED-LARGE status on stderr."""
+        # Create a >1MB file with NO secrets
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("# Clean large file\n")
+            # Pad to >1MB with repetitive content
+            padding = "x" * 1000
+            for i in range(1100):  # 1100 * 1000 = 1.1MB
+                f.write(f"data_{i} = '{padding}'\n")
+            temp_path = f.name
+
+        try:
+            # Verify file is >1MB
+            file_size = os.path.getsize(temp_path)
+            self.assertGreater(file_size, 1024 * 1024, f"Test file must be >1MB, got {file_size}")
+
+            # Run via command line to capture stderr
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), temp_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Should exit 0 (no secrets found)
+            self.assertEqual(result.returncode, 0, f"Large clean file should exit 0. stderr: {result.stderr}")
+
+            # Should report SKIPPED-LARGE in stderr (so caller can distinguish "clean" from "partially scanned")
+            self.assertIn(
+                "SKIPPED-LARGE",
+                result.stderr,
+                "Should emit SKIPPED-LARGE note to stderr for large files"
+            )
+        finally:
+            os.unlink(temp_path)
+
+
 class TestScannerSelfScanClean(unittest.TestCase):
     """The scanner must scan its OWN source clean with ZERO pragma reliance.
 
