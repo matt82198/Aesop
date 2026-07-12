@@ -8,6 +8,12 @@ set -euo pipefail
 # ISSUE 1 FIX: Validates clone targets against fleet root (HIGH, security)
 # ISSUE 2 FIX: Tests drive real script via TEST_MODE=1 (P1, bash)
 # ISSUE 3 FIX: Uses read -r semantics for space-delimited parsing (P2, arch)
+# ISSUE 4 FIX: validate_target resolves target/fleet_root PHYSICALLY
+#   (realpath -m style; cd -P/pwd -P or realpath/readlink -f, with a manual
+#   ancestor-walk fallback) so a symlink/junction planted inside the fleet
+#   root pointing outside it can no longer defeat containment (HIGH,
+#   security), while a legit nested target whose parent dir doesn't exist
+#   yet is still accepted (MEDIUM, false-reject fix)
 
 DRY_RUN=0
 TEST_MODE="${TEST_MODE:-0}"
@@ -86,6 +92,88 @@ except:
   echo "$HOME"
 }
 
+# resolve_physical_path: realpath -m style canonicalization.
+#
+# Resolves PATH to its physical (symlink/junction-free) absolute form:
+#   - Existing path components are resolved through the filesystem, so any
+#     directory symlink or Windows junction along the way is followed to
+#     its real physical target (never a "logical" cd result).
+#   - Trailing components that do not exist yet are appended verbatim,
+#     without requiring the full path to exist (like GNU `realpath -m`).
+#
+# This function is the single normalization point used by validate_target
+# for both the clone target and the fleet root, so that a symlink/junction
+# planted inside the fleet root pointing outside it cannot defeat the
+# containment check (HIGH security fix), while a legitimate nested target
+# whose parent directory doesn't exist yet is still accepted (MEDIUM
+# false-reject fix).
+resolve_physical_path() {
+  local input="$1"
+  local abs_path
+
+  if [ -z "$input" ]; then
+    return 1
+  fi
+
+  if [[ "$input" = /* ]]; then
+    abs_path="$input"
+  else
+    abs_path="$PWD/$input"
+  fi
+
+  # Preferred: GNU realpath -m. Resolves existing components physically
+  # and tolerates missing trailing components natively.
+  if command -v realpath > /dev/null 2>&1; then
+    local resolved
+    if resolved=$(realpath -m -- "$abs_path" 2>/dev/null) && [ -n "$resolved" ]; then
+      printf '%s\n' "$resolved"
+      return 0
+    fi
+  fi
+
+  # Fallback: GNU readlink -f, same missing-component tolerance.
+  if command -v readlink > /dev/null 2>&1; then
+    local resolved
+    if resolved=$(readlink -f -- "$abs_path" 2>/dev/null) && [ -n "$resolved" ]; then
+      printf '%s\n' "$resolved"
+      return 0
+    fi
+  fi
+
+  # Manual ancestor-walk fallback (portable, no external dependency):
+  # walk up from the target until we hit the nearest EXISTING ancestor,
+  # resolve that ancestor physically with `cd -P && pwd -P`, then
+  # re-append the missing trailing components unresolved (they don't
+  # exist yet, so there is nothing on disk to resolve).
+  local suffix=""
+  local current="$abs_path"
+  while [ -n "$current" ] && [ "$current" != "/" ] && [ ! -d "$current" ]; do
+    local base
+    base=$(basename "$current")
+    if [ -z "$suffix" ]; then
+      suffix="$base"
+    else
+      suffix="$base/$suffix"
+    fi
+    current=$(dirname "$current")
+  done
+
+  local physical_root
+  if [ -z "$current" ] || [ "$current" = "/" ]; then
+    physical_root="/"
+  else
+    physical_root=$(cd -P -- "$current" 2>/dev/null && pwd -P) || physical_root="$current"
+  fi
+  physical_root="${physical_root%/}"
+  [ -z "$physical_root" ] && physical_root="/"
+
+  if [ -n "$suffix" ]; then
+    printf '%s/%s\n' "$physical_root" "$suffix"
+  else
+    printf '%s\n' "$physical_root"
+  fi
+}
+
 validate_target() {
   local target="$1"
   local fleet_root="$2"
@@ -96,32 +184,22 @@ validate_target() {
     return 1
   fi
 
-  # Resolve the target path to an absolute path
-  # Handle relative paths by prepending current directory
-  local abs_target
-  if [[ "$target" = /* ]]; then
-    abs_target="$target"
-  else
-    abs_target="$PWD/$target"
-  fi
-
-  # Normalize the path to resolve .. and .
-  # Use cd + pwd to safely resolve symlinks and relative components
+  # Physically resolve both target and fleet_root (see resolve_physical_path
+  # above): this walks up to the nearest existing ancestor and resolves it
+  # with cd -P/pwd -P (falling back to realpath -m/readlink -f when
+  # available), so symlinks/junctions are followed to their real physical
+  # location instead of being trusted at face value.
   local normalized
-  if [ -d "$abs_target" ]; then
-    normalized=$(cd "$abs_target" && pwd)
-  else
-    # For non-existent targets, manually normalize
-    normalized=$(cd "$(dirname "$abs_target")" && pwd)/$(basename "$abs_target")
-  fi
+  normalized=$(resolve_physical_path "$target") || {
+    echo "Error: could not resolve target path '$target'" >&2
+    return 1
+  }
 
-  # Normalize fleet root
   local normalized_fleet_root
-  if [ -d "$fleet_root" ]; then
-    normalized_fleet_root=$(cd "$fleet_root" && pwd)
-  else
-    normalized_fleet_root="$fleet_root"
-  fi
+  normalized_fleet_root=$(resolve_physical_path "$fleet_root") || {
+    echo "Error: could not resolve fleet root '$fleet_root'" >&2
+    return 1
+  }
 
   # Ensure fleet root ends without trailing slash for comparison
   normalized_fleet_root="${normalized_fleet_root%/}"
@@ -133,7 +211,7 @@ validate_target() {
   fi
 
   # Target escapes fleet root
-  echo "Error: target path '$target' (resolves to: $normalized) is outside fleet root '$fleet_root'" >&2
+  echo "Error: target path '$target' (resolves to: $normalized) is outside fleet root '$fleet_root' (resolves to: $normalized_fleet_root)" >&2
   return 1
 }
 
