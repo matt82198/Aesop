@@ -15,6 +15,16 @@ agents work. Single-user survival hack → cross-team product.
   5. **Cross-machine continuity** — brain reconstitutes from remotes; compute disposable.
 - Orchestrator (Fable) main-thread; subagents Haiku; TDD-first; feature branch only.
 
+## Audit backlog (2026-07-12) — READ AUDIT-BACKLOG.md
+Five-lens specialist review (architect, bash-pro, javascript-pro, honest-opinions,
+security-auditor) produced a durable, priority-ranked TODO list in **AUDIT-BACKLOG.md**
+(committed, pushed). 8 P0 (security+correctness — incl. secret-scanner pragma bypass,
+untracked force-push, clone-injection RCE, branch-hook wrong-branch, wrong alert dir in
+ui/serve.py, watchdog TOCTOU), ~11 P1, ~5 P2, 2 needing a user decision. RESUME HERE:
+dispatch one Haiku per unclaimed ⬜ item (P0 first), TDD-first, ACCEPTANCE = the test gate;
+flip the checkbox and commit per green item. Coordinate the 3 reconstitute.sh items into
+one agent (same function).
+
 ## Standing order (user, 2026-07-12)
 Rerun the refinement loop CONTINUOUSLY until tokens exhaust or gaps dry (2 consecutive
 audits finding nothing new). Each cycle: (1) collect wave results → QA (TDD evidence
