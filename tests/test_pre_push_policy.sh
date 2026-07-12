@@ -12,9 +12,9 @@ TEST_ROOT="$TMPDIR/pre_push_test_$$"
 trap "rm -rf '$TEST_ROOT'" EXIT
 mkdir -p "$TEST_ROOT"
 
-# Import hook functions by sourcing it (but skip main() execution)
-# We'll define our own test harness
-. "$HOOK_SCRIPT" 2>/dev/null || true
+# Import hook functions by sourcing only function definitions, not main()
+# This avoids executing main() which would try to read from stdin
+eval "$(sed '/^main() {/,/^}/d; /^main "\$@"/d' "$HOOK_SCRIPT")"
 
 test_passed=0
 test_failed=0
@@ -78,14 +78,70 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Test 7: Secret scan unavailable (missing scanner) logs audit event ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_no_scanner"
+  mkdir -p "$AESOP_ROOT/state"
+
+  # Functions already available from parent shell via eval
+
+  # Capture stderr to check for warning
+  stderr_output=$( { check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  # Should return 0 (fail-open)
+  if [ "$exit_code" -ne 0 ]; then
+    printf 'FAIL: check_secret_scan should return 0 when scanner missing (fail-open)\n'
+    printf 'Got exit code: %d\n' "$exit_code"
+    exit 1
+  fi
+
+  # Should have logged a "secret_scan_unavailable" event
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created when scanner is unavailable\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+
+  # Verify JSON is valid
+  if ! printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
+    printf 'FAIL: Audit log entry is not valid JSON\n'
+    printf 'Entry: %s\n' "$audit_line"
+    exit 1
+  fi
+
+  # Verify event type is "secret_scan_unavailable"
+  if ! printf '%s' "$audit_line" | grep -q '"event":"secret_scan_unavailable"'; then
+    printf 'FAIL: Audit log entry missing correct event type\n'
+    printf 'Expected event: "secret_scan_unavailable"\n'
+    printf 'Entry: %s\n' "$audit_line"
+    exit 1
+  fi
+
+  # Verify a warning was printed to stderr
+  if ! printf '%s' "$stderr_output" | grep -q -i 'unavailable\|missing\|not found'; then
+    printf 'FAIL: No warning message printed to stderr\n'
+    printf 'stderr was: %s\n' "$stderr_output"
+    exit 1
+  fi
+
+  printf 'PASS: Secret scan unavailable logged with event and stderr warning\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
-printf 'Test 6 PASSED: %d\n' "$test_passed"
-printf 'Test 6 FAILED: %d\n' "$test_failed"
+printf 'Tests PASSED: %d\n' "$test_passed"
+printf 'Tests FAILED: %d\n' "$test_failed"
 
 if [ "$test_failed" -eq 0 ]; then
-  printf '\nTest 6 passed.\n'
+  printf '\nAll tests passed.\n'
   exit 0
 else
-  printf '\nTest 6 failed.\n'
+  printf '\nSome tests failed.\n'
   exit 1
 fi

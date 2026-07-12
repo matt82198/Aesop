@@ -51,6 +51,9 @@ check_secret_scan() {
   local scan_script="$aesop_root/tools/secret_scan.py"
 
   if [ ! -f "$scan_script" ]; then
+    # Scanner not found: log event and warn to stderr, but don't block (fail-open)
+    log_event "secret_scan_unavailable"
+    printf 'Warning: secret_scan.py not found at %s\n' "$scan_script" >&2
     return 0
   fi
 
@@ -65,6 +68,23 @@ check_secret_scan() {
   fi
 
   return $exit_code
+}
+
+log_event() {
+  local event_type="$1"
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local state_dir="$aesop_root/state"
+  local audit_log="$state_dir/SECURITY-AUDIT.log"
+  local ts
+  ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  local repo_name
+  repo_name=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo 'unknown')")
+  local user
+  user=$(git config user.name 2>/dev/null || echo "unknown")
+
+  mkdir -p "$state_dir" 2>/dev/null
+
+  printf '{"ts":"%s","repo":"%s","event":"%s","user":"%s"}\n' "$ts" "$repo_name" "$(json_escape "$event_type")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
 }
 
 log_block() {
@@ -246,12 +266,65 @@ run_test_mode() {
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 7: Secret scan unavailable logs audit event ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_scanner"
+    mkdir -p "$AESOP_ROOT/state"
+
+    # Capture stderr to verify warning is printed
+    stderr_output=$( { check_secret_scan; } 2>&1 1>/dev/null )
+    exit_code=$?
+
+    # Should return 0 (fail-open)
+    if [ "$exit_code" -ne 0 ]; then
+      printf 'FAIL: check_secret_scan should return 0 when scanner missing (fail-open)\n'
+      exit 1
+    fi
+
+    # Should have logged a "secret_scan_unavailable" event
+    if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+      printf 'FAIL: Audit log not created when scanner is unavailable\n'
+      exit 1
+    fi
+
+    audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+
+    # Verify JSON is valid
+    if ! printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
+      printf 'FAIL: Audit log entry is not valid JSON\n'
+      printf 'Entry: %s\n' "$audit_line"
+      exit 1
+    fi
+
+    # Verify event type is "secret_scan_unavailable"
+    if ! printf '%s' "$audit_line" | grep -q '"event":"secret_scan_unavailable"'; then
+      printf 'FAIL: Audit log entry missing correct event type\n'
+      printf 'Expected event: "secret_scan_unavailable"\n'
+      printf 'Entry: %s\n' "$audit_line"
+      exit 1
+    fi
+
+    # Verify a warning was printed to stderr
+    if ! printf '%s' "$stderr_output" | grep -q -i 'unavailable\|missing\|not found'; then
+      printf 'FAIL: No warning message printed to stderr\n'
+      printf 'stderr was: %s\n' "$stderr_output"
+      exit 1
+    fi
+
+    printf 'PASS: Secret scan unavailable logged with event and stderr warning\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 6 tests passed.\n'
+    printf '\nAll 7 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
