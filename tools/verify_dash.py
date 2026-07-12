@@ -39,7 +39,11 @@ FIXTURE_BACKLOG = """# Audit backlog — verify_dash fixture
 """
 
 AGENT_FULL_ID = "verifyagent0123456789ab"
-PROMPT_MARKER = "FIXTURE-PROMPT-MARKER: rebuild the flux capacitor"
+# Long, multi-line prompt so the .dispatch-prompt box (max-height 300px) actually
+# overflows and is scrollable — required to test scroll-position preservation.
+PROMPT_MARKER = "FIXTURE-PROMPT-MARKER: rebuild the flux capacitor\n" + "\n".join(
+    f"line {i}: recalibrate subsystem {i} and verify each tolerance band carefully"
+    for i in range(60))
 
 
 def free_port():
@@ -247,9 +251,7 @@ def main():
                 bl = root / "AUDIT-BACKLOG.md"
                 content = bl.read_text(encoding="utf-8").replace(
                     "## Landing log",
-                    "- ⬜ **[test] SCROLL-PERSIST-MARKER item.** live update.
-
-## Landing log")
+                    "- ⬜ **[test] SCROLL-PERSIST-MARKER item.** live update.\n\n## Landing log")
                 bl.write_text(content, encoding="utf-8")
 
                 # Wait for the update to arrive
