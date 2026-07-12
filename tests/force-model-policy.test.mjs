@@ -41,7 +41,9 @@ function runHook(stdinText, { config } = {}) {
     input: stdinText,
     cwd: root,
     env: { ...process.env, AESOP_ROOT: root },
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 30000,
+    killSignal: 'SIGKILL'
   });
   res.root = root;
   return res;
@@ -152,7 +154,9 @@ test('escape-hatch log is append-only across uses', () => {
     input: body,
     cwd: first.root,
     env: { ...process.env, AESOP_ROOT: first.root },
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 30000,
+    killSignal: 'SIGKILL'
   });
   assert.equal(first.status, 0);
   assert.equal(second.status, 0);
@@ -175,7 +179,9 @@ test('never-closing stdin: hook exits 0 within the timeout window (fail-open)', 
   const child = spawn(process.execPath, [HOOK], {
     cwd: root,
     env: { ...process.env, AESOP_ROOT: root },
-    stdio: ['pipe', 'pipe', 'pipe']
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: 30000,
+    killSignal: 'SIGKILL'
   });
   child.stdin.on('error', () => {}); // child may exit first; ignore EPIPE
   let stdout = '';
@@ -183,8 +189,15 @@ test('never-closing stdin: hook exits 0 within the timeout window (fail-open)', 
   // Pipe a full, valid payload but NEVER close stdin.
   child.stdin.write(payload('Agent', { description: 'x', prompt: 'y', model: 'opus' }));
   const exitCode = await new Promise((resolve) => {
-    const killer = setTimeout(() => { child.kill(); resolve('HUNG'); }, 5000);
-    child.on('exit', (code) => { clearTimeout(killer); resolve(code); });
+    const killer = setTimeout(() => { child.kill('SIGKILL'); resolve('HUNG'); }, 5000);
+    child.on('exit', (code) => {
+      clearTimeout(killer);
+      // Clean up streams to prevent lingering handles on Linux
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.stdin?.destroy();
+      resolve(code);
+    });
   });
   assert.notEqual(exitCode, 'HUNG', 'hook must not hang when stdin never closes');
   assert.equal(exitCode, 0, 'timeout path must exit 0');

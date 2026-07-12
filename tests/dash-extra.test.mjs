@@ -36,7 +36,9 @@ function runScript(fixture) {
       AESOP_ROOT: fixture.aesopRoot,
       AESOP_TRANSCRIPTS_ROOT: fixture.transcriptsRoot
     },
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 30000,
+    killSignal: 'SIGKILL'
   });
   return JSON.parse(stdout);
 }
@@ -121,7 +123,9 @@ test('config precedence: AESOP_TRANSCRIPTS_ROOT from config file honored when en
         AESOP_ROOT: fixture.aesopRoot,
         // NOTE: NOT setting AESOP_TRANSCRIPTS_ROOT - should fall back to config
       },
-      encoding: 'utf8'
+      encoding: 'utf8',
+      timeout: 30000,
+      killSignal: 'SIGKILL'
     });
 
     const agents = JSON.parse(stdout);
@@ -246,7 +250,9 @@ test('P2: AESOP_STATE_ROOT env var is honored for alerts path', () => {
         AESOP_TRANSCRIPTS_ROOT: fixture.transcriptsRoot,
         AESOP_STATE_ROOT: customStateDir  // Override state location
       },
-      encoding: 'utf8'
+      encoding: 'utf8',
+      timeout: 30000,
+      killSignal: 'SIGKILL'
     });
 
     const agents = JSON.parse(stdout);
@@ -289,7 +295,9 @@ test('P2: config.state_root is honored when AESOP_STATE_ROOT env var not set', (
         AESOP_TRANSCRIPTS_ROOT: fixture.transcriptsRoot
         // NOTE: NOT setting AESOP_STATE_ROOT - should fall back to config
       },
-      encoding: 'utf8'
+      encoding: 'utf8',
+      timeout: 30000,
+      killSignal: 'SIGKILL'
     });
 
     const agents = JSON.parse(stdout);

@@ -29,7 +29,9 @@ const HOOK_SOURCE = path.join(
 function runCli(targetDir, args = []) {
   const res = spawnSync(process.execPath, [CLI, targetDir, ...args], {
     encoding: 'utf8',
-    cwd: path.dirname(targetDir)
+    cwd: path.dirname(targetDir),
+    timeout: 30000,
+    killSignal: 'SIGKILL'
   });
   return res;
 }
@@ -41,7 +43,7 @@ function createTestDir() {
 function gitCmd(cwd, cmd) {
   // Use bash on all platforms for consistent git behavior
   const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8' });
+  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
 }
 
 test('scaffold into empty dir installs pre-push hook', () => {
