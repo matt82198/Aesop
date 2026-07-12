@@ -28,7 +28,7 @@ from time import time
 
 PORT = int(os.getenv("PORT", "8770"))
 
-# Determine AESOP_ROOT
+# Determine AESOP_ROOT: env > default
 AESOP_ROOT = Path(os.getenv("AESOP_ROOT", Path.home() / "aesop"))
 
 # Try to load config file for additional settings
@@ -41,12 +41,16 @@ if CONFIG_FILE.exists():
     except:
         pass
 
-# Derive paths from config or defaults
-STATE_DIR = Path(config.get("state_root", str(AESOP_ROOT / "state")))
-SCAN_DIR = Path(config.get("scan_root", str(AESOP_ROOT / "scan")))
+# Derive paths with precedence: env var > config file > built-in default
+# STATE_DIR: env AESOP_STATE_ROOT > config state_root > AESOP_ROOT/state
+STATE_DIR = Path(
+    os.getenv(
+        "AESOP_STATE_ROOT",
+        config.get("state_root", str(AESOP_ROOT / "state"))
+    )
+)
 
-# Transcript path: configurable via env var or config
-# Default placeholder: $BRAIN_ROOT/projects/<project-name> (user fills in)
+# TRANSCRIPTS_ROOT: env AESOP_TRANSCRIPTS_ROOT > config transcripts_root > ~/.claude/projects
 TRANSCRIPTS_ROOT = Path(
     os.getenv(
         "AESOP_TRANSCRIPTS_ROOT",

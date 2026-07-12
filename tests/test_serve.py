@@ -5,6 +5,7 @@ daemons and monitor) — NOT scan/. The bug was serve.py reading from scan/ inst
 
 Run: python -m unittest tests.test_serve
 """
+import json
 import os
 import sys
 import tempfile
@@ -185,6 +186,77 @@ class TestBacklogEndpoint(unittest.TestCase):
             self.assertIn("inflight", tier)
             self.assertIn("todo", tier)
             self.assertIn("total", tier)
+
+
+class TestConfigPrecedence(unittest.TestCase):
+    """Test cases for config file precedence (env > config > default)."""
+
+    def setUp(self):
+        """Create temporary fixture directory structure."""
+        self.fixture_root = tempfile.mkdtemp(prefix="aesop-config-precedence-test-")
+        self.state_dir = os.path.join(self.fixture_root, "state")
+        self.config_state_dir = os.path.join(self.fixture_root, "config-state")
+        os.makedirs(self.state_dir, exist_ok=True)
+        os.makedirs(self.config_state_dir, exist_ok=True)
+
+        # Save original env
+        self.orig_aesop_root = os.environ.get("AESOP_ROOT")
+
+    def tearDown(self):
+        """Clean up temporary fixture."""
+        if self.orig_aesop_root is not None:
+            os.environ["AESOP_ROOT"] = self.orig_aesop_root
+        elif "AESOP_ROOT" in os.environ:
+            del os.environ["AESOP_ROOT"]
+
+        import shutil
+        if os.path.exists(self.fixture_root):
+            shutil.rmtree(self.fixture_root)
+
+    def _load_serve_module(self):
+        """Dynamically import serve.py with fixture AESOP_ROOT."""
+        os.environ["AESOP_ROOT"] = self.fixture_root
+
+        if "ui.serve" in sys.modules:
+            del sys.modules["ui.serve"]
+        if "ui" in sys.modules:
+            del sys.modules["ui"]
+
+        serve_path = Path(__file__).parent.parent / "ui" / "serve.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("serve", serve_path)
+        serve = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(serve)
+        return serve
+
+    def test_config_state_root_precedence(self):
+        """Config state_root must be honored when env var is unset."""
+        # Write alert to config-specified state directory
+        config_alert_file = os.path.join(self.config_state_dir, "SECURITY-ALERTS.log")
+        with open(config_alert_file, "w") as f:
+            f.write("2026-07-12T00:00:00Z HIGH config-specified alert\n")
+
+        # Write aesop.config.json with custom state_root
+        config_file = os.path.join(self.fixture_root, "aesop.config.json")
+        with open(config_file, "w") as f:
+            json.dump({
+                "state_root": self.config_state_dir,
+                "repos": []
+            }, f)
+
+        # Load serve module (will use config file for state_root)
+        serve = self._load_serve_module()
+
+        # Get alerts - should read from config-specified state directory
+        alerts = serve.get_alerts()
+
+        self.assertGreater(
+            alerts["count"],
+            0,
+            "Config file state_root must be honored when env var is unset"
+        )
+        self.assertEqual(len(alerts["lines"]), 1)
+        self.assertIn("HIGH", alerts["lines"][0])
 
 
 class TestAuditBacklogParser(unittest.TestCase):

@@ -96,6 +96,45 @@ test('degrades gracefully when no alerts log exists', () => {
   }
 });
 
+test('config precedence: AESOP_TRANSCRIPTS_ROOT from config file honored when env var unset', () => {
+  const fixture = makeFixture();
+  try {
+    // Create a separate config transcripts directory
+    const configTranscriptsRoot = path.join(fixture.root, 'config-transcripts');
+    fs.mkdirSync(configTranscriptsRoot, { recursive: true });
+
+    // Create a fresh agent transcript in config-specified location
+    const configAgentPath = path.join(configTranscriptsRoot, 'agent-config-fixture.jsonl');
+    fs.writeFileSync(configAgentPath, '{"description":"agent from config"}\n');
+
+    // Create aesop.config.json with custom transcripts_root
+    const configPath = path.join(fixture.aesopRoot, 'aesop.config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      transcripts_root: configTranscriptsRoot,
+      repos: []
+    }), 'utf8');
+
+    // Run script WITHOUT AESOP_TRANSCRIPTS_ROOT env var; should use config file value
+    const stdout = execFileSync(process.execPath, [SCRIPT, '--json'], {
+      env: {
+        ...process.env,
+        AESOP_ROOT: fixture.aesopRoot,
+        // NOTE: NOT setting AESOP_TRANSCRIPTS_ROOT - should fall back to config
+      },
+      encoding: 'utf8'
+    });
+
+    const agents = JSON.parse(stdout);
+    // Should find the agent in config-specified transcripts directory
+    assert.ok(
+      agents.length > 0,
+      'Config-specified transcripts_root should be scanned for agents (config precedence must work)'
+    );
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('walk() respects depth limit of 6 and prunes old branches', () => {
   const fixture = makeFixture();
   try {

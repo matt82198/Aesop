@@ -193,6 +193,59 @@ test('config: collector respects aesop.config.json repos list (read-only test)',
   }
 });
 
+// === Item 0: Config file precedence (ENV > config > default) ===
+test('config precedence: TEMP_ROOT from config file honored when env var unset', async (t) => {
+  const fixture = createFixture();
+  const configTempRoot = path.join(os.tmpdir(), 'aesop-config-temp-' + Math.random().toString(36).slice(2, 9));
+
+  try {
+    fs.mkdirSync(configTempRoot, { recursive: true });
+
+    // Create aesop.config.json with custom TEMP_ROOT
+    const configPath = path.join(fixture.root, 'aesop.config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      temp_root: configTempRoot,
+      repos: [],
+      monitor: { log_max_lines: 500, log_max_kb: 40 }
+    }), 'utf8');
+
+    // Create an old junk script in the config-specified temp directory
+    const junkPath = path.join(configTempRoot, 'old_junk.py');
+    const oldTime = Date.now() - (25 * 60 * 60 * 1000); // 25 hours ago
+    fs.writeFileSync(junkPath, 'print("junk")\n', 'utf8');
+    fs.utimesSync(junkPath, oldTime / 1000, oldTime / 1000);
+
+    // Run collector WITHOUT TEMP_ROOT env var; should use config file value
+    const env = {
+      ...process.env,
+      AESOP_ROOT: fixture.root,
+      BRAIN_ROOT: path.join(fixture.root, '..', '.claude'),
+      SCRIPTS_ROOT: path.join(fixture.root, '..', 'scripts'),
+    };
+    delete env.TEMP_ROOT; // Ensure TEMP_ROOT is not set
+
+    const result = spawnSync('node', [collectorPath], {
+      env,
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+
+    assert.strictEqual(result.status, 0, 'Collector should succeed with config TEMP_ROOT');
+
+    // Verify that collector found the junk script in config-specified location
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+
+    // The junk script should be detected (proving config temp root was used)
+    assert.ok(signals.junk.total > 0, 'Config-specified TEMP_ROOT should be scanned for junk scripts');
+  } finally {
+    try {
+      fs.rmSync(configTempRoot, { recursive: true, force: true });
+    } catch (e) {}
+    fixture.cleanup();
+  }
+});
+
 // === Test: Gap documentation ===
 test('gap documentation: PROPOSALS.md fixture injection limitations', (t) => {
   // DOCUMENTED GAP: The collector derives STATE_DIR from AESOP_ROOT, which means

@@ -12,31 +12,52 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // === Configuration ===
-// Load from environment or aesop.config.json; fall back to safe defaults.
-const AESOP_ROOT = process.env.AESOP_ROOT || '.';
-const BRAIN_ROOT = process.env.BRAIN_ROOT || path.join(AESOP_ROOT, '..', '.claude');
-const SCRIPTS_ROOT = process.env.SCRIPTS_ROOT || path.join(AESOP_ROOT, '..', 'scripts');
-const TEMP_ROOT = process.env.TEMP_ROOT || path.join(os.tmpdir(), 'claude');
-const MON = path.join(AESOP_ROOT, 'monitor');
-const STATE_DIR = path.join(AESOP_ROOT, 'state');
+// Helper: load aesop.config.json if it exists
+function loadConfigFile(aesopRoot) {
+  try {
+    const configPath = path.join(aesopRoot, 'aesop.config.json');
+    if (fs.existsSync(configPath)) {
+      return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+  } catch {
+    // Parse error or file doesn't exist; ignore
+  }
+  return {};
+}
 
-// Optional: load aesop.config.json for repo list
+// Precedence: env var > config file > built-in default
+const AESOP_ROOT = process.env.AESOP_ROOT || '.';
+const config = loadConfigFile(AESOP_ROOT);
+
+const BRAIN_ROOT = process.env.BRAIN_ROOT ||
+  config.brain_root ||
+  path.join(AESOP_ROOT, '..', '.claude');
+
+const SCRIPTS_ROOT = process.env.SCRIPTS_ROOT ||
+  config.scripts_root ||
+  path.join(AESOP_ROOT, '..', 'scripts');
+
+const TEMP_ROOT = process.env.TEMP_ROOT ||
+  config.temp_root ||
+  path.join(os.tmpdir(), 'claude');
+
+const STATE_DIR = process.env.AESOP_STATE_ROOT ||
+  config.state_root ||
+  path.join(AESOP_ROOT, 'state');
+
+const MON = path.join(AESOP_ROOT, 'monitor');
+
+// Config-driven thresholds
 let repos = [];
 let logThresholds = { maxLines: 500, maxKb: 40 };
-try {
-  const configPath = path.join(AESOP_ROOT, 'aesop.config.json');
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  if (config.repos && Array.isArray(config.repos)) {
-    repos = config.repos.map(r => r.path);
-  }
-  if (config.monitor && config.monitor.log_max_lines) {
-    logThresholds.maxLines = config.monitor.log_max_lines;
-  }
-  if (config.monitor && config.monitor.log_max_kb) {
-    logThresholds.maxKb = config.monitor.log_max_kb;
-  }
-} catch {
-  // No config file or parse error; use defaults
+if (config.repos && Array.isArray(config.repos)) {
+  repos = config.repos.map(r => r.path);
+}
+if (config.monitor && config.monitor.log_max_lines) {
+  logThresholds.maxLines = config.monitor.log_max_lines;
+}
+if (config.monitor && config.monitor.log_max_kb) {
+  logThresholds.maxKb = config.monitor.log_max_kb;
 }
 
 const now = Date.now();

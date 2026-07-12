@@ -6,10 +6,27 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Configuration from environment
+// Configuration: env var > config file > built-in default
+// Helper: load aesop.config.json if it exists
+function loadConfigFile(aesopRoot) {
+  try {
+    const configPath = path.join(aesopRoot, 'aesop.config.json');
+    if (fs.existsSync(configPath)) {
+      return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+  } catch {
+    // Parse error or file doesn't exist; ignore
+  }
+  return {};
+}
+
 const AESOP_ROOT = process.env.AESOP_ROOT || path.join(process.env.HOME || '.', 'aesop');
+const config = loadConfigFile(AESOP_ROOT);
+
 const TRANSCRIPTS_ROOT = path.resolve(
-  process.env.AESOP_TRANSCRIPTS_ROOT || path.join(process.env.HOME || '.', '.claude', 'projects')
+  process.env.AESOP_TRANSCRIPTS_ROOT ||
+  config.transcripts_root ||
+  path.join(process.env.HOME || '.', '.claude', 'projects')
 );
 const SCAN_DIR = path.join(AESOP_ROOT, 'state');
 const ALERTS_LOG = path.join(SCAN_DIR, 'SECURITY-ALERTS.log');
