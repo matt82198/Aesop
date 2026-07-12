@@ -976,7 +976,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .backlog-item-glyph { min-width: 14px; font-size: 12px; }
         .backlog-item-tag { color: #8ac; font-weight: bold; min-width: 60px; }
         .backlog-item-title { color: #999; flex: 1; word-break: break-word; }
-        .backlog-item.done .backlog-item-title { opacity: 0.6; }
+        .backlog-item.done { padding: 2px 0; opacity: 0.55; }
+        .backlog-item.done .backlog-item-title { opacity: 0.55; font-size: 10px; }
 
         .loading { color: #666; font-style: italic; }
         .error { color: #f44; }
@@ -1021,6 +1022,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             </div>
         </div>
 
+        <div class="grid">
+            <div class="panel">
+                <div class="panel-title">
+                    <span class="panel-title-emoji">⚡</span>
+                    <span>Fleet Agents (<span id="running-agents-count">0</span> active)</span>
+                </div>
+                <div id="agents-list" class="loading">—</div>
+            </div>
+
+            <div class="alerts-box">
+                <div class="panel-title">Security Alerts (Unreviewed)</div>
+                <div id="alerts-list" class="alert-none">—</div>
+            </div>
+        </div>
+
         <div class="inbox-box">
             <div class="inbox-label">Queue Work (Read by Orchestrator Each Turn)</div>
             <input type="text" class="inbox-input" id="inbox-input" placeholder="Type your task here...">
@@ -1038,28 +1054,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         <div class="grid">
             <div class="panel">
-                <div class="panel-title">
-                    <span class="panel-title-emoji">⚡</span>
-                    <span>Fleet Agents (<span id="running-agents-count">0</span> active)</span>
-                </div>
-                <div id="agents-list" class="loading">—</div>
+                <div class="panel-title">Recent Events (Last 8)</div>
+                <div id="events-list" class="loading">—</div>
             </div>
 
             <div class="panel">
                 <div class="panel-title">Repos Status</div>
                 <div id="repos-list" class="loading">—</div>
-            </div>
-        </div>
-
-        <div class="grid">
-            <div class="panel">
-                <div class="panel-title">Recent Events (Last 8)</div>
-                <div id="events-list" class="loading">—</div>
-            </div>
-
-            <div class="alerts-box">
-                <div class="panel-title">Security Alerts (Unreviewed)</div>
-                <div id="alerts-list" class="alert-none">—</div>
             </div>
         </div>
 

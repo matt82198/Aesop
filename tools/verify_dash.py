@@ -135,6 +135,73 @@ def main():
             page.goto(f"http://127.0.0.1:{port}/", wait_until="domcontentloaded")
 
             # (b) backlog panel renders seeded items
+
+            # (P2-UX) Layout order verification: Fleet Agents + Security Alerts in top third
+            try:
+                page.wait_for_selector("#agents-list", timeout=8000)
+                page.wait_for_selector("#alerts-list", timeout=8000)
+                page.wait_for_selector("#backlog-tiers", timeout=8000)
+                
+                # Verify DOM order: agents should appear before backlog
+                agents_index = page.evaluate(
+                    "Array.from(document.querySelectorAll('[id]')).findIndex(el => el.id === 'agents-list')"
+                )
+                alerts_index = page.evaluate(
+                    "Array.from(document.querySelectorAll('[id]')).findIndex(el => el.id === 'alerts-list')"
+                )
+                backlog_index = page.evaluate(
+                    "Array.from(document.querySelectorAll('[id]')).findIndex(el => el.id === 'backlog-tiers')"
+                )
+                
+                assert agents_index < backlog_index,                     f"Fleet Agents should appear BEFORE Audit Backlog in DOM (agents={agents_index}, backlog={backlog_index})"
+                assert alerts_index < backlog_index,                     f"Security Alerts should appear BEFORE Audit Backlog in DOM (alerts={alerts_index}, backlog={backlog_index})"
+                    
+            except Exception as e:
+                failures.append(f"(P2-UX) layout order verification failed: {e}")
+            
+            # (P2-UX) Collapsed done backlog items: verify reduced padding and opacity
+            try:
+                # Ensure backlog items render with the fixture
+                page.wait_for_function(
+                    "document.querySelector('.backlog-item.done') !== null",
+                    timeout=8000
+                )
+                
+                # Get height and opacity of done item vs active item
+                done_item_styles = page.evaluate("""
+                    (() => {
+                        const done = document.querySelector('.backlog-item.done');
+                        const cs = window.getComputedStyle(done);
+                        return {
+                            height: done.offsetHeight,
+                            opacity: cs.opacity,
+                            padding: cs.padding
+                        };
+                    })()
+                """)
+                
+                active_item_styles = page.evaluate("""
+                    (() => {
+                        const active = Array.from(document.querySelectorAll('.backlog-item'))
+                            .find(el => !el.classList.contains('done'));
+                        if (!active) return {height: 0, opacity: '1', padding: '0px'};
+                        const cs = window.getComputedStyle(active);
+                        return {
+                            height: active.offsetHeight,
+                            opacity: cs.opacity,
+                            padding: cs.padding
+                        };
+                    })()
+                """)
+                
+                # Done items should be more compact (lower height, lower opacity)
+                assert done_item_styles['height'] <= active_item_styles['height'],                     f"Done items should be more compact (height {done_item_styles['height']} > {active_item_styles['height']})"
+                assert float(done_item_styles['opacity']) < 1.0,                     f"Done items should have reduced opacity (got {done_item_styles['opacity']})"
+                    
+            except Exception as e:
+                failures.append(f"(P2-UX) done item visual collapse verification failed: {e}")
+
+
             try:
                 page.wait_for_selector("#backlog-tiers:not(.loading)", timeout=8000)
                 assert "BACKLOG-SEED-ALPHA" in page.inner_text("#backlog-tiers")
