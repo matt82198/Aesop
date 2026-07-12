@@ -295,6 +295,28 @@ Daemons write epoch-seconds to `.heartbeat` files. The dashboard reads these to 
 - Implement `tools/secret_scan.py` with your own security rules.
 - Use `secret_scan.py` as a gate on every push (don't bypass).
 
+### Pre-Push Hook: Local Convenience Defense Only
+
+The pre-push hook (`hooks/pre-push-policy.sh`) enforces branch discipline and secret scanning **locally**. It is **bypassable**:
+- Any developer can use `git push --no-verify` to skip it.
+- The audit log is stored locally and can be edited or deleted.
+
+**For real enforcement, pair with server-side branch protection** (e.g., GitHub protected branches):
+
+1. **GitHub Protected Branches**: Navigate to Settings > Branches and create a rule for `main` with:
+   - ✓ Require pull request reviews before merging
+   - ✓ Require status checks to pass before merging
+   - ✓ Require branches to be up to date before merging
+   - ✓ Restrict pushes to (Admins only)
+
+2. **Audit Log Integrity**: The hook maintains a hash-chain audit log (each event includes SHA-256 of the previous entry). Verify integrity with:
+   ```bash
+   bash hooks/pre-push-policy.sh --verify-audit-log
+   ```
+   **Note**: This detects accidental corruption but is not cryptographic protection against a determined attacker with file system access. For production auditability, centralize logs to an immutable remote service (CloudWatch, Datadog, or a dedicated log server).
+
+See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for full configuration details.
+
 ## Extension points
 
 ### Add a custom signal collector

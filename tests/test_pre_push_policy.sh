@@ -134,6 +134,157 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Test 8: Hash-chain audit log (GENESIS first event) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_hashchain"
+  mkdir -p "$AESOP_ROOT/state"
+
+  log_block "test_block_1"
+
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+
+  if ! printf '%s' "$audit_line" | grep -q '"prev_hash":"GENESIS"'; then
+    printf 'FAIL: First event should have prev_hash=GENESIS\n'
+    printf 'Entry: %s\n' "$audit_line"
+    exit 1
+  fi
+
+  if ! printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
+    printf 'FAIL: Hash-chained entry is not valid JSON\n'
+    printf 'Entry: %s\n' "$audit_line"
+    exit 1
+  fi
+
+  printf 'PASS: First event has GENESIS prev_hash and valid JSON\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 9: Hash-chain builds across 2+ events ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_hashchain2"
+  mkdir -p "$AESOP_ROOT/state"
+
+  log_block "test_block_1"
+  log_block "test_block_2"
+
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created\n'
+    exit 1
+  fi
+
+  line_count=$(wc -l < "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+  if [ "$line_count" -ne 2 ]; then
+    printf 'FAIL: Expected 2 audit log entries, got %d\n' "$line_count"
+    exit 1
+  fi
+
+  line1=$(head -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+  line2=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+
+  if ! printf '%s' "$line1" | grep -q '"prev_hash":"GENESIS"'; then
+    printf 'FAIL: First event should have prev_hash=GENESIS\n'
+    exit 1
+  fi
+
+  if ! printf '%s' "$line2" | grep -q '"prev_hash":'; then
+    printf 'FAIL: Second event should have prev_hash field\n'
+    exit 1
+  fi
+
+  line1_hash=$(printf '%s' "$line1" | sha256sum | awk '{print $1}')
+  line2_prev=$(printf '%s' "$line2" | python3 -c "import sys, json; print(json.load(sys.stdin).get('prev_hash', ''))")
+
+  if [ "$line1_hash" != "$line2_prev" ]; then
+    printf 'FAIL: Second event prev_hash does not match first line hash\n'
+    printf 'Expected: %s\n' "$line1_hash"
+    printf 'Got: %s\n' "$line2_prev"
+    exit 1
+  fi
+
+  printf 'PASS: Hash chain builds correctly across 2 events\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 10: verify-audit-log passes on intact chain ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_verify"
+  mkdir -p "$AESOP_ROOT/state"
+
+  log_block "entry_1"
+  log_block "entry_2"
+  log_event "entry_3"
+
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created\n'
+    exit 1
+  fi
+
+  # Source the hook again to get verify function (if it exists)
+  if type verify_audit_log >/dev/null 2>&1; then
+    if verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log"; then
+      printf 'PASS: Verification passed on intact chain\n'
+    else
+      printf 'FAIL: Verification should pass on intact chain\n'
+      exit 1
+    fi
+  else
+    printf 'SKIP: verify_audit_log function not yet implemented\n'
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 11: verify-audit-log detects tampered line ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_tamper"
+  mkdir -p "$AESOP_ROOT/state"
+
+  log_block "entry_1"
+  log_block "entry_2"
+  log_block "entry_3"
+
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created\n'
+    exit 1
+  fi
+
+  # Tamper with the middle line by changing the reason
+  sed -i '2s/"reason":"[^"]*"/"reason":"TAMPERED"/g' "$AESOP_ROOT/state/SECURITY-AUDIT.log"
+
+  # Source the hook again to get verify function (if it exists)
+  if type verify_audit_log >/dev/null 2>&1; then
+    if ! verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log" >/dev/null 2>&1; then
+      printf 'PASS: Verification detected tampered middle line\n'
+    else
+      printf 'FAIL: Verification should detect tampering\n'
+      exit 1
+    fi
+  else
+    printf 'SKIP: verify_audit_log function not yet implemented\n'
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

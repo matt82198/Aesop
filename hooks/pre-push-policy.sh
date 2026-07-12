@@ -9,6 +9,64 @@ json_escape() {
   printf '%s' "$s"
 }
 
+get_previous_hash() {
+  local audit_log="$1"
+  if [ ! -f "$audit_log" ] || [ ! -s "$audit_log" ]; then
+    printf 'GENESIS'
+  else
+    tail -n 1 "$audit_log" | tr -d '\n' | sha256sum | awk '{print $1}'
+  fi
+}
+
+verify_audit_log() {
+  local audit_log="$1"
+  if [ ! -f "$audit_log" ]; then
+    printf 'Error: Audit log not found at %s\n' "$audit_log" >&2
+    return 1
+  fi
+
+  if [ ! -s "$audit_log" ]; then
+    printf 'Audit log is empty or does not exist\n'
+    return 0
+  fi
+
+  local line_num=0
+  local prev_line=""
+  local expected_hash=""
+  local actual_prev_hash=""
+
+  while IFS= read -r line; do
+    line_num=$((line_num + 1))
+
+    if [ $line_num -eq 1 ]; then
+      expected_hash="GENESIS"
+    else
+      expected_hash=$(printf '%s' "$prev_line" | sha256sum | awk '{print $1}')
+    fi
+
+    actual_prev_hash=$(printf '%s' "$line" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('prev_hash', 'MISSING'))" 2>/dev/null)
+
+    if [ "$actual_prev_hash" = "MISSING" ]; then
+      printf 'Error: Line %d missing prev_hash field\n' "$line_num" >&2
+      return 1
+    fi
+
+    if [ "$actual_prev_hash" != "$expected_hash" ]; then
+      printf 'Error: Hash chain broken at line %d\n' "$line_num" >&2
+      printf '  Expected prev_hash: %s\n' "$expected_hash" >&2
+      printf '  Actual prev_hash: %s\n' "$actual_prev_hash" >&2
+      return 1
+    fi
+
+    prev_line="$line"
+  done < "$audit_log"
+
+  if [ $line_num -gt 0 ]; then
+    printf 'Audit log verification OK (%d entries)\n' "$line_num"
+  fi
+  return 0
+}
+
 check_branch_policy() {
   # Parse git pre-push stdin to check if any remote-ref targets main or master
   # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
@@ -81,10 +139,12 @@ log_event() {
   repo_name=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo 'unknown')")
   local user
   user=$(git config user.name 2>/dev/null || echo "unknown")
+  local prev_hash
+  prev_hash=$(get_previous_hash "$audit_log")
 
   mkdir -p "$state_dir" 2>/dev/null
 
-  printf '{"ts":"%s","repo":"%s","event":"%s","user":"%s"}\n' "$ts" "$repo_name" "$(json_escape "$event_type")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
+  printf '{"prev_hash":"%s","ts":"%s","repo":"%s","event":"%s","user":"%s"}\n' "$prev_hash" "$ts" "$repo_name" "$(json_escape "$event_type")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
 }
 
 log_block() {
@@ -98,10 +158,12 @@ log_block() {
   repo_name=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo 'unknown')")
   local user
   user=$(git config user.name 2>/dev/null || echo "unknown")
+  local prev_hash
+  prev_hash=$(get_previous_hash "$audit_log")
 
   mkdir -p "$state_dir" 2>/dev/null
 
-  printf '{"ts":"%s","repo":"%s","event":"push_blocked","reason":"%s","user":"%s"}\n' "$ts" "$repo_name" "$(json_escape "$reason")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
+  printf '{"prev_hash":"%s","ts":"%s","repo":"%s","event":"push_blocked","reason":"%s","user":"%s"}\n' "$prev_hash" "$ts" "$repo_name" "$(json_escape "$reason")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
 }
 
 run_test_mode() {
@@ -319,12 +381,147 @@ run_test_mode() {
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 8: Hash-chain audit log (GENESIS first event) ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_hashchain"
+    mkdir -p "$AESOP_ROOT/state"
+    log_block "test_block_1"
+
+    if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+      printf 'FAIL: Audit log not created\n'
+      exit 1
+    fi
+
+    audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+    if ! printf '%s' "$audit_line" | grep -q '"prev_hash":"GENESIS"'; then
+      printf 'FAIL: First event should have prev_hash=GENESIS\n'
+      printf 'Entry: %s\n' "$audit_line"
+      exit 1
+    fi
+
+    if ! printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
+      printf 'FAIL: Hash-chained entry is not valid JSON\n'
+      printf 'Entry: %s\n' "$audit_line"
+      exit 1
+    fi
+
+    printf 'PASS: First event has GENESIS prev_hash and valid JSON\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 9: Hash-chain builds across 2+ events ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_hashchain2"
+    mkdir -p "$AESOP_ROOT/state"
+    log_block "test_block_1"
+    log_block "test_block_2"
+
+    if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+      printf 'FAIL: Audit log not created\n'
+      exit 1
+    fi
+
+    line_count=$(wc -l < "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+    if [ "$line_count" -ne 2 ]; then
+      printf 'FAIL: Expected 2 audit log entries, got %d\n' "$line_count"
+      exit 1
+    fi
+
+    line1=$(head -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+    line2=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+
+    if ! printf '%s' "$line1" | grep -q '"prev_hash":"GENESIS"'; then
+      printf 'FAIL: First event should have prev_hash=GENESIS\n'
+      exit 1
+    fi
+
+    if ! printf '%s' "$line2" | grep -q '"prev_hash":'; then
+      printf 'FAIL: Second event should have prev_hash field\n'
+      exit 1
+    fi
+
+    line1_hash=$(printf '%s' "$line1" | tr -d '\n' | sha256sum | awk '{print $1}')
+    line2_prev=$(printf '%s' "$line2" | python3 -c "import sys, json; print(json.load(sys.stdin).get('prev_hash', ''))")
+
+    if [ "$line1_hash" != "$line2_prev" ]; then
+      printf 'FAIL: Second event prev_hash does not match first line hash\n'
+      printf 'Expected: %s\n' "$line1_hash"
+      printf 'Got: %s\n' "$line2_prev"
+      exit 1
+    fi
+
+    printf 'PASS: Hash chain builds correctly across 2 events\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 10: verify-audit-log passes on intact chain ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_verify"
+    mkdir -p "$AESOP_ROOT/state"
+    log_block "entry_1"
+    log_block "entry_2"
+    log_event "entry_3"
+
+    if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+      printf 'FAIL: Audit log not created\n'
+      exit 1
+    fi
+
+    if verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log" >/dev/null 2>&1; then
+      printf 'PASS: Verification passed on intact chain\n'
+    else
+      printf 'FAIL: Verification should pass on intact chain\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 11: verify-audit-log detects tampered line ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_tamper"
+    mkdir -p "$AESOP_ROOT/state"
+    log_block "entry_1"
+    log_block "entry_2"
+    log_block "entry_3"
+
+    if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+      printf 'FAIL: Audit log not created\n'
+      exit 1
+    fi
+
+    sed -i '2s/"reason":"[^"]*"/"reason":"TAMPERED"/g' "$AESOP_ROOT/state/SECURITY-AUDIT.log"
+
+    if ! verify_audit_log "$AESOP_ROOT/state/SECURITY-AUDIT.log" >/dev/null 2>&1; then
+      printf 'PASS: Verification detected tampered middle line\n'
+    else
+      printf 'FAIL: Verification should detect tampering\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 7 tests passed.\n'
+    printf '\nAll 11 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -335,6 +532,12 @@ run_test_mode() {
 main() {
   if [ "${1:-}" = "--test" ]; then
     run_test_mode
+    exit $?
+  fi
+
+  if [ "${1:-}" = "--verify-audit-log" ]; then
+    local audit_log="${2:-${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log}"
+    verify_audit_log "$audit_log"
     exit $?
   fi
 

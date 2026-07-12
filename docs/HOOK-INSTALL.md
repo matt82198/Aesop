@@ -2,6 +2,12 @@
 
 **Ship a hook, not a memo.** The pre-push policy hook is **auto-installed during scaffold** (see below). This guide explains customization, verification, and org-wide distribution.
 
+## Security Model: Local Convenience Defense Only
+
+**IMPORTANT**: The pre-push hook is a **local-machine convenience defense** — it is **NOT cryptographic protection**. Any developer can bypass it with `git push --no-verify` or by editing/deleting `.git/hooks/pre-push`. The audit log (`SECURITY-AUDIT.log`) is stored locally and can also be edited by a user with file system access.
+
+**Real enforcement requires server-side branch protection.** See GitHub Configuration below.
+
 ## What the Hook Does
 
 `hooks/pre-push-policy.sh` enforces two checks at git push time:
@@ -71,20 +77,77 @@ bash hooks/pre-push-policy.sh --test
 
 Expected output: **PASS** for all three checks (branch policy, feature branch allowance, audit log format).
 
-## Audit Log Format
+## GitHub Configuration (Server-Side Enforcement)
+
+To pair this local hook with real enforcement, enable branch protection on GitHub:
+
+### Step 1: Create a Protected Branch
+
+1. Go to your GitHub repo **Settings** > **Branches**.
+2. Click **Add rule** under "Branch protection rules".
+3. Enter branch name pattern: `main` (or `master`, depending on your default branch).
+
+### Step 2: Enable Required Protections
+
+- **Require pull request reviews before merging**: ✓ (enforces PR review workflow)
+- **Require status checks to pass before merging**: ✓ (use this for CI)
+- **Require branches to be up to date before merging**: ✓
+- **Restrict who can push to matching branches**: ✓ (optional; allows only admins to push to main)
+
+### Step 3: Dismiss Stale Reviews (Recommended)
+
+- **Dismiss stale pull request approvals when new commits are pushed**: ✓
+
+### Example: Minimal Protected Branch Rule for `main`
+
+| Setting | Value |
+|---------|-------|
+| Branch name pattern | `main` |
+| Require pull request reviews | Yes (1 approval) |
+| Require status checks to pass | Yes (if you have CI) |
+| Require branches up to date | Yes |
+| Restrict pushes to | Admins only |
+
+Once this is configured, even if a developer bypasses the local hook with `--no-verify`, the remote will **refuse the push**.
+
+## Audit Log Format & Integrity
 
 Each block writes one JSON line to `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log`:
 
 ```json
-{"ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure","user":"alice"}
+{"prev_hash":"GENESIS","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure","user":"alice"}
+{"prev_hash":"f4b92becb47baa447e839330cf3c0c6e8dea947acc9ec372bb99063ee416d036","ts":"2025-07-12T14:32:02Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure","user":"bob"}
 ```
 
 **Fields:**
+- `prev_hash`: SHA-256 hash of the previous line (without trailing newline). First entry uses `"GENESIS"`. Enables tampering detection.
 - `ts`: ISO-8601 UTC timestamp
 - `repo`: Repository basename
 - `event`: Always `push_blocked`
 - `reason`: `push_to_protected_branch` or `secret_scan_failure`
 - `user`: Git user.name (fallback: "unknown")
+
+### Verifying Audit Log Integrity
+
+The hash chain allows you to detect if someone edited or deleted audit log entries:
+
+```bash
+bash hooks/pre-push-policy.sh --verify-audit-log
+```
+
+Output on intact log:
+```
+Audit log verification OK (42 entries)
+```
+
+Output if tampering is detected:
+```
+Error: Hash chain broken at line 15
+  Expected prev_hash: f4b92becb47baa447e839330cf3c0c6e8dea947acc9ec372bb99063ee416d036
+  Actual prev_hash: abc123...
+```
+
+**Note**: Verification is a convenience check; it does not prevent tampering on a machine where the attacker has file system access. For real auditability, centralize audit logs to a secure remote (e.g., CloudWatch, Datadog, or a separate immutable log server).
 
 Parse the log with standard JSON tools:
 
