@@ -33,6 +33,19 @@ Total                              = 1,080 tokens
 = **90% savings** vs 10 Opus tasks
 ```
 
+## MAIN RULE: Subagents are ALWAYS the cheap tier
+
+This is **the single most important cost lever** in the entire system. Every subagent spawned must default to Haiku, never Sonnet or Opus. This rule, more than any other, multiplies your savings at scale.
+
+**Why**: Haiku is 1/3 the cost of Sonnet with sufficient capability for scoped domain work. Scaling from 1 subagent to 6–8 in parallel multiplies the per-domain savings — what would cost 10× Opus now costs <1×. Violating this rule (spawning Sonnet/Opus subagents) erases the economic advantage of the entire dispatch model.
+
+**The exception**: Only use Sonnet/Opus for a subagent if:
+1. The task genuinely exceeds Haiku capability (rare for scoped domains), **AND**
+2. You've decomposed it as far as possible and still can't fit it into Haiku, **AND**
+3. You have explicit approval to do so.
+
+Even then, use Sonnet as a supervisor only (splits work into Haiku subdomains), never Opus as a subagent.
+
 ## Dispatch patterns
 
 ### Pattern 1: Fan-out (wide parallelism)
@@ -145,6 +158,20 @@ Is this task scoped to <5 min reasoning?
 1. **Spend spike** (+20% baseline): investigate domain; may need larger model.
 2. **Respawn loop** (same domain 3+ times): subagent repeatedly failing; escalate to Sonnet or orchestrator review.
 3. **Serial bottleneck** (orchestrator >500 tokens): parallelism breaking down; split smaller or delegate.
+
+## Retry cap: Automatic recovery + escalation
+
+The orchestrator's watchdog automatically detects hung agents and relaunches them with the same scoped prompt:
+
+- **1st–3rd hang**: TaskStop + relaunch automatically. Workflows resume from cache via `resumeFromRunId`; standalone agents respawn fresh.
+- **4th hang**: Mark BLOCKED in BUILDLOG.md and surface to the user instead of respawning.
+
+**Why the cap?** Infinite retry loops waste tokens and hide systemic problems. After 3 attempts, a persistent hang indicates either:
+- Task is fundamentally unscopable (too large, too complex)
+- Subagent needs a larger model (escalate to Sonnet or Opus)
+- External dependency is broken (requires human intervention)
+
+Surfacing to the user after 3 retries ensures visibility and prevents silent cost bleed.
 
 ### Optimization levers
 

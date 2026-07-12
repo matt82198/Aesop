@@ -2,16 +2,21 @@
 
 These are the foundational principles that guide all work in an Aesop-driven fleet. Violating these risks cost explosion, data loss, or orchestration breakdown.
 
-## 1. Dispatch model & cost
+## 1. Dispatch model & cost — Main Rule: subagents are ALWAYS cheap tier
 
-**Rule**: Subagents are ALWAYS Haiku (1/3 Sonnet cost). Orchestrator (Opus) runs on main thread only.
+**Rule**: Subagents are ALWAYS Haiku (1/3 Sonnet cost) — **the single most important cost lever**. Orchestrator (Fable/Opus) runs on main thread only, NEVER spawns as a subagent, performs final-catch review itself, and NEVER hand-writes files in normal flow.
 
-**Why**: Haiku at scale (6–8 agents in parallel) costs ~25% of all-Opus fleet while maintaining quality on tiny scoped tasks. Opus reserved for final validation, handoff, and orchestration.
+**Why**: Haiku at scale (6–8 agents in parallel) costs ~25% of all-Opus fleet while maintaining quality on tiny scoped tasks. Main thread orchestrator preserves context stability and keeps prompt cache warm across turns.
+
+**Watchdog & stalls**: The orchestrator's core job is detecting hung Haikus. Signs: agent transcript hasn't advanced for >200s, workflow phase isn't progressing, background task should have exited but hasn't. On detection, TaskStop + relaunch the hung agent. Workflows resume from cache via `resumeFromRunId`; standalone agents respawn fresh.
+
+**Retry cap**: 1st–3rd hang = TaskStop + relaunch automatically. On 4th hang, mark BLOCKED in BUILDLOG.md and surface to the user instead of respawning. Prevents infinite loops and ensures visibility.
 
 **Implementation**:
 - When spawning a new agent, default to Haiku.
 - If you need Opus-tier reasoning, consider decomposing into smaller Haiku tasks first.
 - Track token spend per subagent; alert if spend deviates >20% from baseline.
+- Watchdog monitors for stalls; never let a stuck Haiku silently block a pipeline.
 
 ## 2. TDD-first & parallel domains
 
@@ -28,15 +33,18 @@ These are the foundational principles that guide all work in an Aesop-driven fle
 
 ## 3. Reliability core: inputs always produce outputs
 
-**Rule**: Every input (request, event, cycle) must produce an output (brief/log/heartbeat/FAILED). Never wait silently; dispatch next work and offer ideas while waiting.
+**Rule**: Every input (request, event, cycle) must produce an output (brief/log/heartbeat/FAILED). **NEVER WAIT**: the orchestrator never goes idle while background work is in flight — dispatch the next unblocked work unit, extend the roadmap, stage ideas, queue facts, and always offer the user an idea for what to do next. "Waiting on X" must come with "meanwhile, doing/proposing Y."
 
-**Why**: Hangs hide cost waste, data loss, and orchestration confusion. Observable failure is better than silent lag.
+**Why**: Hangs hide cost waste, data loss, and orchestration confusion. Observable failure is better than silent lag. Idle time is token waste.
+
+**The pride bar**: Never ship known-broken. "An agent returned a brief" and "tests pass" are checkpoints, not completion. Done means: verified end-to-end, briefs cross-checked against reality, test artifacts cleaned, loose ends closed or explicitly logged, nothing known-broken shipped silently. If you'd hesitate to hand it over under your own name, keep going.
 
 **Implementation**:
 - Daemons emit heartbeats every cycle (even on error).
 - Logs are append-only; every action logged with timestamp.
 - If a subagent stalls >200s, watchdog respawns it.
 - Orchestrator briefs the user with findings while delegating to subagents (never idle).
+- Before marking work done, verify end-to-end and cross-check briefs against reality.
 
 ## 4. Orchestrator isolation: lean context
 
@@ -64,28 +72,30 @@ These are the foundational principles that guide all work in an Aesop-driven fle
 
 ## 6. Branch discipline & continuous push
 
-**Rule**: Feature branches only (never main/master). Continuously push green work to origin. Never amend; create new commits.
+**Rule**: Feature branches only (never main/master). Continuously push green work to origin. **Never amend; create new commits.** **Never force-push** (unless explicitly approved for a specific commit).
 
-**Why**: Main branch stays deployable. Continuous push distributes backup risk. Amending hides history.
+**Why**: Main branch stays deployable. Continuous push distributes backup risk. Amending hides history; force-pushing erases commits. New commits preserve a clear audit trail.
 
 **Implementation**:
 - Create feature/your-task at start.
 - Commit often (every 15–30 min of solid work).
 - Push after every commit (github mirrors your work).
 - Open PR when feature is ready for review.
-- Never force-push (unless explicitly approved for specific commit).
+- If you need to fix a commit, create a new commit with the fix (never amend).
+- Never force-push; if you must rebase, do it on a draft branch before opening a PR.
 
 ## 7. Control files & single-writer discipline
 
-**Rule**: MEMORY.md (keeper writes), STATE.md (orchestrator writes), BUILDLOG.md (append-only, orchestrator appends).
+**Rule**: Single-writer control files: MEMORY.md (keeper writes only), STATE.md (orchestrator writes only), BUILDLOG.md (append-only for everyone, never overwrite). Single-instance loops check heartbeat before starting; skip if a live one exists.
 
-**Why**: Contention on shared state causes data loss and confusion. Single-writer enforcement prevents races.
+**Why**: Contention on shared state causes data loss and confusion. Single-writer enforcement prevents races. Append-only-for-everyone prevents accidental overwrites. Single-instance heartbeats prevent duplicate work (e.g., two memory keepers or monitors running simultaneously).
 
 **Implementation**:
-- Designate one role per file.
-- Use heartbeats to detect live writers; skip if <200s.
+- Designate one writer per control file (keeper for MEMORY.md, orchestrator for STATE.md).
+- BUILDLOG.md is append-only; anyone can append, no one edits earlier entries.
+- Before starting a loop, check `~/.claude/loops/<loop-name>.heartbeat`; if exists and recent (<5 min old), skip and exit.
 - On resume, read from disk; never trust in-memory state.
-- Append-only logs never overwrite; oldest entries rotate to archives.
+- Append-only logs never overwrite; oldest entries rotate to archives when >200 lines/20KB.
 
 ## 8. Secret-scan & version control
 
