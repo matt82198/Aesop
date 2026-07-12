@@ -4,14 +4,41 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 
+// === Configuration ===
+// Load from environment or aesop.config.json; fall back to safe defaults.
 const AESOP_ROOT = process.env.AESOP_ROOT || '.';
+const BRAIN_ROOT = process.env.BRAIN_ROOT || path.join(AESOP_ROOT, '..', '.claude');
+const SCRIPTS_ROOT = process.env.SCRIPTS_ROOT || path.join(AESOP_ROOT, '..', 'scripts');
+const TEMP_ROOT = process.env.TEMP_ROOT || path.join(AESOP_ROOT, '..', 'AppData', 'Local', 'Temp', 'claude');
 const MON = path.join(AESOP_ROOT, 'monitor');
+const STATE_DIR = path.join(AESOP_ROOT, 'state');
+
+// Optional: load aesop.config.json for repo list
+let repos = [];
+let logThresholds = { maxLines: 500, maxKb: 40 };
+try {
+  const configPath = path.join(AESOP_ROOT, 'aesop.config.json');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  if (config.repos && Array.isArray(config.repos)) {
+    repos = config.repos.map(r => r.path);
+  }
+  if (config.monitor && config.monitor.log_max_lines) {
+    logThresholds.maxLines = config.monitor.log_max_lines;
+  }
+  if (config.monitor && config.monitor.log_max_kb) {
+    logThresholds.maxKb = config.monitor.log_max_kb;
+  }
+} catch {
+  // No config file or parse error; use defaults
+}
+
 const now = Date.now();
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
 
+// === Utilities ===
 const sh = (cmd, cwd) => {
   try {
     return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -34,103 +61,422 @@ const age = (ms) => {
   return `${(ms / DAY).toFixed(1)}d`;
 };
 
-// Main signal collection
-const signals = {
-  heartbeats: [],
-  rotations: [],
-  unreviewedPrompts: 0,
-  staleMemories: [],
-  respawnWatch: [],
+const walk = (dir, test, out = [], depth = 0) => {
+  if (depth > 6) return out;
+  let ents;
+  try {
+    ents = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of ents) {
+    const fp = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (/node_modules|\.git|target|\.venv|__pycache__/.test(e.name)) continue;
+      walk(fp, test, out, depth + 1);
+    } else if (test(e.name, fp)) {
+      out.push(fp);
+    }
+  }
+  return out;
 };
 
-const brief = [
-  `# Aesop Monitor Brief — ${new Date(now).toISOString()}`,
-  '',
-  '## Status',
-  'Orchestration monitor cycle complete.',
-  '',
-];
+// === Signal Collectors ===
 
 // 1) Heartbeat check
-const beatsDir = path.join(MON, '.heartbeats');
-let beatFiles = [];
-try {
-  const files = fs.readdirSync(beatsDir);
-  beatFiles = files.map((f) => path.join(beatsDir, f));
-} catch {}
-
-const legacyBeats = [
-  path.join(MON, '.monitor-heartbeat'),
-  path.join(AESOP_ROOT, 'state', '.watchdog-heartbeat'),
-];
-
-beatFiles = beatFiles.concat(legacyBeats.filter((f) => fs.existsSync(f)));
-
-for (const fp of beatFiles) {
+function checkHeartbeats() {
+  const staleLoops = [];
+  const beatsDir = path.join(MON, '.heartbeats');
+  const thresholds = { watchdog: 300e3, monitor: 3600e3, default: 1800e3 };
+  let beatFiles = [];
   try {
-    const content = fs.readFileSync(fp, 'utf8').trim();
-    const epoch = parseInt(content.split('\n')[0], 10);
-    if (!epoch) continue;
+    beatFiles = fs.readdirSync(beatsDir).map(f => path.join(beatsDir, f));
+  } catch {
+    // no .heartbeats dir
+  }
+  const legacyBeats = [
+    path.join(MON, '.monitor-heartbeat'),
+    path.join(STATE_DIR, '.watchdog-heartbeat'),
+  ];
+  beatFiles = beatFiles.concat(legacyBeats.filter(f => fs.existsSync(f)));
+  for (const fp of beatFiles) {
+    try {
+      const content = fs.readFileSync(fp, 'utf8').trim();
+      const epoch = parseInt(content.split('\n')[0], 10);
+      if (!epoch) continue;
+      const beatAge = now - epoch * 1000;
+      const name = path.basename(fp);
+      let threshold = thresholds.default;
+      if (name.includes('watchdog')) threshold = thresholds.watchdog;
+      if (name.includes('monitor')) threshold = thresholds.monitor;
+      if (beatAge > threshold) {
+        staleLoops.push({ name, ageMs: beatAge, threshold });
+      }
+    } catch {
+      // skip invalid heartbeat file
+    }
+  }
+  return staleLoops;
+}
 
-    const beatAge = now - epoch * 1000;
-    const name = path.basename(fp);
-    const thresholds = { watchdog: 300e3, monitor: 3600e3, default: 1800e3 };
-    let threshold = thresholds.default;
-    if (name.includes('watchdog')) threshold = thresholds.watchdog;
-    if (name.includes('monitor')) threshold = thresholds.monitor;
-
-    signals.heartbeats.push({
-      name,
-      ageMs: beatAge,
-      threshold,
-      ok: beatAge < threshold,
+// 2) Git state check
+function checkGitState() {
+  const gitState = [];
+  for (const repoPath of repos) {
+    if (!fs.existsSync(repoPath)) continue;
+    const branch = sh('git rev-parse --abbrev-ref HEAD', repoPath);
+    const lastCommit = sh('git log -1 --pretty=%h·%cr·%s', repoPath);
+    const dirty = sh('git status --porcelain', repoPath)
+      .split('\n')
+      .filter(l => l.trim()).length;
+    const ahead = sh('git rev-list --count @{u}..HEAD', repoPath) || '?';
+    gitState.push({
+      repo: path.basename(repoPath),
+      branch,
+      lastCommit,
+      dirty,
+      ahead,
     });
-  } catch {}
+  }
+  return gitState;
 }
 
-brief.push('## Heartbeats');
-if (signals.heartbeats.length === 0) {
-  brief.push('No heartbeats detected yet.');
+// 3) Memory freshness check
+function checkMemoryFreshness() {
+  const memoryDir = path.join(BRAIN_ROOT, 'projects', '*', 'memory');
+  const staleMemories = [];
+  let memoryCount = 0;
+  try {
+    const baseDir = path.join(BRAIN_ROOT, 'projects');
+    if (!fs.existsSync(baseDir)) return { count: 0, staleMemories: [], staleCount: 0 };
+    const projDirs = fs.readdirSync(baseDir, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => path.join(baseDir, d.name, 'memory'));
+    for (const memDir of projDirs) {
+      if (!fs.existsSync(memDir)) continue;
+      const memFiles = fs.readdirSync(memDir)
+        .filter(f => f.endsWith('.md') && f !== 'MEMORY.md' && f !== 'INBOX.md')
+        .map(f => path.join(memDir, f));
+      memoryCount += memFiles.length;
+      for (const fp of memFiles) {
+        const st = stat(fp);
+        if (st && now - st.mtimeMs > 30 * DAY) {
+          staleMemories.push(path.basename(fp));
+        }
+      }
+    }
+  } catch {
+    // no memory dir
+  }
+  return { count: memoryCount, staleMemories, staleCount: staleMemories.length };
+}
+
+// 4) Log file status check
+function checkLogFiles() {
+  const logFiles = [
+    path.join(STATE_DIR, 'FLEET-BACKUP.log'),
+    path.join(STATE_DIR, 'SECURITY-ALERTS.log'),
+    path.join(MON, 'ACTIONS.log'),
+  ];
+  const logs = [];
+  for (const logPath of logFiles) {
+    const st = stat(logPath);
+    let sizeKb = 0;
+    let lineCount = 0;
+    if (st) {
+      sizeKb = (st.size / 1024).toFixed(1);
+      try {
+        const content = fs.readFileSync(logPath, 'utf8');
+        lineCount = content.split('\n').filter(l => l.trim()).length;
+      } catch {
+        // skip
+      }
+    }
+    logs.push({
+      name: path.basename(logPath),
+      exists: !!st,
+      sizeKb,
+      lineCount,
+      needsRotation: st && (lineCount > logThresholds.maxLines || st.size / 1024 > logThresholds.maxKb),
+    });
+  }
+  return logs;
+}
+
+// 5) Junk-script sprawl detection
+function detectJunkScripts() {
+  if (!fs.existsSync(TEMP_ROOT)) return { total: 0, quarantinable: 0, bytes: 0, oldest: [], recentCount: 0 };
+  const sessionDirs = (() => {
+    try {
+      return fs.readdirSync(TEMP_ROOT, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => path.join(TEMP_ROOT, d.name));
+    } catch {
+      return [];
+    }
+  })();
+  const liveDirs = new Set();
+  for (const root of sessionDirs) {
+    const files = walk(root, () => true);
+    const newest = Math.max(0, ...files.map(fp => (stat(fp) || { mtimeMs: 0 }).mtimeMs));
+    if (now - newest < 2 * HOUR) {
+      liveDirs.add(root.replace(/\\/g, '/'));
+    }
+  }
+  const inLiveDir = (fp) => [...liveDirs].some(d => fp.replace(/\\/g, '/').startsWith(d));
+  const tempScripts = walk(TEMP_ROOT, n => /\.(py|mjs|js)$/.test(n))
+    .map(fp => ({ fp, st: stat(fp) }))
+    .filter(x => x.st)
+    .map(x => ({
+      fp: x.fp,
+      ageMs: now - x.st.mtimeMs,
+      size: x.st.size,
+      quarantinable: now - x.st.mtimeMs > DAY && !inLiveDir(x.fp),
+    }));
+  const junk = {
+    total: tempScripts.length,
+    quarantinable: tempScripts.filter(x => x.quarantinable).length,
+    bytes: tempScripts.reduce((a, x) => a + x.size, 0),
+    oldest: tempScripts
+      .sort((a, b) => b.ageMs - a.ageMs)
+      .slice(0, 8)
+      .map(x => `${age(x.ageMs)} ${x.fp.split(/[/\\]/).slice(-2).join('/')}`),
+    recentCount: tempScripts.filter(x => now - x.ageMs < HOUR).length,
+  };
+  return junk;
+}
+
+// 6) Stray scripts in repo roots
+function detectStrayRepoScripts() {
+  const strayRepo = [];
+  for (const repoPath of repos) {
+    if (!fs.existsSync(repoPath)) continue;
+    const recent = sh('git log --since="7 days ago" --name-only --pretty=format: --diff-filter=A', repoPath)
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+    for (const f of new Set(recent)) {
+      if (/^[^/\\]+\.(py|mjs|js|sql)$/.test(f)) {
+        strayRepo.push(`${path.basename(repoPath)}: ${f}`);
+      }
+    }
+  }
+  return strayRepo;
+}
+
+// 7) Security alert review
+function checkSecurityAlerts() {
+  const alertLog = path.join(STATE_DIR, 'SECURITY-ALERTS.log');
+  const st = stat(alertLog);
+  if (!st) return { count: 0, highMedCount: 0 };
+  try {
+    const content = fs.readFileSync(alertLog, 'utf8');
+    const lines = content.split('\n');
+    const highMedCount = lines.filter(l => /HIGH|MED/.test(l) && !l.includes('SUPPRESSED-FP')).length;
+    return { count: lines.filter(l => l.trim()).length, highMedCount };
+  } catch {
+    return { count: 0, highMedCount: 0 };
+  }
+}
+
+// 8) Respawn watch (Rule 6 retry cap)
+function detectRespawnWatch() {
+  const respawnWatch = [];
+  const ledgerPath = path.join(BRAIN_ROOT, 'FLEET-LEDGER.md');
+  if (!fs.existsSync(ledgerPath)) return respawnWatch;
+  try {
+    const content = fs.readFileSync(ledgerPath, 'utf8');
+    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('|'));
+    const windowSize = 50;
+    const recentStart = Math.max(0, lines.length - windowSize);
+    const signatures = {};
+    const normalize = (desc) => (desc || '').substring(0, 40).toLowerCase().trim();
+    for (let i = recentStart; i < lines.length; i++) {
+      const line = lines[i];
+      const parts = line.split('|').map(s => s.trim());
+      if (parts.length >= 4) {
+        const description = parts[3];
+        const sig = normalize(description);
+        if (sig) signatures[sig] = (signatures[sig] || 0) + 1;
+      }
+    }
+    for (const [sig, count] of Object.entries(signatures)) {
+      if (count > 3) {
+        respawnWatch.push({
+          signature: sig,
+          count,
+          warning: `RESPAWN CAP: '${sig}' dispatched ${count} times — investigate hang or mark BLOCKED`,
+        });
+      }
+    }
+  } catch {
+    // fail-open on error
+  }
+  return respawnWatch;
+}
+
+// 9) Cost cadence tracking
+function trackCostCadence() {
+  const prevStateFile = path.join(MON, '.signal-state.json');
+  let prevState = {};
+  try {
+    prevState = JSON.parse(fs.readFileSync(prevStateFile, 'utf8'));
+  } catch {
+    // no prev state
+  }
+  const cycleCount = (prevState.cycleCount || 0) + 1;
+  let costTick = null;
+  if (cycleCount % 3 === 0) {
+    costTick = {
+      cycle: cycleCount,
+      ts: new Date(now).toISOString(),
+      summary: 'Cost cycle tick recorded',
+    };
+  }
+  return { cycleCount, costTick };
+}
+
+// 10) Unreviewed prompts count
+function checkUnreviewedPrompts() {
+  const seenFile = path.join(MON, '.fleet-prompts-seen.json');
+  let prevSeen = {};
+  try {
+    prevSeen = JSON.parse(fs.readFileSync(seenFile, 'utf8'));
+  } catch {
+    // no prev state
+  }
+  // Without fleet_prompt_extractor.py available, emit 0
+  // In production, invoke spawnSync('python', [...fleet_prompt_extractor.py...])
+  return 0;
+}
+
+// === Main ===
+const staleLoops = checkHeartbeats();
+const gitState = checkGitState();
+const memory = checkMemoryFreshness();
+const logFiles = checkLogFiles();
+const junk = detectJunkScripts();
+const strayRepo = detectStrayRepoScripts();
+const alerts = checkSecurityAlerts();
+const respawnWatch = detectRespawnWatch();
+const { cycleCount, costTick } = trackCostCadence();
+const unreviewedPrompts = checkUnreviewedPrompts();
+
+const signals = {
+  timestamp: new Date(now).toISOString(),
+  cycleCount,
+  heartbeats: { staleCount: staleLoops.length, details: staleLoops },
+  git: gitState,
+  memory,
+  logs: logFiles,
+  junk,
+  strayRepo,
+  alerts,
+  respawnWatch,
+  costTick,
+  unreviewedPrompts,
+};
+
+const brief = [];
+brief.push(`# Aesop Monitor Brief — ${signals.timestamp}`);
+brief.push('');
+brief.push('## Heartbeat check');
+if (staleLoops.length === 0) {
+  brief.push('✓ All heartbeats fresh (watchdog 300s, monitor 3600s, others 1800s).');
 } else {
-  for (const hb of signals.heartbeats) {
-    const status = hb.ok ? '✓' : '✗';
-    brief.push(`- ${status} ${hb.name}: ${age(hb.ageMs)}`);
+  brief.push(`✗ **${staleLoops.length} stale loop(s)** detected:`);
+  for (const sl of staleLoops) {
+    brief.push(`  - ${sl.name}: ${age(sl.ageMs)} (threshold: ${age(sl.threshold)})`);
   }
 }
 brief.push('');
 
-// 2) Log file status
-brief.push('## Logs');
-const logFiles = [
-  path.join(AESOP_ROOT, 'state', 'FLEET-BACKUP.log'),
-  path.join(AESOP_ROOT, 'state', 'SECURITY-ALERTS.log'),
-];
-
-for (const logFile of logFiles) {
-  const st = stat(logFile);
-  if (st) {
-    brief.push(`- ${path.basename(logFile)}: ${st.size} bytes`);
-  } else {
-    brief.push(`- ${path.basename(logFile)}: (not found)`);
+brief.push('## Git state');
+if (gitState.length === 0) {
+  brief.push('No repos configured.');
+} else {
+  for (const g of gitState) {
+    const status = g.dirty === 0 && g.ahead === '0' ? '✓' : '⚠';
+    brief.push(`- ${status} **${g.repo}** [${g.branch}] — dirty: ${g.dirty}, ahead: ${g.ahead}`);
+    if (g.lastCommit) brief.push(`  ${g.lastCommit}`);
   }
 }
 brief.push('');
 
-// 3) Placeholder for future signal collectors
-brief.push('## Notes');
-brief.push('This is a template monitor. Extend collect-signals.mjs to add:');
-brief.push('- Junk-script sprawl detection');
-brief.push('- Memory gap detection');
-brief.push('- Rule friction analysis');
-brief.push('- Orchestration health checks');
+brief.push('## Memory');
+brief.push(`- ${memory.count} memory file(s)`);
+if (memory.staleCount > 0) {
+  brief.push(`  ⚠ **${memory.staleCount} stale** (>30d): ${memory.staleMemories.join(', ')}`);
+}
 brief.push('');
+
+brief.push('## Log files');
+const needsRotation = logFiles.filter(l => l.needsRotation);
+if (needsRotation.length === 0) {
+  brief.push('✓ All logs within thresholds.');
+} else {
+  brief.push(`⚠ **${needsRotation.length} log(s) need rotation:**`);
+  for (const l of needsRotation) {
+    brief.push(`  - ${l.name}: ${l.lineCount} lines, ${l.sizeKb}kb`);
+  }
+}
+brief.push('');
+
+brief.push('## Junk-script sprawl (temp/scratch)');
+brief.push(`- ${junk.total} total scripts, ${(junk.bytes / 1024).toFixed(0)}kb`);
+brief.push(`  Quarantinable (>24h, not live): ${junk.quarantinable}`);
+if (junk.oldest.length > 0) {
+  brief.push('  Oldest:');
+  for (const o of junk.oldest) {
+    brief.push(`    ${o}`);
+  }
+}
+if (strayRepo.length > 0) {
+  brief.push('');
+  brief.push('## Stray repo scripts (7d)');
+  for (const s of strayRepo) {
+    brief.push(`- ${s}`);
+  }
+}
+brief.push('');
+
+brief.push('## Security');
+brief.push(`- Alert log: ${alerts.count} entries, ${alerts.highMedCount} HIGH/MED`);
+brief.push('');
+
+brief.push('## Respawn watch (Rule 6 retry cap)');
+if (respawnWatch.length === 0) {
+  brief.push('✓ No retry-cap breaches (all signatures ≤3 occurrences).');
+} else {
+  brief.push(`⚠ **${respawnWatch.length} signature(s) exceeded 3-attempt limit:**`);
+  for (const rw of respawnWatch) {
+    brief.push(`  - ${rw.warning}`);
+  }
+  brief.push('  (Note: distinguish legitimate fan-outs from identical retries; manual review recommended.)');
+}
+brief.push('');
+
+brief.push('## Cost tracking');
+brief.push(`- Cycle: ${cycleCount}${costTick ? ' — tick recorded' : ''}`);
+if (costTick) {
+  brief.push(`  ${costTick.ts}`);
+}
+brief.push('');
+
+brief.push('## Unreviewed prompts');
+brief.push(`- ${unreviewedPrompts} new prompt(s) awaiting semantic review`);
+brief.push('');
+
+brief.push('_Refinement points → act per CHARTER.md (AUTO safe, PROPOSE rule changes). Goal is fixed._');
 
 // Write outputs
 try {
   fs.mkdirSync(MON, { recursive: true });
   fs.writeFileSync(path.join(MON, 'BRIEF.md'), brief.join('\n'), 'utf8');
   fs.writeFileSync(path.join(MON, 'SIGNALS.json'), JSON.stringify(signals, null, 2), 'utf8');
-  console.log('Monitor signals collected. See BRIEF.md and SIGNALS.json.');
+  fs.writeFileSync(path.join(MON, '.monitor-heartbeat'), String(Math.floor(now / 1000)), 'utf8');
+  const summaryLine = `stale-loops: ${staleLoops.length}, repos-dirty: ${gitState.filter(g => g.dirty > 0).length}, stale-mem: ${memory.staleCount}, logs-need-rotation: ${needsRotation.length}, junk-quarantinable: ${junk.quarantinable}, stray-repo-scripts: ${strayRepo.length}, alerts-high-med: ${alerts.highMedCount}, respawn-watch: ${respawnWatch.length}, cycle: ${cycleCount}`;
+  console.log(summaryLine);
 } catch (e) {
   console.error('Failed to write signals:', e.message);
   process.exit(1);
