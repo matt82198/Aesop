@@ -4,6 +4,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execSync, spawnSync } from 'node:child_process';
 
 // === Configuration ===
@@ -11,7 +12,7 @@ import { execSync, spawnSync } from 'node:child_process';
 const AESOP_ROOT = process.env.AESOP_ROOT || '.';
 const BRAIN_ROOT = process.env.BRAIN_ROOT || path.join(AESOP_ROOT, '..', '.claude');
 const SCRIPTS_ROOT = process.env.SCRIPTS_ROOT || path.join(AESOP_ROOT, '..', 'scripts');
-const TEMP_ROOT = process.env.TEMP_ROOT || path.join(AESOP_ROOT, '..', 'AppData', 'Local', 'Temp', 'claude');
+const TEMP_ROOT = process.env.TEMP_ROOT || path.join(os.tmpdir(), 'claude');
 const MON = path.join(AESOP_ROOT, 'monitor');
 const STATE_DIR = path.join(AESOP_ROOT, 'state');
 
@@ -350,6 +351,52 @@ function checkUnreviewedPrompts() {
   return 0;
 }
 
+// === Proposal Emission ===
+// Append PROPOSE-tier signals to monitor/PROPOSALS.md (idempotent per signal key)
+function emitProposal(signalKey, problem, suggestedChange) {
+  const proposalsPath = path.join(MON, 'PROPOSALS.md');
+  const timestamp = new Date(now).toISOString();
+
+  // Read existing proposals to check for duplicate
+  let existingContent = '';
+  try {
+    existingContent = fs.readFileSync(proposalsPath, 'utf8');
+  } catch {
+    // File doesn't exist yet; start fresh
+    if (!fs.existsSync(MON)) {
+      fs.mkdirSync(MON, { recursive: true });
+    }
+  }
+
+  // Check if this signal key already has an entry (idempotency check)
+  if (existingContent.includes(`**Signal:** ${signalKey}`)) {
+    // Entry already exists; skip to avoid duplicates
+    return;
+  }
+
+  // Append new proposal entry
+  const proposal = `
+## ${signalKey} — ${timestamp}
+
+**Signal:** ${signalKey}
+
+**Problem:**
+${problem}
+
+**Suggested change:**
+${suggestedChange}
+
+---
+`;
+
+  try {
+    fs.appendFileSync(proposalsPath, proposal, 'utf8');
+  } catch (e) {
+    // Fail-open: log to BRIEF instead of crashing
+    console.error(`Failed to write PROPOSALS.md: ${e.message}`);
+  }
+}
+
 // === Main ===
 const staleLoops = checkHeartbeats();
 const gitState = checkGitState();
@@ -469,12 +516,47 @@ brief.push('');
 
 brief.push('_Refinement points → act per CHARTER.md (AUTO safe, PROPOSE rule changes). Goal is fixed._');
 
+// === Emit PROPOSE-tier proposals ===
+// Only emit for signals that warrant user review per CHARTER.md action tiers
+if (respawnWatch.length > 0) {
+  emitProposal(
+    'respawn-watch-breach',
+    `Rule 6 retry cap breached: ${respawnWatch.length} agent signature(s) appeared >3 times in recent spawn history. This indicates either an intentional parallel fan-out or a hung-agent loop.`,
+    `Review FLEET-LEDGER.md to distinguish legitimate concurrent spawns from identical retries. If retries are unintentional, investigate root cause and add guardrails to prevent re-dispatch. Consider updating monitoring thresholds or retry strategy.`
+  );
+}
+
+if (strayRepo.length > 0) {
+  emitProposal(
+    'stray-repo-scripts',
+    `${strayRepo.length} script file(s) committed to repo root in past 7 days: ${strayRepo.join(', ')}. Scripts should live in dedicated src/ or scripts/ paths, not repo root.`,
+    `Move stray scripts to proper paths per project discipline. Update CONTRIBUTING.md if repo structure is ambiguous. Add pre-commit hook or CI check to enforce.`
+  );
+}
+
+if (alerts.highMedCount > 0) {
+  emitProposal(
+    'security-alerts-high-med',
+    `${alerts.highMedCount} HIGH/MED security alert(s) in SECURITY-ALERTS.log. These may indicate real vulnerabilities, credential exposure, or false positives requiring review.`,
+    `Review each HIGH/MED entry in SECURITY-ALERTS.log. Distinguish real issues (fix immediately) from false positives (mark SUPPRESSED-FP). Update scanning rules if needed to reduce noise.`
+  );
+}
+
+if (memory.staleCount > 0) {
+  emitProposal(
+    'stale-memory-files',
+    `${memory.staleCount} memory file(s) older than 30 days: ${memory.staleMemories.join(', ')}. Stale memory may indicate obsolete project context or abandoned projects.`,
+    `Review stale memory files in keeper. Consolidate, archive, or delete per project lifecycle. Update memory refresh schedule if projects are active but infrequently updated.`
+  );
+}
+
 // Write outputs
 try {
   fs.mkdirSync(MON, { recursive: true });
   fs.writeFileSync(path.join(MON, 'BRIEF.md'), brief.join('\n'), 'utf8');
   fs.writeFileSync(path.join(MON, 'SIGNALS.json'), JSON.stringify(signals, null, 2), 'utf8');
   fs.writeFileSync(path.join(MON, '.monitor-heartbeat'), String(Math.floor(now / 1000)), 'utf8');
+  fs.writeFileSync(path.join(MON, '.signal-state.json'), JSON.stringify({ cycleCount }, null, 2), 'utf8');
   const summaryLine = `stale-loops: ${staleLoops.length}, repos-dirty: ${gitState.filter(g => g.dirty > 0).length}, stale-mem: ${memory.staleCount}, logs-need-rotation: ${needsRotation.length}, junk-quarantinable: ${junk.quarantinable}, stray-repo-scripts: ${strayRepo.length}, alerts-high-med: ${alerts.highMedCount}, respawn-watch: ${respawnWatch.length}, cycle: ${cycleCount}`;
   console.log(summaryLine);
 } catch (e) {
