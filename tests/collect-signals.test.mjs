@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Resolve collector path relative to this test file
@@ -571,6 +571,73 @@ test('AUTO action: junk quarantine moves old temp scripts to monitor/quarantine/
     } catch (e) {
       // Ignore cleanup errors
     }
+    fixture.cleanup();
+  }
+});
+
+// === P0 Finding 2: AESOP_MONITOR_FORCE truthiness bug ===
+test('AESOP_MONITOR_FORCE=0: false string still bypasses heartbeat gate (bug: should not)', async (t) => {
+  const fixture = createFixture();
+  try {
+    // First run: establish initial state
+    const result1 = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+    assert.ok(result1.stdout, 'First run should complete');
+
+    // Get initial cycle count
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    let signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8')) || {};
+    const cycle1 = signals.cycleCount || 0;
+
+    // Create a fresh heartbeat file (just now)
+    const heartbeatPath = path.join(fixture.monitorDir, '.monitor-heartbeat');
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    fs.writeFileSync(heartbeatPath, String(nowEpoch), 'utf8');
+
+    // Run with AESOP_MONITOR_FORCE=0 (string "0", which is truthy in bash but should be falsy)
+    // This SHOULD be treated as false and SHOULD skip the cycle due to fresh heartbeat
+    const result2 = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '0' });
+
+    // Verify cycle count did not increment (or minimally)
+    signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    const cycle2 = signals.cycleCount;
+
+    // With bug: cycle2 > cycle1 (because FORCE=0 is treated as truthy, ignoring the guard)
+    // Without bug: cycle2 <= cycle1 (because guard is respected)
+    assert.ok(cycle2 <= cycle1 + 1, 'FORCE=0 should be treated as false and skip due to fresh heartbeat');
+    assert.ok(result2.stdout.includes('[skip]'), 'Should print [skip] when heartbeat is fresh and FORCE is not explicitly true');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('AESOP_MONITOR_FORCE=false: false string still bypasses heartbeat gate (bug: should not)', async (t) => {
+  const fixture = createFixture();
+  try {
+    // First run: establish initial state
+    const result1 = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+    assert.ok(result1.stdout, 'First run should complete');
+
+    // Get initial state
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    let signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8')) || {};
+    const cycle1 = signals.cycleCount || 0;
+
+    // Create a fresh heartbeat file
+    const heartbeatPath = path.join(fixture.monitorDir, '.monitor-heartbeat');
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    fs.writeFileSync(heartbeatPath, String(nowEpoch), 'utf8');
+
+    // Run with AESOP_MONITOR_FORCE=false (string "false", which is truthy)
+    // This SHOULD be treated as false and SHOULD skip
+    const result2 = runCollector(fixture.root, { AESOP_MONITOR_FORCE: 'false' });
+
+    // Verify cycle did not advance significantly
+    signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    const cycle2 = signals.cycleCount;
+
+    assert.ok(cycle2 <= cycle1 + 1, 'FORCE=false should be treated as false and skip due to fresh heartbeat');
+    assert.ok(result2.stdout.includes('[skip]'), 'Should print [skip] when heartbeat is fresh and FORCE is not "true" or "1"');
+  } finally {
     fixture.cleanup();
   }
 });

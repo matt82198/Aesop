@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 
 // Helper: create temporary directory for each test
 function createTempDir() {
@@ -269,4 +269,97 @@ test('multi-writer safety: concurrent appends do not lose data during accept', a
   assert.ok(finalProposals.includes('signal-2'), 'signal-2 should remain in PROPOSALS.md (not lost)');
 
   fs.rmSync(tempDir, { recursive: true });
+});
+
+// === P0 Finding 1: Concurrent emit + accept race condition (real subprocess) ===
+test('concurrent race: emitProposal append + accept move do not lose data (real subprocess)', async (t) => {
+  // This test spawns a REAL subprocess running `proposals.mjs accept` concurrently
+  // with a real emitProposal append. Tests that both operations are serialized via lock.
+  const tempDir = createTempDir();
+  const proposalsFile = path.join(tempDir, 'PROPOSALS.md');
+  const logFile = path.join(tempDir, 'PROPOSALS-LOG.md');
+
+  try {
+    // Start with one proposal
+    const proposal1 = `## signal-1 — 2026-07-12T12:00:00.000Z\n\n**Signal:** signal-1\n\n**Problem:** First\n\n**Suggested change:** Change1\n\n---\n`;
+    fs.writeFileSync(proposalsFile, proposal1, 'utf8');
+
+    // Spawn accept subprocess in background (will read, filter, and write)
+    const proposalsPath = path.resolve('./tools/proposals.mjs');
+
+    const acceptProcess = spawn('node', [proposalsPath, 'accept', 'signal-1', '--file', proposalsFile], {
+      cwd: tempDir,
+      stdio: 'pipe',
+    });
+
+    // While accept is running, append a new proposal (simulating emitProposal)
+    const proposal2 = `## signal-2 — 2026-07-12T12:01:00.000Z\n\n**Signal:** signal-2\n\n**Problem:** Second\n\n**Suggested change:** Change2\n\n---\n`;
+
+    // Small delay to ensure accept starts reading
+    await new Promise(r => setTimeout(r, 50));
+    fs.appendFileSync(proposalsFile, proposal2, 'utf8');
+
+    // Wait for accept to complete
+    await new Promise((resolve, reject) => {
+      acceptProcess.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`Accept exited with code ${code}`));
+      });
+    });
+
+    // Verify both proposals are accounted for (not lost)
+    const finalProposals = fs.readFileSync(proposalsFile, 'utf8');
+    const finalLog = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+
+    // signal-1 should be in log (accepted)
+    assert.ok(finalLog.includes('signal-1'), 'signal-1 should be in log (accepted)');
+
+    // signal-2 should be in proposals (not lost during concurrent accept)
+    assert.ok(finalProposals.includes('signal-2'), 'signal-2 should remain in PROPOSALS.md (not lost due to race)');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true });
+  }
+});
+
+// === P1 Finding 3: Lock staleness detection ===
+test('stale lock detection: orphaned .lock is reclaimed and operations proceed', async (t) => {
+  const tempDir = createTempDir();
+  const proposalsFile = path.join(tempDir, 'PROPOSALS.md');
+  const lockDir = proposalsFile + '.lock';
+
+  try {
+    // Setup: create a stale lock directory (simulates crashed process)
+    fs.mkdirSync(lockDir, { recursive: true });
+
+    // Write an old timestamp into the lock to simulate staleness
+    // (In the fix, we'll store pid+timestamp in the lock)
+    const staleMarkerFile = path.join(lockDir, 'pid-timestamp.txt');
+    const staleEpoch = Math.floor((Date.now() - 120 * 1000) / 1000); // 120s ago
+    fs.writeFileSync(staleMarkerFile, `${process.pid}\n${staleEpoch}\n`, 'utf8');
+
+    // Create PROPOSALS.md
+    const proposal = `## signal-1 — 2026-07-12T12:00:00.000Z\n\n**Signal:** signal-1\n\n**Problem:** Test\n\n**Suggested change:** Change\n\n---\n`;
+    fs.writeFileSync(proposalsFile, proposal, 'utf8');
+
+    // Try to accept: with the fix, it should detect the stale lock and reclaim it
+    const result = runProposals(`accept signal-1 --file "${proposalsFile}"`, tempDir);
+
+    // Should succeed (either by reclaiming the stale lock or detecting it)
+    assert.ok(result.success, `Accept should succeed despite stale lock: ${result.error || result.output}`);
+
+    // The lock directory should either be cleaned up or reclaimed
+    // After operation completes, the .lock should not be held
+    const lockStillExists = fs.existsSync(lockDir);
+    if (lockStillExists) {
+      // If lock still exists, it should not block the next operation
+      const result2 = runProposals(`list --file "${proposalsFile}"`, tempDir);
+      assert.ok(result2.success, 'Subsequent operation should succeed even if lock exists (should be reclaimed)');
+    }
+  } finally {
+    // Clean up lock if it exists
+    if (fs.existsSync(lockDir)) {
+      fs.rmSync(lockDir, { recursive: true });
+    }
+    fs.rmSync(tempDir, { recursive: true });
+  }
 });

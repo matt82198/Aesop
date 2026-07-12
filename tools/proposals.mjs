@@ -18,17 +18,53 @@ import path from 'node:path';
 // Use atomic mkdir to create a lock directory; this is atomic across all platforms.
 function acquireLock(proposalsFile) {
   const lockDir = proposalsFile + '.lock';
+  const lockMarkerFile = path.join(lockDir, 'pid-timestamp.txt');
   const maxAttempts = 50;
   let attempt = 0;
+  const STALE_LOCK_THRESHOLD = 60e3; // 60 seconds
 
   while (attempt < maxAttempts) {
     try {
       fs.mkdirSync(lockDir, { exclusive: true });
+      // Lock acquired; write pid+timestamp for staleness detection
+      const lockMarker = `${process.pid}\n${Math.floor(Date.now() / 1000)}\n`;
+      try {
+        fs.writeFileSync(lockMarkerFile, lockMarker, 'utf8');
+      } catch {
+        // Marker write failed, but lock is held; continue
+      }
       return lockDir;
     } catch (e) {
       if (e.code === 'EEXIST') {
-        // Lock is held by another process; wait a bit and retry
-        // Simple busy-wait: yield briefly using a tight loop
+        // Lock exists; check if it's stale
+        try {
+          const markerPath = path.join(lockDir, 'pid-timestamp.txt');
+          const markerContent = fs.readFileSync(markerPath, 'utf8').trim();
+          const lines = markerContent.split('\n');
+          if (lines.length >= 2) {
+            const lockEpoch = parseInt(lines[1], 10);
+            const lockAge = Date.now() - lockEpoch * 1000;
+            if (lockAge > STALE_LOCK_THRESHOLD) {
+              // Stale lock detected; reclaim it
+              try {
+                fs.rmSync(lockDir, { recursive: true, force: true });
+                attempt++; // Retry acquisition after cleanup
+                if (attempt < maxAttempts) {
+                  const start = Date.now();
+                  while (Date.now() - start < 10) {
+                    // Busy-wait briefly
+                  }
+                }
+                continue;
+              } catch {
+                // Cleanup failed; will continue retrying or fail-open
+              }
+            }
+          }
+        } catch {
+          // Could not read marker; assume lock is active
+        }
+        // Lock is held; wait and retry
         attempt++;
         if (attempt < maxAttempts) {
           // Busy-wait for ~10ms per attempt
@@ -43,7 +79,8 @@ function acquireLock(proposalsFile) {
     }
   }
 
-  // Failed to acquire lock after retries; proceed without lock (fail-open)
+  // Failed to acquire lock after retries; warn and proceed without lock (fail-open)
+  console.error(`Warning: Could not acquire ${path.basename(proposalsFile)}.lock after ${maxAttempts * 10}ms; proceeding unlocked`);
   return null;
 }
 
