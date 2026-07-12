@@ -38,8 +38,13 @@ conductor3 FLEET-BACKUP.log:554-568.
 1. **`wave-5-close`** — land + merge the 6 remaining branches and 2 ports; full
    final-catch (npm + python + all shell suites + hook/reconstitute self-tests);
    restart web dash on merged main; collapse backlog again.
-2. **`audit-2`** — second five-lens re-audit vs the five pillars. Clean → one more;
-   findings → dispatch wave 6 branch-per-item. (2 consecutive cleans end the loop.)
+2. **`audit-2`** — second re-audit vs the five pillars, now SEVEN lenses (user,
+   2026-07-12): architect, security, bash, js, honest + **frontend engineer**
+   (runtime wiring/update model/perf of ui+dash, real-browser via playwright) +
+   **design analyst** (ui-ux-designer: hierarchy, interaction, usability). UI
+   findings/fixes always go to typed frontend specialists with playwright proof,
+   never generic Haikus. Clean → one more; findings → wave 6 branch-per-item.
+   (2 consecutive cleans end the loop.)
 3. **`release`** — version bump + tag (next beta), npm publish check, CI badge in
    README, release notes from the backlog's cleared history.
 4. **`ops-hardening` (candidates, unclaimed)** — BUILDLOG lifecycle doc; INCIDENT-LOG
