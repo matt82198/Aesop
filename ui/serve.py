@@ -58,7 +58,7 @@ WATCHDOG_HEARTBEAT = STATE_DIR / ".watchdog-heartbeat"
 MONITOR_HEARTBEAT = STATE_DIR / ".monitor-heartbeat"
 REPOS_JSON = STATE_DIR / ".watchdog-repos.json"
 BACKUP_LOG = STATE_DIR / "FLEET-BACKUP.log"
-ALERTS_LOG = SCAN_DIR / "SECURITY-ALERTS.log"
+ALERTS_LOG = STATE_DIR / "SECURITY-ALERTS.log"
 INBOX_FILE = STATE_DIR / "ui-inbox.md"
 
 
