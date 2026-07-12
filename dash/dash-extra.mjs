@@ -11,7 +11,7 @@ const AESOP_ROOT = process.env.AESOP_ROOT || path.join(process.env.HOME || '.', 
 const TRANSCRIPTS_ROOT = path.resolve(
   process.env.AESOP_TRANSCRIPTS_ROOT || path.join(process.env.HOME || '.', '.claude', 'projects')
 );
-const SCAN_DIR = path.join(AESOP_ROOT, 'scan');
+const SCAN_DIR = path.join(AESOP_ROOT, 'state');
 const ALERTS_LOG = path.join(SCAN_DIR, 'SECURITY-ALERTS.log');
 
 // ANSI colors for TUI output
