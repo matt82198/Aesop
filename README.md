@@ -42,9 +42,30 @@ Aesop ships behavior as versioned, portable, diffable filesystem artifacts in gi
 
 ## Install & Quick Start
 
-### Option 1: npm (Recommended for quick scaffolding)
+**Note:** Aesop is currently in beta. Install the prerelease version.
 
-**Note:** Aesop is currently in beta. Install the prerelease version:
+### Option 1: One command (fastest)
+
+Scaffold your fleet with a single command. No manual editing required—CLAUDE.md and aesop.config.json are pre-generated with your project info:
+
+```bash
+npx @matt82198/aesop@beta my-fleet --name "my-api" \
+  --domains "api,worker" \
+  --repos "/path/to/repo1,/path/to/repo2"
+cd my-fleet
+
+# Start the daemon
+bash daemons/run-watchdog.sh --once
+
+# Launch the dashboard
+python ui/serve.py
+```
+
+Open `http://localhost:8770` to monitor your fleet. The pre-push hook is auto-installed and enforces branch protection and secret scanning. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for details.
+
+### Option 1B: Manual setup (customize before scaffold)
+
+Scaffold the template first, then edit the config:
 
 ```bash
 # Create a new aesop fleet directory
@@ -62,10 +83,6 @@ bash daemons/run-watchdog.sh --once
 # Launch the dashboard
 python ui/serve.py
 ```
-
-Open `http://localhost:8770` to monitor your fleet.
-
-**Pre-push hook active by default:** The scaffold automatically installs the pre-push policy hook into `.git/hooks/pre-push`. It enforces branch protection (no direct pushes to main/master) and secret scanning. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for details and customization.
 
 Alternatively, install globally:
 ```bash
