@@ -976,7 +976,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .backlog-item-glyph { min-width: 14px; font-size: 12px; }
         .backlog-item-tag { color: #8ac; font-weight: bold; min-width: 60px; }
         .backlog-item-title { color: #999; flex: 1; word-break: break-word; }
-        .backlog-item.done .backlog-item-title { opacity: 0.6; }
+        .backlog-item.done { padding: 2px 0; opacity: 0.55; }
+        .backlog-item.done .backlog-item-title { opacity: 0.55; font-size: 10px; }
 
         .loading { color: #666; font-style: italic; }
         .error { color: #f44; }
@@ -1021,21 +1022,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             </div>
         </div>
 
-        <div class="inbox-box">
-            <div class="inbox-label">Queue Work (Read by Orchestrator Each Turn)</div>
-            <input type="text" class="inbox-input" id="inbox-input" placeholder="Type your task here...">
-            <button class="inbox-button" id="inbox-button">Send to Inbox</button>
-            <div class="inbox-status" id="inbox-status">Queued ✓</div>
-        </div>
-
-        <div class="panel" style="margin-bottom: 20px;">
-            <div class="panel-title">
-                <span class="panel-title-emoji">📋</span>
-                <span>Audit Backlog — Clearing Progress</span>
-            </div>
-            <div id="backlog-tiers" class="loading">—</div>
-        </div>
-
         <div class="grid">
             <div class="panel">
                 <div class="panel-title">
@@ -1049,6 +1035,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 <div class="panel-title">Repos Status</div>
                 <div id="repos-list" class="loading">—</div>
             </div>
+        </div>
+
+        <div class="inbox-box">
+            <div class="inbox-label">Queue Work (Read by Orchestrator Each Turn)</div>
+            <input type="text" class="inbox-input" id="inbox-input" placeholder="Type your task here...">
+            <button class="inbox-button" id="inbox-button">Send to Inbox</button>
+            <div class="inbox-status" id="inbox-status">Queued ✓</div>
+        </div>
+
+        <div class="panel" style="margin-bottom: 20px;">
+            <div class="panel-title">
+                <span class="panel-title-emoji">📋</span>
+                <span>Audit Backlog — Clearing Progress</span>
+            </div>
+            <div id="backlog-tiers" class="loading">—</div>
         </div>
 
         <div class="grid">
