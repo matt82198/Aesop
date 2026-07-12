@@ -17,6 +17,9 @@ mkdir -p "$TEST_ROOT"
 # sourcing it here only defines functions and never executes main()
 # or reads from stdin.
 source "$HOOK_SCRIPT"
+printf 'DEBUG: source exit=%s bash=%s hookscript=%s\n' "$?" "$BASH_VERSION" "$HOOK_SCRIPT" >&2
+printf 'DEBUG: type log_block=%s check_branch_policy=%s\n' "$(type -t log_block 2>&1 || true)" "$(type -t check_branch_policy 2>&1 || true)" >&2
+declare -F >&2
 
 test_passed=0
 test_failed=0
