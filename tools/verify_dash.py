@@ -167,6 +167,22 @@ def main():
             except Exception as e:
                 failures.append(f"(b3) alerts panel alarm styling not applied: {e}")
 
+            # (b4) affordances: stronger expand-toggle + responsive header wrap (no horizontal overflow when narrow)
+            try:
+                page.wait_for_selector(".agent-row", timeout=8000)
+                toggle_size = page.evaluate(
+                    "parseFloat(getComputedStyle(document.querySelector('.agent-expand-toggle')).fontSize)")
+                assert toggle_size >= 13, f"expand toggle should be a stronger affordance (>=13px), got {toggle_size}px"
+                # narrow the viewport: header must wrap, body must not scroll horizontally
+                page.set_viewport_size({"width": 600, "height": 800})
+                page.wait_for_timeout(200)
+                overflow = page.evaluate(
+                    "document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                assert overflow <= 2, f"body overflows horizontally at 600px (header not wrapping): {overflow}px"
+                page.set_viewport_size({"width": 1280, "height": 900})
+            except Exception as e:
+                failures.append(f"(b4) affordance/responsive-header check failed: {e}")
+
             # (c) click agent row -> expands with the real dispatch prompt
             try:
                 page.wait_for_selector(".agent-row", timeout=8000)
