@@ -169,7 +169,7 @@ def main():
                 
                 # Get height and opacity of done item vs active item
                 done_item_styles = page.evaluate("""
-                    {
+                    (() => {
                         const done = document.querySelector('.backlog-item.done');
                         const cs = window.getComputedStyle(done);
                         return {
@@ -177,11 +177,11 @@ def main():
                             opacity: cs.opacity,
                             padding: cs.padding
                         };
-                    }
+                    })()
                 """)
                 
                 active_item_styles = page.evaluate("""
-                    {
+                    (() => {
                         const active = Array.from(document.querySelectorAll('.backlog-item'))
                             .find(el => !el.classList.contains('done'));
                         if (!active) return {height: 0, opacity: '1', padding: '0px'};
@@ -191,7 +191,7 @@ def main():
                             opacity: cs.opacity,
                             padding: cs.padding
                         };
-                    }
+                    })()
                 """)
                 
                 # Done items should be more compact (lower height, lower opacity)

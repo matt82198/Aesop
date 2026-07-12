@@ -1031,9 +1031,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 <div id="agents-list" class="loading">—</div>
             </div>
 
-            <div class="panel">
-                <div class="panel-title">Repos Status</div>
-                <div id="repos-list" class="loading">—</div>
+            <div class="alerts-box">
+                <div class="panel-title">Security Alerts (Unreviewed)</div>
+                <div id="alerts-list" class="alert-none">—</div>
             </div>
         </div>
 
@@ -1058,9 +1058,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 <div id="events-list" class="loading">—</div>
             </div>
 
-            <div class="alerts-box">
-                <div class="panel-title">Security Alerts (Unreviewed)</div>
-                <div id="alerts-list" class="alert-none">—</div>
+            <div class="panel">
+                <div class="panel-title">Repos Status</div>
+                <div id="repos-list" class="loading">—</div>
             </div>
         </div>
 
