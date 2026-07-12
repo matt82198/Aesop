@@ -571,6 +571,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_data()
         elif self.path == "/api/backlog":
             self.serve_backlog()
+        elif self.path == "/api/agents":
+            self.serve_agents()
         elif self.path.startswith("/agent?"):
             self.serve_agent()
         else:
@@ -823,53 +825,84 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 const runningAgents = (data.agents || []).filter(a => a.status === 'running').length;
                 document.getElementById('running-count').textContent = runningAgents;
 
-                // Agents with expandable details
+                // Agents with expandable details — incremental DOM updates to preserve state & interaction
                 const agentsList = document.getElementById('agents-list');
                 document.getElementById('running-agents-count').textContent = (data.agents || []).length;
+
                 if (data.agents && data.agents.length > 0) {
-                    agentsList.innerHTML = data.agents.map(a => {
+                    // Track which agents exist in new data
+                    const newAgentIds = new Set(data.agents.map(a => a.id));
+
+                    // Remove agents that are no longer active
+                    agentsList.querySelectorAll('[data-agent-id]').forEach(row => {
+                        if (!newAgentIds.has(row.dataset.agentId)) {
+                            row.remove();
+                        }
+                    });
+
+                    // Update or add agents
+                    data.agents.forEach((a, index) => {
                         const statusEmoji = a.status === 'running' ? '🟢' : a.status === 'done' ? '⚪' : '⚠️';
-                        const preview = (a.hint || '').substring(0, 60).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                        return `<div class="agent-row fade-in" data-agent-id="${sanitize(a.id)}">
-                            <span class="agent-status-icon">${statusEmoji}</span>
-                            <div class="agent-row-header">
-                                <span class="agent-id-badge">${sanitize(a.id)}</span>
-                                <span class="agent-age">${a.age_s}s</span>
-                                <span class="agent-preview">${preview}</span>
-                            </div>
-                            <span class="agent-expand-toggle">▶</span>
-                            <div class="agent-details" style="display: none;"></div>
-                        </div>`;
-                    }).join('');
-                    // Attach click handlers for expansion
-                    document.querySelectorAll('.agent-row').forEach(row => {
-                        row.addEventListener('click', async function(e) {
-                            e.stopPropagation();
-                            const agentId = this.dataset.agentId;
-                            this.classList.toggle('expanded');
-                            const detailsDiv = this.querySelector('.agent-details');
-                            if (this.classList.contains('expanded') && !detailsDiv.innerHTML) {
-                                // Fetch details on first expand
-                                try {
-                                    const resp = await fetch('/agent?id=' + encodeURIComponent(agentId));
-                                    const details = await resp.json();
-                                    if (details.error) {
-                                        detailsDiv.innerHTML = `<div class="detail-row"><span class="detail-label">Error:</span> <span class="detail-value">${sanitize(details.error)}</span></div>`;
-                                    } else {
-                                        const uptime = Math.floor((Date.now() / 1000 - details.last_activity) / 60);
-                                        detailsDiv.innerHTML = `
-                                            <div class="detail-row"><span class="detail-label">Dispatcher:</span> <span class="detail-value">${sanitize(details.dispatcher)}</span></div>
-                                            <div class="detail-row"><span class="detail-label">Model:</span> <span class="detail-value">${sanitize(details.model)}</span></div>
-                                            <div class="detail-row"><span class="detail-label">Messages:</span> <span class="detail-value">${details.message_count}</span></div>
-                                            <div class="detail-row"><span class="detail-label">Prompt:</span></div>
-                                            <div class="dispatch-prompt">${sanitize(details.dispatch_prompt)}</div>
-                                        `;
+                        const preview = (a.hint || '').substring(0, 60);
+
+                        let row = agentsList.querySelector(`[data-agent-id="${a.id}"]`);
+
+                        if (row) {
+                            // Update existing row in place
+                            row.querySelector('.agent-status-icon').textContent = statusEmoji;
+                            row.querySelector('.agent-age').textContent = a.age_s + 's';
+                            row.querySelector('.agent-preview').textContent = preview;
+                        } else {
+                            // Create new row
+                            row = document.createElement('div');
+                            row.className = 'agent-row fade-in';
+                            row.dataset.agentId = a.id;
+                            row.innerHTML = `
+                                <span class="agent-status-icon">${statusEmoji}</span>
+                                <div class="agent-row-header">
+                                    <span class="agent-id-badge">${sanitize(a.id)}</span>
+                                    <span class="agent-age">${a.age_s}s</span>
+                                    <span class="agent-preview">${sanitize(preview)}</span>
+                                </div>
+                                <span class="agent-expand-toggle">▶</span>
+                                <div class="agent-details" style="display: none;"></div>
+                            `;
+                            agentsList.appendChild(row);
+
+                            // Attach click handler only to new rows
+                            row.addEventListener('click', async function(e) {
+                                e.stopPropagation();
+                                const agentId = this.dataset.agentId;
+                                this.classList.toggle('expanded');
+                                const detailsDiv = this.querySelector('.agent-details');
+                                if (this.classList.contains('expanded') && !detailsDiv.innerHTML) {
+                                    // Fetch details on first expand
+                                    try {
+                                        const resp = await fetch('/api/agents');
+                                        const agents = await resp.json();
+                                        const agent = agents.find(x => x.id === agentId);
+                                        if (agent) {
+                                            const now = Date.now();
+                                            const startTime = agent.startedAt ? new Date(agent.startedAt).getTime() : now;
+                                            const runtime = Math.floor((now - startTime) / 1000);
+                                            const runtimeStr = runtime < 60 ? runtime + 's' : Math.floor(runtime / 60) + 'm';
+                                            detailsDiv.innerHTML = `
+                                                <div class="detail-row"><span class="detail-label">Task:</span> <span class="detail-value">${sanitize(agent.taskLabel || 'N/A')}</span></div>
+                                                <div class="detail-row"><span class="detail-label">Status:</span> <span class="detail-value">${sanitize(agent.status)}</span></div>
+                                                <div class="detail-row"><span class="detail-label">Runtime:</span> <span class="detail-value">${runtimeStr}</span></div>
+                                                <div class="detail-row"><span class="detail-label">Tokens:</span> <span class="detail-value">${agent.tokensUsed || 0}</span></div>
+                                                <div class="detail-row"><span class="detail-label">Prompt:</span></div>
+                                                <div class="dispatch-prompt">${sanitize(agent.promptFull || 'N/A')}</div>
+                                            `;
+                                        } else {
+                                            detailsDiv.textContent = 'Agent details not found';
+                                        }
+                                    } catch (e) {
+                                        detailsDiv.textContent = 'Failed to fetch details: ' + e.message;
                                     }
-                                } catch (e) {
-                                    detailsDiv.innerHTML = `<div class="detail-row" style="color: #f44;">Failed to fetch details: ${sanitize(e.message)}</div>`;
                                 }
-                            }
-                        });
+                            });
+                        }
                     });
                 } else {
                     agentsList.innerHTML = '<div style="color: #666; font-size: 12px;">💤 No active agents — fleet is idle</div>';
@@ -1038,6 +1071,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
             self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def serve_agents(self):
+        """Serve rich agent list with metadata via GET /api/agents."""
+        try:
+            agents = get_fleet_agents()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(agents, default=str).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
             self.send_header("Content-Type", "application/json")

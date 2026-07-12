@@ -1,7 +1,10 @@
 // Detect and render running Claude agents from transcripts.
 // Usage: node dash-extra.mjs [--json]
-//   --json: output JSON array of agents (for web dashboard /data endpoint)
+//   --json: output JSON array of agents with rich metadata (for web dashboard)
 //   (default): render TUI text output (for terminal dashboard)
+//
+// Enhanced JSONL parsing: extracts dispatch prompt, token counts, runtime, task label
+// Robust: tolerates malformed lines, caps read size on large files
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -57,6 +60,91 @@ const ACTIVITY_WINDOW = 12 * 60 * 1000;
 
 // Depth limit to match monitor's equivalent (prevent unbounded recursion on growing tree)
 const MAX_DEPTH = 6;
+
+// Parse JSONL agent transcript and extract rich metadata
+function parseAgentJsonl(filePath) {
+  const metadata = {
+    promptFull: '',
+    taskLabel: '',
+    tokensUsed: 0,
+    startedAt: null,
+    lastActivity: null,
+    runtimeSeconds: 0,
+    project: ''
+  };
+
+  try {
+    // Derive project from path: transcripts_root/PROJECT/session/...
+    const relPath = path.relative(TRANSCRIPTS_ROOT, filePath);
+    const parts = relPath.split(path.sep);
+    if (parts.length > 0) {
+      metadata.project = parts[0];
+    }
+
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n');
+
+    // Cap reading: first 50 + last 50 lines to avoid expensive parsing on huge files
+    const linesToRead = [];
+    if (lines.length <= 100) {
+      linesToRead.push(...lines);
+    } else {
+      linesToRead.push(...lines.slice(0, 50));
+      linesToRead.push(...lines.slice(-50));
+    }
+
+    let firstTimestamp = null;
+    let lastTimestamp = null;
+
+    for (const line of linesToRead) {
+      if (!line.trim()) continue;
+
+      try {
+        const obj = JSON.parse(line);
+
+        // Extract dispatch prompt from first user message
+        if (obj.type === 'user' && obj.message && !metadata.promptFull) {
+          const content = obj.message.content;
+          if (typeof content === 'string') {
+            metadata.promptFull = content;
+            // Extract task label: first line of prompt, capped at 80 chars
+            const firstLine = content.split('\n')[0];
+            metadata.taskLabel = firstLine.substring(0, 80);
+          }
+        }
+
+        // Track timestamps
+        if (obj.timestamp) {
+          const ts = new Date(obj.timestamp).getTime();
+          if (!firstTimestamp) {
+            firstTimestamp = ts;
+            metadata.startedAt = obj.timestamp;
+          }
+          lastTimestamp = ts;
+          metadata.lastActivity = obj.timestamp;
+        }
+
+        // Accumulate tokens from assistant messages
+        if (obj.type === 'assistant' && obj.usage) {
+          const { input_tokens = 0, output_tokens = 0 } = obj.usage;
+          metadata.tokensUsed += input_tokens + output_tokens;
+        }
+      } catch {
+        // Silently skip malformed JSON lines
+        continue;
+      }
+    }
+
+    // Calculate runtime in seconds
+    if (firstTimestamp && lastTimestamp) {
+      metadata.runtimeSeconds = Math.floor((lastTimestamp - firstTimestamp) / 1000);
+    }
+  } catch {
+    // If file read fails, return empty metadata
+  }
+
+  return metadata;
+}
 
 // Read alerts log if present
 let slog = [];
@@ -207,11 +295,22 @@ if (process.argv.includes('--json')) {
       .replace(/\.jsonl$/, '')
       .slice(0, 13);
 
+    // Parse JSONL for rich metadata
+    const metadata = parseAgentJsonl(f);
+
     agents.push({
       id: agentId,
-      age_s: ageSeconds,
+      project: metadata.project,
       status: status,
-      hint: label(f).slice(0, 60)
+      age_s: ageSeconds,
+      hint: label(f).slice(0, 60),
+      // New enriched fields
+      startedAt: metadata.startedAt,
+      lastActivity: metadata.lastActivity,
+      runtimeSeconds: metadata.runtimeSeconds,
+      tokensUsed: metadata.tokensUsed,
+      taskLabel: metadata.taskLabel,
+      promptFull: metadata.promptFull
     });
   }
   process.stdout.write(JSON.stringify(agents) + '\n');
