@@ -298,18 +298,14 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
       killSignal: 'SIGKILL'
     });
 
-    // While accept is running, append a new proposal (simulating emitProposal)
-    const proposal2 = `## signal-2 — 2026-07-12T12:01:00.000Z\n\n**Signal:** signal-2\n\n**Problem:** Second\n\n**Suggested change:** Change2\n\n---\n`;
-
-    // Small delay to ensure accept starts reading
-    await new Promise(r => setTimeout(r, 50));
-    fs.appendFileSync(proposalsFile, proposal2, 'utf8');
-
-    // Wait for accept to terminate. Resolve on 'exit' (fires on process
-    // termination regardless of stream state) rather than 'close' (waits for
-    // all stdio streams to close, which can never fire for unconsumed pipes on
-    // Linux). Defensive kill-timeout guarantees the wait can never block.
-    await new Promise((resolve, reject) => {
+    // CRITICAL: attach the exit listener SYNCHRONOUSLY, before any awaited
+    // delay. The accept child is fast (~65ms) and purely synchronous; on Linux
+    // it can exit inside the 50ms window below. If we attach the listener only
+    // after that delay, 'exit' has already fired and will never fire again,
+    // wedging the wait until the timeout. Registering it now guarantees the
+    // event is caught regardless of how quickly the child exits. The 'error'
+    // handler covers spawn failures; the kill-timeout is a defensive backstop.
+    const acceptDone = new Promise((resolve, reject) => {
       const killer = setTimeout(() => {
         acceptProcess.kill('SIGKILL');
         reject(new Error('Accept subprocess did not exit within 15s'));
@@ -319,7 +315,21 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
         if (code === 0) resolve();
         else reject(new Error(`Accept exited with code ${code}`));
       });
+      acceptProcess.on('error', (err) => {
+        clearTimeout(killer);
+        reject(err);
+      });
     });
+
+    // While accept is running, append a new proposal (simulating emitProposal)
+    const proposal2 = `## signal-2 — 2026-07-12T12:01:00.000Z\n\n**Signal:** signal-2\n\n**Problem:** Second\n\n**Suggested change:** Change2\n\n---\n`;
+
+    // Small delay to ensure accept starts reading
+    await new Promise(r => setTimeout(r, 50));
+    fs.appendFileSync(proposalsFile, proposal2, 'utf8');
+
+    // Wait for accept to terminate (listener already attached above).
+    await acceptDone;
 
     // Verify both proposals are accounted for (not lost)
     const finalProposals = fs.readFileSync(proposalsFile, 'utf8');
