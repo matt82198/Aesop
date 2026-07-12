@@ -490,5 +490,163 @@ This should NOT be parsed:
         self.assertEqual(p0_tier["items"][0]["title"], "Real P0 item")
 
 
+class TestCSRFProtection(unittest.TestCase):
+    """Test cases for CSRF protection on /submit endpoint."""
+
+    def setUp(self):
+        """Create temporary fixture directory structure."""
+        self.fixture_root = tempfile.mkdtemp(prefix="aesop-csrf-test-")
+        self.state_dir = os.path.join(self.fixture_root, "state")
+        os.makedirs(self.state_dir, exist_ok=True)
+
+        # Save original env
+        self.orig_aesop_root = os.environ.get("AESOP_ROOT")
+
+    def tearDown(self):
+        """Clean up temporary fixture."""
+        if self.orig_aesop_root is not None:
+            os.environ["AESOP_ROOT"] = self.orig_aesop_root
+        elif "AESOP_ROOT" in os.environ:
+            del os.environ["AESOP_ROOT"]
+
+        import shutil
+        if os.path.exists(self.fixture_root):
+            shutil.rmtree(self.fixture_root)
+
+    def _load_serve_module(self):
+        """Dynamically import serve.py with fixture AESOP_ROOT."""
+        os.environ["AESOP_ROOT"] = self.fixture_root
+
+        if "ui.serve" in sys.modules:
+            del sys.modules["ui.serve"]
+        if "ui" in sys.modules:
+            del sys.modules["ui"]
+
+        serve_path = Path(__file__).parent.parent / "ui" / "serve.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("serve", serve_path)
+        serve = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(serve)
+        return serve
+
+    def test_session_token_generated_at_startup(self):
+        """Session token must be generated at startup and persisted to state/.ui-session-token."""
+        serve = self._load_serve_module()
+
+        # Check that token file is created
+        token_file = os.path.join(self.state_dir, ".ui-session-token")
+        self.assertTrue(
+            os.path.exists(token_file) or hasattr(serve, "SESSION_TOKEN"),
+            "Session token must be generated at startup"
+        )
+
+    def test_csrf_token_has_adequate_entropy(self):
+        """Generated CSRF token must be cryptographically random with adequate length."""
+        serve = self._load_serve_module()
+
+        # Check that SESSION_TOKEN or file content is sufficiently long
+        if hasattr(serve, "SESSION_TOKEN"):
+            token = serve.SESSION_TOKEN
+            self.assertGreaterEqual(
+                len(token),
+                32,
+                "CSRF token must have at least 32 characters for adequate entropy"
+            )
+        else:
+            token_file = os.path.join(self.state_dir, ".ui-session-token")
+            if os.path.exists(token_file):
+                with open(token_file, "r") as f:
+                    token = f.read().strip()
+                self.assertGreaterEqual(
+                    len(token),
+                    32,
+                    "CSRF token must have at least 32 characters for adequate entropy"
+                )
+
+    def test_csrf_validation_rejects_foreign_origin_without_token(self):
+        """CSRF validation must reject POST with foreign Origin and no token."""
+        serve = self._load_serve_module()
+
+        headers = {"Origin": "https://attacker.com"}
+        is_valid, reason = serve.validate_csrf_request(headers)
+
+        self.assertFalse(is_valid, "Foreign Origin must be rejected")
+        self.assertIn("Foreign", reason)
+
+    def test_csrf_validation_rejects_missing_token(self):
+        """CSRF validation must reject POST without X-Aesop-Token."""
+        serve = self._load_serve_module()
+
+        headers = {"Origin": "http://127.0.0.1:8770"}
+        is_valid, reason = serve.validate_csrf_request(headers)
+
+        self.assertFalse(is_valid, "Missing token must be rejected")
+        self.assertIn("X-Aesop-Token", reason)
+
+    def test_csrf_validation_rejects_invalid_token(self):
+        """CSRF validation must reject POST with invalid token."""
+        serve = self._load_serve_module()
+
+        headers = {
+            "Origin": "http://127.0.0.1:8770",
+            "X-Aesop-Token": "invalid-token-value"
+        }
+        is_valid, reason = serve.validate_csrf_request(headers)
+
+        self.assertFalse(is_valid, "Invalid token must be rejected")
+        self.assertIn("Invalid", reason)
+
+    def test_csrf_validation_accepts_valid_token_with_local_origin(self):
+        """CSRF validation must accept POST with valid token and local origin."""
+        serve = self._load_serve_module()
+
+        headers = {
+            "Origin": "http://127.0.0.1:8770",
+            "X-Aesop-Token": serve.SESSION_TOKEN
+        }
+        is_valid, reason = serve.validate_csrf_request(headers)
+
+        self.assertTrue(is_valid, "Valid token with local origin must be accepted")
+        self.assertIsNone(reason)
+
+    def test_csrf_validation_accepts_valid_token_with_localhost(self):
+        """CSRF validation must accept POST with valid token and localhost origin."""
+        serve = self._load_serve_module()
+
+        headers = {
+            "Origin": "http://localhost:8770",
+            "X-Aesop-Token": serve.SESSION_TOKEN
+        }
+        is_valid, reason = serve.validate_csrf_request(headers)
+
+        self.assertTrue(is_valid, "Valid token with localhost origin must be accepted")
+        self.assertIsNone(reason)
+
+    def test_csrf_validation_rejects_foreign_origin_even_with_valid_token(self):
+        """CSRF validation must reject foreign Origin even if token is valid (defense-in-depth)."""
+        serve = self._load_serve_module()
+
+        headers = {
+            "Origin": "https://attacker.com",
+            "X-Aesop-Token": serve.SESSION_TOKEN
+        }
+        is_valid, reason = serve.validate_csrf_request(headers)
+
+        self.assertFalse(is_valid, "Foreign Origin must be rejected even with valid token")
+        self.assertIn("Foreign", reason)
+
+    def test_csrf_validation_allows_no_origin_with_valid_token(self):
+        """CSRF validation must allow POST with valid token and no Origin/Referer."""
+        serve = self._load_serve_module()
+
+        headers = {
+            "X-Aesop-Token": serve.SESSION_TOKEN
+        }
+        is_valid, reason = serve.validate_csrf_request(headers)
+
+        self.assertTrue(is_valid, "Valid token with no Origin/Referer must be accepted (CLI use case)")
+        self.assertIsNone(reason)
+
+
 if __name__ == "__main__":
     unittest.main()

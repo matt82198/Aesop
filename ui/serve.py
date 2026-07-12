@@ -9,11 +9,19 @@ Configuration:
   - aesop.config.json: optional config file with paths and settings
   - PORT env var: override dashboard port (default: 8770)
   - AESOP_TRANSCRIPTS_ROOT: env var for Claude transcript directory
+
+CSRF Protection:
+  - Per-session token generated at startup and persisted to state/.ui-session-token (0600)
+  - /submit endpoint validates Origin/Referer headers (must be local or absent)
+  - /submit endpoint requires X-Aesop-Token header matching session token
+  - Legitimate dashboard submits: token injected into HTML and sent by browser JS
+  - Local CLI clients: read token from state/.ui-session-token (0600)
 """
 import http.server
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import urllib.parse
@@ -65,6 +73,96 @@ BACKUP_LOG = STATE_DIR / "FLEET-BACKUP.log"
 ALERTS_LOG = STATE_DIR / "SECURITY-ALERTS.log"
 INBOX_FILE = STATE_DIR / "ui-inbox.md"
 AUDIT_BACKLOG_FILE = AESOP_ROOT / "AUDIT-BACKLOG.md"
+UI_SESSION_TOKEN_FILE = STATE_DIR / ".ui-session-token"
+
+
+# ==============================================================================
+# CSRF Token Generation & Validation
+# ==============================================================================
+
+def generate_session_token():
+    """Generate or load the per-session CSRF token.
+
+    Token is generated once at startup and persisted to state/.ui-session-token (mode 0600).
+    Subsequent imports of this module return the same token (in-memory).
+
+    Returns:
+        str: 43-character base64-like random token (256 bits / 3 bytes per char = ~43 chars)
+    """
+    # Check if token file exists
+    if UI_SESSION_TOKEN_FILE.exists():
+        try:
+            token = UI_SESSION_TOKEN_FILE.read_text().strip()
+            if token and len(token) >= 32:
+                return token
+        except:
+            pass
+
+    # Generate new token: 32 random bytes → 43-char base64-like string
+    token = secrets.token_urlsafe(32)
+
+    # Persist to file with restricted permissions (0600)
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        # Write with restricted permissions on Unix-like systems
+        # Windows ignores mode bits, but we'll set them anyway
+        UI_SESSION_TOKEN_FILE.write_text(token)
+        # Try to chmod on POSIX systems
+        try:
+            os.chmod(str(UI_SESSION_TOKEN_FILE), 0o600)
+        except:
+            pass  # Windows or no chmod support
+    except:
+        pass  # Fail-open: token exists in memory even if file write fails
+
+    return token
+
+
+# Generate and cache session token at module load time
+SESSION_TOKEN = generate_session_token()
+
+
+def validate_csrf_request(headers):
+    """Validate CSRF protections on /submit POST request.
+
+    Performs two checks:
+    1. Origin/Referer validation: if Origin or Referer header is present, must be local
+       (http://127.0.0.1:<port>, http://localhost:<port>)
+    2. X-Aesop-Token validation: must match SESSION_TOKEN
+
+    Args:
+        headers: dict-like object with HTTP headers (case-insensitive)
+
+    Returns:
+        tuple: (is_valid: bool, reason: str or None)
+        - (True, None) if CSRF checks pass
+        - (False, reason) if either check fails
+    """
+    # Check 1: Origin/Referer header validation
+    origin = headers.get("Origin", "").strip()
+    referer = headers.get("Referer", "").strip()
+
+    # If Origin or Referer is present, validate it's local
+    if origin or referer:
+        check_value = origin or referer
+        # Check if it's a local origin: http://127.0.0.1:<PORT> or http://localhost:<PORT>
+        is_local = (
+            check_value.startswith("http://127.0.0.1:") or
+            check_value.startswith("http://localhost:") or
+            check_value.startswith("http://[::1]:")  # IPv6 localhost
+        )
+        if not is_local:
+            return (False, "Foreign Origin/Referer rejected")
+
+    # Check 2: X-Aesop-Token validation
+    token = headers.get("X-Aesop-Token", "").strip()
+    if not token:
+        return (False, "Missing X-Aesop-Token header")
+
+    if token != SESSION_TOKEN:
+        return (False, "Invalid X-Aesop-Token")
+
+    return (True, None)
 
 
 # ==============================================================================
@@ -493,6 +591,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aesop Fleet Dashboard</title>
+    <script>
+        // CSRF token injected by server (same-origin JS can read this)
+        window.__AESOP_CSRF_TOKEN__ = """ + json.dumps(SESSION_TOKEN) + """;
+    </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { color-scheme: dark; }
@@ -872,9 +974,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             button.disabled = true;
             try {
+                // Get CSRF token from window (injected by server)
+                const csrfToken = window.__AESOP_CSRF_TOKEN__ || '';
                 const response = await fetch('/submit', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Aesop-Token': csrfToken
+                    },
                     body: JSON.stringify({ text })
                 });
                 if (response.ok) {
@@ -967,8 +1074,19 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
     def handle_submit(self):
-        """Handle /submit POST."""
+        """Handle /submit POST with CSRF protection."""
         try:
+            # CSRF validation: Check Origin/Referer + X-Aesop-Token
+            is_valid, reason = validate_csrf_request(self.headers)
+            if not is_valid:
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "error": "CSRF protection: " + reason
+                }).encode('utf-8'))
+                return
+
             content_length = int(self.headers.get('Content-Length', 0))
             if content_length > 10000:  # 10KB limit
                 self.send_error(413)
