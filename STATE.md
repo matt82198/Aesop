@@ -34,7 +34,20 @@ disjoint ownership, TDD-first). Proactive: never idle while agents run. On sessi
 death: resume from this file — waves in flight are listed under Phase.
 
 ## Phase
-`pr-open` — PR #16 (feature/behavior-as-code → main) opened 2026-07-12 after
+`wave-3-p0-inflight` (2026-07-12, post-/power resume) — all 8 P0 items + reconstitute
+--test P2 flipped 🔵 in AUDIT-BACKLOG.md and dispatched as 5 TDD-first Haiku implementers
+with disjoint file ownership: (A) pre-push-policy.sh+secret_scan.py [pragma + wrong-branch],
+(B) backup-fleet.sh [untracked-scan + unquoted-array], (C) reconstitute.sh+config.example
+[injection RCE + config-url + real --test + space-parse bonus], (D) ui/serve.py [alerts
+dir], (E) run-watchdog.sh [TOCTOU lock, gates --once]. Plus: QA agent reconstructing TDD
+evidence for the uncommitted dash-extra.mjs fix (commit follow-up on GREEN verdict);
+fleet-auditor triaging the security-alerts-high-med proposal; refinement monitor loop
+relaunched (heartbeat was 1373s stale). Implementers do NOT commit — orchestrator QAs,
+commits per green item (secret-scan gated), flips 🔵→✅, re-runs full suite per commit.
+On session death: check backlog boxes vs git diff; any 🔵 with no working-tree change =
+agent died, re-dispatch same scoped prompt.
+
+Prior phase `pr-open` — PR #16 (feature/behavior-as-code → main) opened 2026-07-12 after
 final-catch (leakage sweep clean, full suite green: 26 node + 16 python + shell
 self-tests). Waves 1+2 complete through ae1dc4b. Conductor3 fixes on separate
 branch fix/monitor-path-and-rotation (c00c4fa), proposals #9/#10 annotated.

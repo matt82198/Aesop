@@ -14,7 +14,7 @@ with the ACCEPTANCE as its gate; commit per green item; flip the box. Subagents 
 
 ## P0 — correctness / security (do first)
 
-- ⬜ **[sec] Pragma comment defeats the whole secret scanner, incl. PEM/AWS keys; hook hides it.**
+- 🔵 **[sec] Pragma comment defeats the whole secret scanner, incl. PEM/AWS keys; hook hides it.**
   A `# secretscan: allow-pattern-docs` in a file's first 10 lines flips EVERY finding to
   ALLOWED-DOC with no check the file is docs; pre-push-policy.sh runs the scanner with
   `>/dev/null 2>&1` so the evidence never shows. FILES: tools/secret_scan.py:74-85,180-182;
@@ -23,44 +23,44 @@ with the ACCEPTANCE as its gate; commit per green item; flip the box. Subagents 
   aws_access_key, github_token, slack_token, openai_anthropic_key, connection_string);
   hook surfaces ALLOWED-DOC lines to stderr; test: PEM key + pragma still exits 1.
 
-- ⬜ **[sec] Backup daemon force-pushes UNTRACKED new files unscanned.** scan only inspects
+- 🔵 **[sec] Backup daemon force-pushes UNTRACKED new files unscanned.** scan only inspects
   tracked+modified files, but the snapshot commit is `git add -A` (stages untracked), then
   `git push -qf` — a new credential file in any of ~150 auto-discovered repos ships in one
   150s cycle. FILES: daemons/backup-fleet.sh:27-61,79-90. ACCEPTANCE: enumerate
   `git ls-files --others --exclude-standard` and scan them before any push; test: untracked
   file w/ AWS-key string → cycle reports BLOCKED not SNAPSHOTTED.
 
-- ⬜ **[sec] reconstitute.sh passes untrusted URLs to `git clone` → option/transport injection (RCE).**
+- 🔵 **[sec] reconstitute.sh passes untrusted URLs to `git clone` → option/transport injection (RCE).**
   `url` read verbatim from --repos-file/config; `ext::sh -c '...'` or a leading `-` runs
   arbitrary commands on reconstitution. FILES: tools/reconstitute.sh:164-191.
   ACCEPTANCE: reject url not matching `^(https://|git@[\w.-]+:|ssh://)`; use `git clone -- "$url" "$target"`;
   test: `ext::` / `-`-prefixed line rejected without invoking git.
 
-- ⬜ **[arch] ui/serve.py reads security alerts from wrong dir → web dashboard silently shows zero.**
+- ✅ **[arch] ui/serve.py reads security alerts from wrong dir → web dashboard silently shows zero.**
   Same bug just fixed in dash-extra.mjs; ui/serve.py:44 uses `scan/` but every writer uses
   `state/SECURITY-ALERTS.log`. FILES: ui/serve.py:44. ACCEPTANCE: reads state/SECURITY-ALERTS.log
   by default; test mirrors tests/dash-extra.test.mjs (HIGH alert → nonzero web count).
 
-- ⬜ **[arch] reconstitute config path is non-functional — repos[] schema has no url/remote field.**
+- 🔵 **[arch] reconstitute config path is non-functional — repos[] schema has no url/remote field.**
   Documented config-driven flow clones url="" (silent no-op); only undocumented --repos-file works.
   FILES: tools/reconstitute.sh:33-50,164-172; aesop.config.example.json repos[]. ACCEPTANCE:
   add url/remote to repos[] schema; loader emits it; test: repo absent from disk cloned from
   config alone. (Coordinate with the injection fix above — same clone site.)
 
-- ⬜ **[bash] Branch-protection hook checks the WRONG branch — bypassable in one command.**
+- 🔵 **[bash] Branch-protection hook checks the WRONG branch — bypassable in one command.**
   check_branch_policy inspects the current local branch via rev-parse HEAD, but git passes the real
   destination ref on stdin; `git push origin HEAD:main` pushes to main and is silently ALLOWED — exactly
   what the hook exists to block. FILES: hooks/pre-push-policy.sh:12-20,213. ACCEPTANCE: parse stdin
   `<local> <lsha> <remote> <rsha>`, block when any remote-ref is refs/heads/main|master regardless of
   local HEAD; Test 6: non-main local → main via explicit refspec asserts block.
 
-- ⬜ **[bash] Secret-scan gate defeated by unquoted path expansion → fail-open on the real secret.**
+- 🔵 **[bash] Secret-scan gate defeated by unquoted path expansion → fail-open on the real secret.**
   scan_tracked_files builds a plain string and passes `$file_paths` unquoted to python; a filename with
   a space/glob/leading-dash gets word-split/glob-expanded/argv-injected and the real file is skipped.
   FILES: daemons/backup-fleet.sh:39-52,59. ACCEPTANCE: use a bash array (`"${file_paths[@]}"`); test a
   filename with a space reaches the scanner as one arg and blocks/allows on content.
 
-- ⬜ **[arch] Watchdog single-instance guard is TOCTOU-racy → concurrent daemons force-push over each other.**
+- 🔵 **[arch] Watchdog single-instance guard is TOCTOU-racy → concurrent daemons force-push over each other.**
   read-age→compare→proceed has no lock; two starts in the same window both pass, both run
   backup-fleet.sh `git push -qf` to the same backup/* refs fleet-wide. FILES:
   daemons/run-watchdog.sh:11-17; daemons/backup-fleet.sh:79-116. ACCEPTANCE: atomic guard
@@ -168,7 +168,7 @@ with the ACCEPTANCE as its gate; commit per green item; flip the box. Subagents 
   FILES: hooks/pre-push-policy.sh:43-58, README/HOOK-INSTALL.md. ACCEPTANCE: docs state local-convenience
   only + require server-side branch protection; optional prev_hash chaining so tampering is detectable.
 
-- ⬜ **[bash] reconstitute.sh --test never calls the real reconstruct_fleet() → regressions ship undetected.**
+- 🔵 **[bash] reconstitute.sh --test never calls the real reconstruct_fleet() → regressions ship undetected.**
   Self-test reimplements clone/fetch inline instead of invoking the production function. FILES:
   tools/reconstitute.sh:78-139 vs 141-211. ACCEPTANCE: run_test_suite calls reconstruct_fleet/main
   against the fixture and asserts on its real CLONED/FETCHED/FAILED summary incl. a deliberate bad-URL
