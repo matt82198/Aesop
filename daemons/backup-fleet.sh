@@ -15,10 +15,22 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*" | tee -a "$LOG"; }
 
 # P2 FIX: JSON escape function for safe string interpolation in JSON
+# Escapes backslash, quote, and control characters (newline, tab, carriage return, etc.)
 json_escape() {
   local s="$1"
+  # Escape backslash first (must be first to avoid double-escaping)
   s="${s//\\/\\\\}"
+  # Escape double quote
   s="${s//\"/\\\"}"
+  # Escape newline
+  s="${s//$'\n'/\\n}"
+  # Escape carriage return
+  s="${s//$'\r'/\\r}"
+  # Escape tab
+  s="${s//$'\t'/\\t}"
+  # Escape backspace, form feed, and other C0 controls
+  s="${s//$'\b'/\\b}"
+  s="${s//$'\f'/\\f}"
   printf '%s' "$s"
 }
 
@@ -192,11 +204,10 @@ for dir in ~/.* ~/* ~/dev/*; do
 $real_dir"
 
   if is_touched "$dir"; then
-    result=$(process_repo "$dir")
-    # P2 FIX: Parse NUL-delimited protocol to safely handle pipes in repo names
-    # Write to temp file to properly read NUL-delimited fields
+    # P0 FIX: Eliminate $() command substitution to preserve NUL bytes in protocol
+    # Direct redirect maintains NUL delimiters (process_repo emits STATE\0name format)
     temp_result=$(mktemp)
-    printf '%s' "$result" > "$temp_result"
+    process_repo "$dir" > "$temp_result"
     # Read first field (state) and second field (name) using NUL delimiter
     state=$(sed 's/\x0.*//' "$temp_result")
     name=$(sed 's/^[^\x0]*\x0//' "$temp_result")
@@ -208,7 +219,8 @@ $real_dir"
       echo "," >> "$temp_json"
     fi
     # P2 FIX: JSON-escape all interpolated values before emitting
-    printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -Iseconds)" >> "$temp_json"
+    # P2 FIX: Portable date format (not GNU-only date -Iseconds)
+    printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
     log "$state: $name"
   fi
 done
