@@ -95,3 +95,62 @@ test('degrades gracefully when no alerts log exists', () => {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+test('walk() respects depth limit of 6 and prunes old branches', () => {
+  const fixture = makeFixture();
+  try {
+    const transcriptsRoot = fixture.transcriptsRoot;
+    const now = Date.now();
+    const activityWindow = 12 * 60 * 1000; // 12 minutes
+
+    // Create a deep/wide nested structure with both fresh and stale files
+    // Depth structure: d0/d1/d2/d3/d4/d5/d6/d7 (depth 7, should be pruned beyond 6)
+    let currentPath = transcriptsRoot;
+    for (let depth = 0; depth < 8; depth++) {
+      currentPath = path.join(currentPath, `d${depth}`);
+      fs.mkdirSync(currentPath, { recursive: true });
+
+      // Write a fresh file at this depth
+      const freshAgent = `agent-fresh-d${depth}.jsonl`;
+      fs.writeFileSync(path.join(currentPath, freshAgent), `{"description":"fresh d${depth}"}\n`);
+
+      // Write a stale file at this depth (older than activity window)
+      const staleAgent = `agent-stale-d${depth}.jsonl`;
+      fs.writeFileSync(
+        path.join(currentPath, staleAgent),
+        `{"description":"stale d${depth}"}\n`
+      );
+      // Set mtime to 15 minutes ago (outside activity window)
+      fs.utimesSync(path.join(currentPath, staleAgent), now / 1000 - 900, now / 1000 - 900);
+
+      // Also set directory mtime to stale for d3 and deeper (to test pruning old directories)
+      if (depth >= 3) {
+        fs.utimesSync(currentPath, now / 1000 - 900, now / 1000 - 900);
+      }
+    }
+
+    const startTime = Date.now();
+    const agents = runScript(fixture);
+    const elapsed = Date.now() - startTime;
+
+    // Performance assertion: walk should complete in under 2 seconds even on deep tree
+    assert.ok(elapsed < 2000, `walk should complete in <2s but took ${elapsed}ms`);
+
+    // Should find only fresh agents within activity window
+    const freshAgents = agents.filter(a => a.hint.includes('fresh'));
+    assert.ok(freshAgents.length > 0, 'should find fresh agents in shallow depths');
+
+    // Stale agents should be filtered out (mtime > 12min old)
+    const staleAgents = agents.filter(a => a.hint.includes('stale'));
+    assert.equal(staleAgents.length, 0, 'stale agents (>12min old) must be excluded from output');
+
+    // Depth should be limited: files deeper than depth 6 should not appear
+    // (fresh-d7, fresh-d6, ... fresh-d0 should only have up to d6 available in tree walk)
+    const maxDepthFound = Math.max(
+      ...freshAgents.map(a => parseInt(a.hint.match(/d(\d+)/)?.[1] || '0', 10))
+    );
+    assert.ok(maxDepthFound <= 6, `depth should be capped at 6, found agents at depth ${maxDepthFound}`);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

@@ -29,6 +29,12 @@ const c = {
 const now = Date.now();
 const out = [];
 
+// Activity window: only include files modified within the last 12 minutes
+const ACTIVITY_WINDOW = 12 * 60 * 1000;
+
+// Depth limit to match monitor's equivalent (prevent unbounded recursion on growing tree)
+const MAX_DEPTH = 6;
+
 // Read alerts log if present
 let slog = [];
 try {
@@ -37,14 +43,27 @@ try {
   }
 } catch {}
 
-// Recursively walk directory tree to find agent-*.jsonl files
-function walk(dir, accumulator) {
+// Recursively walk directory tree to find agent-*.jsonl files.
+// Respects depth limit and prunes old directories (mtime older than activity window).
+function walk(dir, accumulator, depth = 0) {
+  // Stop recursion if depth exceeds limit
+  if (depth > MAX_DEPTH) return;
+
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        walk(fullPath, accumulator);
+        // Check directory mtime: skip descending into stale directories
+        let dirMtime = 0;
+        try {
+          dirMtime = fs.statSync(fullPath).mtimeMs;
+        } catch {}
+
+        // Only descend if directory was modified recently (within activity window)
+        if (now - dirMtime < ACTIVITY_WINDOW) {
+          walk(fullPath, accumulator, depth + 1);
+        }
       } else if (/^agent-.*\.jsonl$/.test(entry.name)) {
         accumulator.push(fullPath);
       }
