@@ -14,6 +14,7 @@ hatch (which is exactly the bypass these tests lock down). Every value is a
 well-known dummy/documentation form — nothing here is a live credential.
 """
 
+import subprocess
 import unittest
 from pathlib import Path
 import sys
@@ -23,7 +24,9 @@ import os
 # Add parent directory to path so we can import secret_scan
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
-from secret_scan import scan_file
+from secret_scan import has_pragma, scan_file
+
+SCANNER_PATH = Path(__file__).parent.parent / "tools" / "secret_scan.py"
 
 
 def _j(*parts):
@@ -235,6 +238,45 @@ class TestPragmaNotSoftensFatalSecrets(unittest.TestCase):
             )
         finally:
             os.unlink(temp_path)
+
+
+class TestScannerSelfScanClean(unittest.TestCase):
+    """The scanner must scan its OWN source clean with ZERO pragma reliance.
+
+    Rationale: the pragma can no longer soften fatal classes (pem_private_key
+    etc.), so any contiguous self-matching pattern literal in the scanner's
+    source would fatally flag the scanner itself. Pattern literals that
+    self-match must be runtime-assembled from fragments instead.
+    """
+
+    def test_scanner_has_no_pragma(self):
+        """tools/secret_scan.py must NOT rely on the in-file pragma."""
+        self.assertFalse(
+            has_pragma(SCANNER_PATH),
+            "Scanner source must not carry the pragma; it must scan itself "
+            "clean by construction (fragment-assembled pattern literals).",
+        )
+
+    def test_scanner_scans_itself_clean(self):
+        """python tools/secret_scan.py tools/secret_scan.py -> CLEAN, exit 0."""
+        result = subprocess.run(
+            [sys.executable, str(SCANNER_PATH), str(SCANNER_PATH)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Self-scan must exit 0. stdout: {result.stdout!r} "
+            f"stderr: {result.stderr!r}",
+        )
+        self.assertIn("CLEAN", result.stdout, "Self-scan must report CLEAN")
+        self.assertNotIn(
+            "ALLOWED-DOC",
+            result.stdout,
+            "Self-scan must be clean WITHOUT pragma-softened findings",
+        )
 
 
 if __name__ == "__main__":
