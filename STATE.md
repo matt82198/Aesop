@@ -34,7 +34,17 @@ disjoint ownership, TDD-first). Proactive: never idle while agents run. On sessi
 death: resume from this file — waves in flight are listed under Phase.
 
 ## Phase
-`backlog-cleared` (2026-07-12) — ENTIRE AUDIT-BACKLOG.md is ✅: 8 P0, all P1, all P2,
+`merged-wave4-open` (2026-07-12) — PR #16 MERGED to main (f259c4f), 26-item backlog
+delivered. NEW WORKFLOW (user, 2026-07-12): one branch + PR per item, cut from main;
+parallel implementers use worktree isolation. Session branch: chore/post-merge-state.
+IN FLIGHT: five-lens re-audit wave (architect/security/bash/js/honest) — findings become
+per-item branches; conductor3 fix/watchdog-atomic-lock port (INCIDENT: 3 concurrent
+run-watchdog instances raced backup cycles and twice reverted uncommitted aesop
+working-tree files ~13:30-13:50; all instances killed, ONE restarted; forensics in
+conductor3 FLEET-BACKUP.log:554-568); brain hook re-sync from merged main.
+Two consecutive clean audits end the refinement loop.
+
+Prior phase `backlog-cleared` (2026-07-12) — ENTIRE AUDIT-BACKLOG.md is ✅: 8 P0, all P1, all P2,
 and both ⏸ items (user approved: domain-CLAUDE.md collapse into root — lossless, marker
 reader repointed to CHARTER.md; monitor.extended_signals flag, default off). Live gate
 ~/scripts/secret_scan.py hardened too (claude-scripts 314cb25). /power default dashboard
