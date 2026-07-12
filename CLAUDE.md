@@ -7,7 +7,7 @@
 - **daemons/** — Watchdog daemon (repo backup, secret-scan gate, heartbeat)
 - **dash/** — TUI dashboard (watchdog-gui.sh, real-time fleet status)
 - **monitor/** — Orchestration monitor (collect-signals.mjs, CHARTER.md, AUTO/PROPOSE logic)
-- **tools/** — Build utilities and extension stubs (secret_scan.py, rotate_logs.py, etc.)
+- **tools/** — Build utilities (secret_scan.py, agent-forensics.sh, launch_tui.py)
 - **docs/** — Architecture guides, cardinal rules, tutorials
 - **state/** — Runtime durable checkpoints (git-ignored, created by daemons)
 
