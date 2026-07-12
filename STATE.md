@@ -8,87 +8,56 @@ agents work. Single-user survival hack → cross-team product.
 
 ## Locked decisions (user, 2026-07-12)
 - Thesis fixed as the development goal; refinement loop prioritizes the five pillars:
-  1. **Onboarding-by-clone** — clone the team brain, agent primed instantly.
-  2. **Guardrails-in-code** — hooks as enforced, auditable org policy (not memos).
-  3. **Behavioral PRs** — rule/memory changes flow proposal → review → merge → fleet-wide.
-  4. **Forensic replay** — checkout rules+memory at a commit; agent failures are bisectable.
-  5. **Cross-machine continuity** — brain reconstitutes from remotes; compute disposable.
-- Orchestrator (Fable) main-thread; subagents Haiku; TDD-first; feature branch only.
-
-## Audit backlog (2026-07-12) — READ AUDIT-BACKLOG.md
-Five-lens specialist review (architect, bash-pro, javascript-pro, honest-opinions,
-security-auditor) produced a durable, priority-ranked TODO list in **AUDIT-BACKLOG.md**
-(committed, pushed). 8 P0 (security+correctness — incl. secret-scanner pragma bypass,
-untracked force-push, clone-injection RCE, branch-hook wrong-branch, wrong alert dir in
-ui/serve.py, watchdog TOCTOU), ~11 P1, ~5 P2, 2 needing a user decision. RESUME HERE:
-dispatch one Haiku per unclaimed ⬜ item (P0 first), TDD-first, ACCEPTANCE = the test gate;
-flip the checkbox and commit per green item. Coordinate the 3 reconstitute.sh items into
-one agent (same function).
+  onboarding-by-clone · guardrails-in-code · behavioral PRs · forensic replay ·
+  cross-machine continuity.
+- Orchestrator (Fable) main-thread; subagents Haiku; TDD-first.
+- **Branch-per-item**: every backlog item gets its own branch + PR cut from main
+  (worktree isolation for parallel implementers; agents must NEVER git-checkout in the
+  primary working tree). Mega-branches retired with PR #16.
+- Domain CLAUDE.mds collapsed into root (lossless); monitor extended_signals default off.
 
 ## Standing order (user, 2026-07-12)
 Rerun the refinement loop CONTINUOUSLY until tokens exhaust or gaps dry (2 consecutive
-audits finding nothing new). Each cycle: (1) collect wave results → QA (TDD evidence
-required for code) → commit+push per green item; (2) re-audit vs the five pillars +
-monitor/cost briefs → rank remaining gaps; (3) dispatch next Haiku wave (6-8 parallel,
-disjoint ownership, TDD-first). Proactive: never idle while agents run. On session
-death: resume from this file — waves in flight are listed under Phase.
+audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe → dispatch
+per-item branches → merge green PRs. Never idle while agents run. On session death:
+resume from this file + AUDIT-BACKLOG.md.
 
-## Phase
-`merged-wave4-open` (2026-07-12) — PR #16 MERGED to main (f259c4f), 26-item backlog
-delivered. NEW WORKFLOW (user, 2026-07-12): one branch + PR per item, cut from main;
-parallel implementers use worktree isolation. Session branch: chore/post-merge-state.
-IN FLIGHT: five-lens re-audit wave (architect/security/bash/js/honest) — findings become
-per-item branches; conductor3 fix/watchdog-atomic-lock port (INCIDENT: 3 concurrent
-run-watchdog instances raced backup cycles and twice reverted uncommitted aesop
-working-tree files ~13:30-13:50; all instances killed, ONE restarted; forensics in
-conductor3 FLEET-BACKUP.log:554-568); brain hook re-sync from merged main.
-Two consecutive clean audits end the refinement loop.
+## Phase: `wave-5-landing` (2026-07-12, current)
+Audit #1 (post-clear five-lens re-audit) produced 9 item-branches + 2 cross-repo ports —
+see AUDIT-BACKLOG.md for live statuses. Merged so far: PRs #17–#24. In flight:
+fix/backup-fleet-nul-protocol, fix/monitor-proposals-races, fix/audit-log-hardening,
+fix/reconstitute-target-validation, fix/ci-run-all-suites, feat/dash-agents-panel,
+plus the two ports (~/scripts scanner skip-fix; conductor3 lock-ownership re-port —
+conductor3 branch fix/watchdog-atomic-lock MUST NOT merge without it).
+INCIDENT (resolved): 3 concurrent conductor3 watchdog daemons raced backup cycles and
+twice reverted uncommitted aesop working-tree files (~13:30–13:50); instances killed,
+single daemon restarted, atomic-lock port on the conductor3 branch. Forensics:
+conductor3 FLEET-BACKUP.log:554-568.
 
-Prior phase `backlog-cleared` (2026-07-12) — ENTIRE AUDIT-BACKLOG.md is ✅: 8 P0, all P1, all P2,
-and both ⏸ items (user approved: domain-CLAUDE.md collapse into root — lossless, marker
-reader repointed to CHARTER.md; monitor.extended_signals flag, default off). Live gate
-~/scripts/secret_scan.py hardened too (claude-scripts 314cb25). /power default dashboard
-switched to web dash :8770 (brain 60d4c2b); backlog panel on the dash (/api/backlog).
-Final-catch green: 60 npm / all py / 11 hook / 16 reconstitute / 15 backup-fleet.
-NEXT: re-audit wave vs five pillars per standing order (2 consecutive clean audits ends
-the loop); then merge PR #16 pending user; after merge, re-sync installed hook
-~/.claude/hooks/force-haiku-subagents.mjs from repo source.
+## Upcoming phases
+1. **`wave-5-close`** — land + merge the 6 remaining branches and 2 ports; full
+   final-catch (npm + python + all shell suites + hook/reconstitute self-tests);
+   restart web dash on merged main; collapse backlog again.
+2. **`audit-2`** — second five-lens re-audit vs the five pillars. Clean → one more;
+   findings → dispatch wave 6 branch-per-item. (2 consecutive cleans end the loop.)
+3. **`release`** — version bump + tag (next beta), npm publish check, CI badge in
+   README, release notes from the backlog's cleared history.
+4. **`ops-hardening` (candidates, unclaimed)** — BUILDLOG lifecycle doc; INCIDENT-LOG
+   correlation; commit-format check in pre-push hook; merge conductor3 branches
+   (fix/watchdog-atomic-lock, fix/monitor-path-and-rotation) + daemon restart on the
+   fixed script; SIGNALS.json consumer integration (serve.py reading monitor brief).
 
-Prior phase `wave-3-p0-inflight` (2026-07-12, post-/power resume) — all 8 P0 items + reconstitute
---test P2 flipped 🔵 in AUDIT-BACKLOG.md and dispatched as 5 TDD-first Haiku implementers
-with disjoint file ownership: (A) pre-push-policy.sh+secret_scan.py [pragma + wrong-branch],
-(B) backup-fleet.sh [untracked-scan + unquoted-array], (C) reconstitute.sh+config.example
-[injection RCE + config-url + real --test + space-parse bonus], (D) ui/serve.py [alerts
-dir], (E) run-watchdog.sh [TOCTOU lock, gates --once]. Plus: QA agent reconstructing TDD
-evidence for the uncommitted dash-extra.mjs fix (commit follow-up on GREEN verdict);
-fleet-auditor triaging the security-alerts-high-med proposal; refinement monitor loop
-relaunched (heartbeat was 1373s stale). Implementers do NOT commit — orchestrator QAs,
-commits per green item (secret-scan gated), flips 🔵→✅, re-runs full suite per commit.
-On session death: check backlog boxes vs git diff; any 🔵 with no working-tree change =
-agent died, re-dispatch same scoped prompt.
-
-Prior phase `pr-open` — PR #16 (feature/behavior-as-code → main) opened 2026-07-12 after
-final-catch (leakage sweep clean, full suite green: 26 node + 16 python + shell
-self-tests). Waves 1+2 complete through ae1dc4b. Conductor3 fixes on separate
-branch fix/monitor-path-and-rotation (c00c4fa), proposals #9/#10 annotated.
-Outstanding: dash-extra.mjs fix + tests/dash-extra.test.mjs uncommitted, awaiting
-TDD failing-first evidence from its agent; commit as follow-up on this branch.
-Wave-3 candidates (from audits, unclaimed): state/ auto-creation; BUILDLOG lifecycle
-doc; ACTIONS.log rotation wiring (use new rotate_logs.py); commit-format check in
-pre-push hook; config key for fleet repo list (reconstitute TODO); INCIDENT-LOG
-correlation; CI badge in README.
-
-Implementation map (wave 1, as shipped):
-1. onboarding: CLAUDE-TEMPLATE.md, docs/MEMORY-TEMPLATE.md, bin/cli.js, README.md
-2. policy: hooks/pre-push-policy.sh, docs/HOOK-INSTALL.md (audit → state/SECURITY-AUDIT.log)
-3. behavioral-PRs: .github/pull_request_template.md, docs/BEHAVIORAL-PR-REVIEW.md,
-   CONTRIBUTING.md, monitor/collect-signals.mjs (os.tmpdir fix + PROPOSE-tier emission)
-4. forensics: tools/agent-forensics.sh, docs/FORENSICS.md
-5. continuity: docs/RESTORE.md
-Implementers verify but do NOT commit; orchestrator commits per green item after QA.
+## Phase history (collapsed)
+- `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/
+  continuity scaffolding + rotate_logs, reconstitute, model-policy hook).
+- `wave-3-p0-inflight` → all 8 P0 + P1/P2 audit items dispatched and landed.
+- `backlog-cleared` → 26/26 items ✅, final-catch green, live gate + /power dashboard
+  default (web :8770) + brain hook re-synced.
+- `merged-wave4-open` → PR #16 merged (`f259c4f`); branch-per-item adopted; audit #1
+  dispatched.
 
 ## NEXT STEPS
-1. Collect implementer results; QA loop (review → bugfix → lint) until green.
-2. Fable final-catch on the full diff.
-3. Commit + push each green item (secret-scan gated); PR feature/behavior-as-code → main.
-4. Update this file at each phase boundary.
+1. Merge remaining wave-5 PRs as they go green; flip backlog boxes per merge.
+2. Wave-5 final-catch on merged main; then launch audit #2.
+3. Keep the web dash (:8770) restarted onto merged main after UI-touching merges.
+4. Update this file at each phase boundary; collapse finished phases into history.
