@@ -107,10 +107,13 @@ continuations; maintain Windows+POSIX compatibility).
 ## Single-instance guard
 
 Before running, check `.monitor-heartbeat` — if <300s old, skip cycle (another monitor is running).
-After cycle completes, update `.monitor-heartbeat` with current epoch.
+After cycle completes, update `.monitor-heartbeat` with current epoch. (Override with `AESOP_MONITOR_FORCE=1` for manual runs or tests.)
 
-## Single-writer discipline
+## Single-writer discipline with atomic operations
 
 - Only the monitor edits `BRIEF.md`, `SIGNALS.json`, `ACTIONS.log`, `.monitor-heartbeat`, `.signal-state.json`.
-- External processes (human, other agents) write to `PROPOSALS.md` (append or structured inbox).
+  - Writes are atomic (temp file + rename) to prevent mid-write corruption if a kill occurs.
+- `PROPOSALS.md` uses atomic operations (mkdir-style lockfile) to prevent race conditions between concurrent appends (emitProposal) and full rewrites (accept/reject).
+  - Lock is acquired, held during read-modify-write, released after write completes.
+  - If lock acquisition fails, operations proceed fail-open (proceed without lock, relying on filesystem atomicity).
 - Quarantine manifest is append-only; never edit entries, only add new ones.

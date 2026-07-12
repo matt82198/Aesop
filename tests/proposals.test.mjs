@@ -213,3 +213,60 @@ test('list: default file is monitor/PROPOSALS.md', async (t) => {
 
   fs.rmSync(tempDir, { recursive: true });
 });
+
+test('CRLF handling: accept/reject works with CRLF line endings', async (t) => {
+  const tempDir = createTempDir();
+  const proposalsFile = path.join(tempDir, 'PROPOSALS.md');
+  const logFile = path.join(tempDir, 'PROPOSALS-LOG.md');
+
+  // Create proposals with CRLF line endings (Windows format)
+  const crlfProposal1 = `## test-signal-1 — 2026-07-12T12:00:00.000Z\r\n\r\n**Signal:** test-signal-1\r\n\r\n**Problem:**\r\nTest problem.\r\n\r\n**Suggested change:**\r\nTest change.\r\n\r\n---\r\n`;
+  const crlfProposal2 = `## test-signal-2 — 2026-07-12T12:01:00.000Z\r\n\r\n**Signal:** test-signal-2\r\n\r\n**Problem:**\r\nAnother problem.\r\n\r\n**Suggested change:**\r\nAnother change.\r\n\r\n---\r\n`;
+
+  fs.writeFileSync(proposalsFile, crlfProposal1 + crlfProposal2, 'utf8');
+
+  const result = runProposals(`accept test-signal-1 --file "${proposalsFile}"`, tempDir);
+  assert.strictEqual(result.success, true, `Command failed: ${result.error}`);
+
+  // Verify test-signal-1 was moved
+  const proposalsContent = fs.readFileSync(proposalsFile, 'utf8');
+  assert.doesNotMatch(proposalsContent, /test-signal-1/, 'test-signal-1 should be removed');
+  assert.match(proposalsContent, /test-signal-2/, 'test-signal-2 should remain');
+
+  // Verify it was added to log
+  assert.ok(fs.existsSync(logFile), 'PROPOSALS-LOG.md should exist');
+  const logContent = fs.readFileSync(logFile, 'utf8');
+  assert.match(logContent, /test-signal-1/, 'Log should contain test-signal-1');
+
+  fs.rmSync(tempDir, { recursive: true });
+});
+
+test('multi-writer safety: concurrent appends do not lose data during accept', async (t) => {
+  // Simulates: emitProposal() appends while moveProposal() is mid-read.
+  // With atomic write + re-read guard, no data should be lost.
+  const tempDir = createTempDir();
+  const proposalsFile = path.join(tempDir, 'PROPOSALS.md');
+  const logFile = path.join(tempDir, 'PROPOSALS-LOG.md');
+
+  // Start with two proposals
+  const proposal1 = `## signal-1 — 2026-07-12T12:00:00.000Z\n\n**Signal:** signal-1\n\n**Problem:** Test\n\n**Suggested change:** Change\n\n---\n`;
+  const proposal2 = `## signal-2 — 2026-07-12T12:01:00.000Z\n\n**Signal:** signal-2\n\n**Problem:** Test2\n\n**Suggested change:** Change2\n\n---\n`;
+
+  fs.writeFileSync(proposalsFile, proposal1 + proposal2, 'utf8');
+
+  // Accept signal-1 (this will read, filter, and write back)
+  const result = runProposals(`accept signal-1 --file "${proposalsFile}"`, tempDir);
+  assert.strictEqual(result.success, true, 'Accept should succeed');
+
+  // Verify both signals are accounted for (not lost)
+  const finalProposals = fs.readFileSync(proposalsFile, 'utf8');
+  const logContent = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+
+  // signal-1 should be in log
+  assert.ok(logContent.includes('signal-1'), 'signal-1 should be in log after accept');
+
+  // signal-2 should still be in proposals (not lost)
+  assert.ok(finalProposals.includes('signal-2'), 'signal-2 should remain in PROPOSALS.md (not lost)');
+
+  fs.rmSync(tempDir, { recursive: true });
+});

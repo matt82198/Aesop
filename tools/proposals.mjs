@@ -14,6 +14,49 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// === Locking utilities (atomic via mkdir on all platforms) ===
+// Use atomic mkdir to create a lock directory; this is atomic across all platforms.
+function acquireLock(proposalsFile) {
+  const lockDir = proposalsFile + '.lock';
+  const maxAttempts = 50;
+  let attempt = 0;
+
+  while (attempt < maxAttempts) {
+    try {
+      fs.mkdirSync(lockDir, { exclusive: true });
+      return lockDir;
+    } catch (e) {
+      if (e.code === 'EEXIST') {
+        // Lock is held by another process; wait a bit and retry
+        // Simple busy-wait: yield briefly using a tight loop
+        attempt++;
+        if (attempt < maxAttempts) {
+          // Busy-wait for ~10ms per attempt
+          const start = Date.now();
+          while (Date.now() - start < 10) {
+            // tight loop to yield CPU
+          }
+        }
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  // Failed to acquire lock after retries; proceed without lock (fail-open)
+  return null;
+}
+
+function releaseLock(lockDir) {
+  if (lockDir) {
+    try {
+      fs.rmSync(lockDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+}
+
 // === Arg parsing ===
 const args = process.argv.slice(2);
 let command = '';
@@ -68,8 +111,8 @@ if (command !== 'list' && command !== 'accept' && command !== 'reject') {
  */
 function parseProposals(content) {
   const proposals = [];
-  // Split on line containing only "---"
-  const blocks = content.split(/\n---\n/);
+  // Split on line containing only "---" (handle both LF and CRLF)
+  const blocks = content.split(/\r?\n---\r?\n/);
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
@@ -121,83 +164,96 @@ function listProposals() {
 }
 
 /**
- * Move proposal from PROPOSALS.md to PROPOSALS-LOG.md
+ * Move proposal from PROPOSALS.md to PROPOSALS-LOG.md (with atomic locking for multi-writer safety)
  */
 function moveProposal(status) {
-  let content = '';
-  try {
-    content = fs.readFileSync(proposalsFile, 'utf8');
-  } catch {
-    console.error(`Error: Could not read ${proposalsFile}`);
-    process.exit(1);
-  }
+  // Acquire lock before any read/write operations
+  const lockDir = acquireLock(proposalsFile);
 
-  // Check if already in log (idempotency check first)
-  const logFile = path.join(path.dirname(proposalsFile), 'PROPOSALS-LOG.md');
-  let logContent = '';
-  if (fs.existsSync(logFile)) {
+  try {
+    // ATOMIC READ: re-read to ensure we have latest content (guard against concurrent appends)
+    let content = '';
     try {
-      logContent = fs.readFileSync(logFile, 'utf8');
+      content = fs.readFileSync(proposalsFile, 'utf8');
     } catch {
-      // Log file not readable; continue
+      console.error(`Error: Could not read ${proposalsFile}`);
+      process.exit(1);
     }
-  }
 
-  if (logContent.includes(`**Signal:** ${signalKey}`)) {
-    console.log(`Notice: Signal key '${signalKey}' already moved to log; no-op.`);
-    process.exit(0);
-  }
+    // Check if already in log (idempotency check first)
+    const logFile = path.join(path.dirname(proposalsFile), 'PROPOSALS-LOG.md');
+    let logContent = '';
+    if (fs.existsSync(logFile)) {
+      try {
+        logContent = fs.readFileSync(logFile, 'utf8');
+      } catch {
+        // Log file not readable; continue
+      }
+    }
 
-  const proposals = parseProposals(content);
-  const proposal = proposals.find(p => p.key === signalKey);
+    if (logContent.includes(`**Signal:** ${signalKey}`)) {
+      console.log(`Notice: Signal key '${signalKey}' already moved to log; no-op.`);
+      process.exit(0);
+    }
 
-  if (!proposal) {
-    console.error(`Error: Signal key '${signalKey}' not found in ${proposalsFile}`);
-    process.exit(1);
-  }
+    const proposals = parseProposals(content);
+    const proposal = proposals.find(p => p.key === signalKey);
 
-  // Remove proposal from source by rebuilding without this proposal
-  // Split on separators and filter out the matching proposal
-  const blocks = content.split(/\n---\n/);
-  const filteredBlocks = blocks.filter(block => {
-    const trimmed = block.trim();
-    if (!trimmed) return true; // Keep empty blocks
-    const signalMatch = trimmed.match(/\*\*Signal:\*\*\s+(\S+)/);
-    if (!signalMatch) return true; // Keep non-proposal blocks
-    return signalMatch[1] !== signalKey; // Filter out matching proposal
-  });
+    if (!proposal) {
+      console.error(`Error: Signal key '${signalKey}' not found in ${proposalsFile}`);
+      process.exit(1);
+    }
 
-  // Rebuild content with separators
-  const updatedContent = filteredBlocks.map((b, i) => {
-    if (i < filteredBlocks.length - 1 && b.trim()) {
+    // Remove proposal from source by rebuilding without this proposal
+    // Split on separators and filter out the matching proposal (handle both LF and CRLF)
+    const blocks = content.split(/\r?\n---\r?\n/);
+    const filteredBlocks = blocks.filter(block => {
+      const trimmed = block.trim();
+      if (!trimmed) return true; // Keep empty blocks
+      const signalMatch = trimmed.match(/\*\*Signal:\*\*\s+(\S+)/);
+      if (!signalMatch) return true; // Keep non-proposal blocks
+      return signalMatch[1] !== signalKey; // Filter out matching proposal
+    });
+
+    // Rebuild content with separators
+    const updatedContent = filteredBlocks.map((b, i) => {
+      if (i < filteredBlocks.length - 1 && b.trim()) {
+        return b.trim();
+      }
       return b.trim();
+    }).filter(b => b).join('\n\n---\n\n');
+
+    // ATOMIC WRITE: write to temp file, then rename (atomic on all platforms)
+    const tmpFile = proposalsFile + '.tmp';
+    try {
+      fs.writeFileSync(tmpFile, updatedContent.trim() ? updatedContent + '\n' : '', 'utf8');
+      fs.renameSync(tmpFile, proposalsFile);
+    } catch (e) {
+      // Clean up temp file if it exists
+      try { fs.unlinkSync(tmpFile); } catch { }
+      console.error(`Error: Could not write ${proposalsFile}: ${e.message}`);
+      process.exit(1);
     }
-    return b.trim();
-  }).filter(b => b).join('\n\n---\n\n');
 
-  try {
-    fs.writeFileSync(proposalsFile, updatedContent.trim() ? updatedContent + '\n' : '', 'utf8');
-  } catch (e) {
-    console.error(`Error: Could not write ${proposalsFile}: ${e.message}`);
-    process.exit(1);
-  }
+    // Append to log with status heading
+    const timestamp = new Date().toISOString();
+    const logEntry = `## ${status} ${timestamp}\n\n${proposal.block}\n\n---\n`;
 
-  // Append to log with status heading
-  const timestamp = new Date().toISOString();
-  const logEntry = `## ${status} ${timestamp}\n\n${proposal.block}\n\n---\n`;
-
-  try {
-    if (!logContent) {
-      fs.writeFileSync(logFile, logEntry, 'utf8');
-    } else {
-      fs.appendFileSync(logFile, logEntry, 'utf8');
+    try {
+      if (!logContent) {
+        fs.writeFileSync(logFile, logEntry, 'utf8');
+      } else {
+        fs.appendFileSync(logFile, logEntry, 'utf8');
+      }
+    } catch (e) {
+      console.error(`Error: Could not write ${logFile}: ${e.message}`);
+      process.exit(1);
     }
-  } catch (e) {
-    console.error(`Error: Could not write ${logFile}: ${e.message}`);
-    process.exit(1);
-  }
 
-  console.log(`✓ Moved signal '${signalKey}' to ${status} in ${path.basename(logFile)}`);
+    console.log(`✓ Moved signal '${signalKey}' to ${status} in ${path.basename(logFile)}`);
+  } finally {
+    releaseLock(lockDir);
+  }
 }
 
 // === Main ===

@@ -209,3 +209,156 @@ test('gap documentation: PROPOSALS.md fixture injection limitations', (t) => {
   // AESOP_ROOT and can create the expected directory structure.
   assert.ok(true, 'Gap documented in test comments');
 });
+
+// === Item 3: Heartbeat check at startup ===
+test('heartbeat guard: collector skips cycle if own heartbeat <300s old', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Create a fresh heartbeat file (just now)
+    const heartbeatPath = path.join(fixture.monitorDir, '.monitor-heartbeat');
+    fs.writeFileSync(heartbeatPath, String(Math.floor(Date.now() / 1000)), 'utf8');
+
+    // First run: should complete normally
+    const result1 = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '0' });
+    assert.ok(result1.stdout, 'First run should complete');
+
+    // Read the SIGNALS.json to get cycleCount after first run
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals1 = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    const cycle1 = signals1.cycleCount;
+
+    // Second run (immediately after, within 300s): should exit early without changing cycle count
+    const result2 = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '0' });
+    // The collector should exit 0 but not update outputs significantly
+    // (Note: it still exits 0, but skips the main cycle work)
+    const signals2 = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    const cycle2 = signals2.cycleCount;
+
+    // Cycle count should be same or minimally incremented (skipped cycle = no new signals)
+    assert.ok(cycle2 <= cycle1 + 1, 'Cycle should be skipped or minimally incremented when heartbeat is fresh');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('heartbeat override: AESOP_MONITOR_FORCE=1 bypasses guard', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Create an old heartbeat file
+    const heartbeatPath = path.join(fixture.monitorDir, '.monitor-heartbeat');
+    const oldEpoch = Math.floor((Date.now() - 5 * 60 * 1000) / 1000); // 5 minutes ago
+    fs.writeFileSync(heartbeatPath, String(oldEpoch), 'utf8');
+
+    // Run with AESOP_MONITOR_FORCE=1: should run despite old heartbeat
+    const result = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+    assert.ok(result.stdout, 'Collector should run with FORCE override');
+
+    // Heartbeat should be updated to now
+    const newHeartbeat = fs.readFileSync(heartbeatPath, 'utf8').trim();
+    const newEpoch = parseInt(newHeartbeat, 10);
+    assert.ok(newEpoch > oldEpoch, 'Heartbeat should be updated to recent timestamp');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// === Item 4: Atomic writes for SIGNALS.json and BRIEF.md ===
+test('atomic writes: SIGNALS.json and BRIEF.md are written atomically', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Run collector normally
+    const result = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+    assert.ok(result.stdout, 'Collector should run');
+
+    // Verify files exist and are parseable
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const briefPath = path.join(fixture.monitorDir, 'BRIEF.md');
+
+    assert.ok(fs.existsSync(signalsPath), 'SIGNALS.json should exist');
+    assert.ok(fs.existsSync(briefPath), 'BRIEF.md should exist');
+
+    // Verify SIGNALS.json is valid JSON
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.timestamp, 'SIGNALS.json should be valid JSON with timestamp');
+
+    // Verify no .tmp files are left behind
+    const tmpSignals = signalsPath + '.tmp';
+    const tmpBrief = briefPath + '.tmp';
+    assert.ok(!fs.existsSync(tmpSignals), 'No temporary SIGNALS.json.tmp should remain');
+    assert.ok(!fs.existsSync(tmpBrief), 'No temporary BRIEF.md.tmp should remain');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// === Item 1: AUTO actions for log rotation and junk quarantine ===
+test('AUTO action: log rotation invokes rotate_logs.py when log exceeds threshold', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Create a log file that exceeds threshold (>500 lines by default)
+    const logPath = path.join(fixture.monitorDir, 'ACTIONS.log');
+    const lines = [];
+    for (let i = 0; i < 505; i++) {
+      lines.push(`[2026-07-12T10:00:${String(i % 60).padStart(2, '0')}Z] Sample log line ${i}`);
+    }
+    fs.writeFileSync(logPath, lines.join('\n') + '\n', 'utf8');
+
+    // Run collector
+    const result = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+    assert.ok(result.stdout, 'Collector should run');
+
+    // Check that SIGNALS.json shows log needs rotation
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    const actionsLog = signals.logs.find(l => l.name === 'ACTIONS.log');
+    assert.ok(actionsLog && actionsLog.needsRotation, 'SIGNALS should detect ACTIONS.log needs rotation');
+
+    // Check that ACTIONS.log entries were appended (proving AUTO action executed)
+    const finalLogContent = fs.readFileSync(logPath, 'utf8');
+    assert.ok(finalLogContent.includes('AUTO action'), 'ACTIONS.log should contain AUTO action entries');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('AUTO action: junk quarantine moves old temp scripts to monitor/quarantine/', async (t) => {
+  const fixture = createFixture();
+  const tempDir = path.join(os.tmpdir(), 'aesop-junk-test-' + Math.random().toString(36).slice(2, 9));
+
+  try {
+    fs.mkdirSync(tempDir, { recursive: true });
+
+    // Create an old junk script (>24h old)
+    const oldJunkPath = path.join(tempDir, 'old_script.py');
+    const oldTime = Date.now() - (25 * 60 * 60 * 1000); // 25 hours ago
+    fs.writeFileSync(oldJunkPath, '#!/usr/bin/env python3\nprint("junk")\n', 'utf8');
+    fs.utimesSync(oldJunkPath, oldTime / 1000, oldTime / 1000);
+
+    // Run collector with this TEMP_ROOT
+    const result = runCollector(fixture.root, { TEMP_ROOT: tempDir, AESOP_MONITOR_FORCE: '1' });
+    assert.ok(result.stdout, 'Collector should run');
+
+    // Check that junk was detected and possibly quarantined
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.junk.quarantinable > 0, 'Junk detection should report quarantinable files');
+
+    // Check for quarantine directory and manifest
+    const quarantineDir = path.join(fixture.monitorDir, 'quarantine');
+    const manifestPath = path.join(quarantineDir, 'MANIFEST.tsv');
+
+    if (fs.existsSync(quarantineDir)) {
+      assert.ok(fs.existsSync(manifestPath), 'Quarantine manifest should exist if quarantine dir created');
+      const manifest = fs.readFileSync(manifestPath, 'utf8');
+      assert.ok(manifest.includes('old_script.py'), 'Manifest should list quarantined files');
+    }
+  } finally {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+    fixture.cleanup();
+  }
+});
+

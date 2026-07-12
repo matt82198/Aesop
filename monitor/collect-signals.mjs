@@ -6,6 +6,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // === Configuration ===
 // Load from environment or aesop.config.json; fall back to safe defaults.
@@ -38,6 +42,27 @@ try {
 const now = Date.now();
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
+
+// === Single-instance guard: check own heartbeat at startup ===
+// If heartbeat is <300s old and AESOP_MONITOR_FORCE is not set, skip this cycle (another instance is running)
+if (!process.env.AESOP_MONITOR_FORCE) {
+  const heartbeatPath = path.join(MON, '.monitor-heartbeat');
+  try {
+    const content = fs.readFileSync(heartbeatPath, 'utf8').trim();
+    const epoch = parseInt(content.split('\n')[0], 10);
+    if (epoch) {
+      const beatAge = now - epoch * 1000;
+      const MONITOR_THRESHOLD = 300e3; // 300 seconds
+      if (beatAge < MONITOR_THRESHOLD) {
+        // Heartbeat is recent; another instance is running. Skip this cycle.
+        console.log(`[skip] Monitor already running (heartbeat: ${(beatAge / 1000).toFixed(0)}s ago, threshold: ${MONITOR_THRESHOLD / 1000}s)`);
+        process.exit(0);
+      }
+    }
+  } catch {
+    // Heartbeat file doesn't exist or is unreadable; proceed with cycle
+  }
+}
 
 // === Utilities ===
 const sh = (cmd, cwd) => {
@@ -243,6 +268,8 @@ function detectJunkScripts() {
       .slice(0, 8)
       .map(x => `${age(x.ageMs)} ${x.fp.split(/[/\\]/).slice(-2).join('/')}`),
     recentCount: tempScripts.filter(x => now - x.ageMs < HOUR).length,
+    // Store all temp scripts for AUTO quarantine action
+    _scripts: tempScripts,
   };
   return junk;
 }
@@ -351,6 +378,127 @@ function checkUnreviewedPrompts() {
   return 0;
 }
 
+// === AUTO Actions ===
+// Log rotation: invoke rotate_logs.py if available and log needs rotation
+function performAutoLogRotation(logFiles, actionsLogPath) {
+  // rotate_logs.py is in tools directory (sibling to monitor)
+  let rotateLogsPy = path.join(path.dirname(MON), 'tools', 'rotate_logs.py');
+
+  // Fallback: look in SCRIPTS_ROOT if not found in tools
+  if (!fs.existsSync(rotateLogsPy)) {
+    rotateLogsPy = path.join(SCRIPTS_ROOT, 'rotate_logs.py');
+  }
+
+  // Fallback: look in the actual aesop source directory (for tests/CI environments)
+  if (!fs.existsSync(rotateLogsPy)) {
+    // Try to find the real aesop tools directory by looking for the real monitor/CLAUDE.md
+    const realMonitorClaude = path.join(__dirname, 'CLAUDE.md');
+    if (fs.existsSync(realMonitorClaude)) {
+      rotateLogsPy = path.join(__dirname, '..', 'tools', 'rotate_logs.py');
+    }
+  }
+
+  if (!fs.existsSync(rotateLogsPy)) {
+    // rotate_logs.py not available; skip (fail-open per CHARTER.md)
+    return [];
+  }
+
+  const rotatedLogs = [];
+  const logsNeedingRotation = logFiles.filter(l => l.needsRotation);
+
+  for (const log of logsNeedingRotation) {
+    if (!log.exists) continue;
+    let logPath;
+    if (log.name === 'ACTIONS.log') {
+      logPath = path.join(MON, log.name);
+    } else {
+      logPath = log.name.startsWith('/') ? log.name : path.join(STATE_DIR, log.name);
+    }
+
+    try {
+      // Invoke rotate_logs.py with thresholds from config
+      const cmd = `python "${rotateLogsPy}" "${logPath}" --max-lines ${logThresholds.maxLines} --max-bytes ${Math.floor(logThresholds.maxKb * 1024)}`;
+      execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+      rotatedLogs.push(log.name);
+
+      // Log the AUTO action
+      const timestamp = new Date(now).toISOString();
+      fs.appendFileSync(actionsLogPath, `[${timestamp}] AUTO action: Log rotation invoked for ${log.name}\n`, 'utf8');
+    } catch (e) {
+      // Log rotation failed; fail-open (log the error but continue)
+      const timestamp = new Date(now).toISOString();
+      fs.appendFileSync(actionsLogPath, `[${timestamp}] AUTO action FAILED: Log rotation for ${log.name}: ${e.message}\n`, 'utf8');
+    }
+  }
+
+  return rotatedLogs;
+}
+
+// Junk quarantine: move old temp scripts to monitor/quarantine/ with manifest
+function performAutoJunkQuarantine(junkScripts, quarantineDir, manifestPath) {
+  if (!Array.isArray(junkScripts) || junkScripts.length === 0) {
+    return { quarantined: 0 };
+  }
+
+  let quarantinedCount = 0;
+  const manifestLines = [];
+
+  // Read existing manifest if it exists
+  let existingManifest = '';
+  if (fs.existsSync(manifestPath)) {
+    try {
+      existingManifest = fs.readFileSync(manifestPath, 'utf8');
+    } catch {
+      // Ignore read errors
+    }
+  }
+
+  // Create quarantine directory if needed
+  try {
+    fs.mkdirSync(quarantineDir, { recursive: true });
+  } catch {
+    // Directory creation failed; skip quarantine
+    return { quarantined: 0 };
+  }
+
+  // Quarantine each old junk script
+  for (const junkItem of junkScripts) {
+    if (junkItem.quarantinable && fs.existsSync(junkItem.fp)) {
+      try {
+        const basename = path.basename(junkItem.fp);
+        const quarantinePath = path.join(quarantineDir, basename);
+
+        // Copy (not move) to quarantine to avoid issues with long paths or multiple instances
+        fs.copyFileSync(junkItem.fp, quarantinePath);
+
+        // Record in manifest
+        const timestamp = new Date(now).toISOString();
+        const manifestLine = `${timestamp}\t${basename}\t${junkItem.fp}\t${junkItem.size}\tbytes\n`;
+        manifestLines.push(manifestLine);
+
+        quarantinedCount++;
+      } catch (e) {
+        // Quarantine failed for this item; continue with others
+      }
+    }
+  }
+
+  // Append new entries to manifest
+  if (manifestLines.length > 0) {
+    try {
+      if (!existingManifest) {
+        // Write header
+        fs.writeFileSync(manifestPath, 'timestamp\tfilename\tsource_path\tsize_bytes\tunit\n', 'utf8');
+      }
+      fs.appendFileSync(manifestPath, manifestLines.join(''), 'utf8');
+    } catch {
+      // Manifest write failed; continue
+    }
+  }
+
+  return { quarantined: quarantinedCount };
+}
+
 // === Proposal Emission ===
 // Append PROPOSE-tier signals to monitor/PROPOSALS.md (idempotent per signal key)
 function emitProposal(signalKey, problem, suggestedChange) {
@@ -408,6 +556,30 @@ const alerts = checkSecurityAlerts();
 const respawnWatch = detectRespawnWatch();
 const { cycleCount, costTick } = trackCostCadence();
 const unreviewedPrompts = checkUnreviewedPrompts();
+
+// === Perform AUTO Actions ===
+// (Executed before emitting signals, so outputs reflect actions taken)
+const actionsLogPath = path.join(MON, 'ACTIONS.log');
+
+// Ensure MON directory and ACTIONS.log exist
+try {
+  fs.mkdirSync(MON, { recursive: true });
+  if (!fs.existsSync(actionsLogPath)) {
+    fs.writeFileSync(actionsLogPath, '', 'utf8');
+  }
+} catch {
+  // Ignore directory creation errors
+}
+
+// AUTO: Log rotation
+performAutoLogRotation(logFiles, actionsLogPath);
+
+// AUTO: Junk quarantine
+const quarantineDir = path.join(MON, 'quarantine');
+const manifestPath = path.join(quarantineDir, 'MANIFEST.tsv');
+if (junk._scripts && junk.quarantinable > 0) {
+  performAutoJunkQuarantine(junk._scripts, quarantineDir, manifestPath);
+}
 
 const signals = {
   timestamp: new Date(now).toISOString(),
@@ -550,11 +722,22 @@ if (memory.staleCount > 0) {
   );
 }
 
-// Write outputs
+// Write outputs atomically
 try {
   fs.mkdirSync(MON, { recursive: true });
-  fs.writeFileSync(path.join(MON, 'BRIEF.md'), brief.join('\n'), 'utf8');
-  fs.writeFileSync(path.join(MON, 'SIGNALS.json'), JSON.stringify(signals, null, 2), 'utf8');
+
+  // Atomic write for BRIEF.md: write to .tmp, then rename
+  const briefPath = path.join(MON, 'BRIEF.md');
+  const briefTmpPath = briefPath + '.tmp';
+  fs.writeFileSync(briefTmpPath, brief.join('\n'), 'utf8');
+  fs.renameSync(briefTmpPath, briefPath);
+
+  // Atomic write for SIGNALS.json: write to .tmp, then rename
+  const signalsPath = path.join(MON, 'SIGNALS.json');
+  const signalsTmpPath = signalsPath + '.tmp';
+  fs.writeFileSync(signalsTmpPath, JSON.stringify(signals, null, 2), 'utf8');
+  fs.renameSync(signalsTmpPath, signalsPath);
+
   fs.writeFileSync(path.join(MON, '.monitor-heartbeat'), String(Math.floor(now / 1000)), 'utf8');
   fs.writeFileSync(path.join(MON, '.signal-state.json'), JSON.stringify({ cycleCount }, null, 2), 'utf8');
   const summaryLine = `stale-loops: ${staleLoops.length}, repos-dirty: ${gitState.filter(g => g.dirty > 0).length}, stale-mem: ${memory.staleCount}, logs-need-rotation: ${needsRotation.length}, junk-quarantinable: ${junk.quarantinable}, stray-repo-scripts: ${strayRepo.length}, alerts-high-med: ${alerts.highMedCount}, respawn-watch: ${respawnWatch.length}, cycle: ${cycleCount}`;
