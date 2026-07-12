@@ -1,11 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
+# Reconstitute.sh: Clone or fetch repos from config/file
+# Parses tab-delimited (url\ttarget) or space-delimited (url target) repos
+# Tab-delimited recommended: preserves paths with spaces
+# Legacy space-delimited supported but discouraged for multi-word paths
+# ISSUE 1 FIX: Validates clone targets against fleet root (HIGH, security)
+# ISSUE 2 FIX: Tests drive real script via TEST_MODE=1 (P1, bash)
+# ISSUE 3 FIX: Uses read -r semantics for space-delimited parsing (P2, arch)
+
 DRY_RUN=0
-TEST_MODE=0
+TEST_MODE="${TEST_MODE:-0}"
 REPOS_FILE=""
 REPOS_CONFIG=""
 AESOP_CONFIG="aesop.config.json"
+AESOP_FLEET_ROOT="${AESOP_FLEET_ROOT:-}"
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -47,8 +56,104 @@ validate_url() {
   return 1
 }
 
+get_fleet_root() {
+  # Priority: env var > config file > default home
+  if [ -n "$AESOP_FLEET_ROOT" ]; then
+    echo "$AESOP_FLEET_ROOT"
+    return 0
+  fi
+
+  if [ -f "$AESOP_CONFIG" ]; then
+    local config_fleet_root
+    config_fleet_root=$(python3 -c "
+import json
+try:
+  with open('$AESOP_CONFIG') as f:
+    cfg = json.load(f)
+  fleet_root = cfg.get('fleet_root', '')
+  if fleet_root:
+    print(fleet_root)
+except:
+  pass
+" 2>/dev/null || true)
+    if [ -n "$config_fleet_root" ]; then
+      echo "$config_fleet_root"
+      return 0
+    fi
+  fi
+
+  # Default to home directory
+  echo "$HOME"
+}
+
+validate_target() {
+  local target="$1"
+  local fleet_root="$2"
+
+  # Empty target
+  if [ -z "$target" ]; then
+    echo "Error: target path cannot be empty" >&2
+    return 1
+  fi
+
+  # Resolve the target path to an absolute path
+  # Handle relative paths by prepending current directory
+  local abs_target
+  if [[ "$target" = /* ]]; then
+    abs_target="$target"
+  else
+    abs_target="$PWD/$target"
+  fi
+
+  # Normalize the path to resolve .. and .
+  # Use cd + pwd to safely resolve symlinks and relative components
+  local normalized
+  if [ -d "$abs_target" ]; then
+    normalized=$(cd "$abs_target" && pwd)
+  else
+    # For non-existent targets, manually normalize
+    normalized=$(cd "$(dirname "$abs_target")" && pwd)/$(basename "$abs_target")
+  fi
+
+  # Normalize fleet root
+  local normalized_fleet_root
+  if [ -d "$fleet_root" ]; then
+    normalized_fleet_root=$(cd "$fleet_root" && pwd)
+  else
+    normalized_fleet_root="$fleet_root"
+  fi
+
+  # Ensure fleet root ends without trailing slash for comparison
+  normalized_fleet_root="${normalized_fleet_root%/}"
+
+  # Check if target is under fleet root
+  # Using pattern matching: if normalized path starts with fleet_root/, it's valid
+  if [[ "$normalized" = "$normalized_fleet_root" ]] || [[ "$normalized" = "$normalized_fleet_root"/* ]]; then
+    return 0
+  fi
+
+  # Target escapes fleet root
+  echo "Error: target path '$target' (resolves to: $normalized) is outside fleet root '$fleet_root'" >&2
+  return 1
+}
+
 load_repos_from_config() {
   if [ -f "$AESOP_CONFIG" ]; then
+    # Also load fleet_root from config if not already set
+    if [ -z "$AESOP_FLEET_ROOT" ]; then
+      AESOP_FLEET_ROOT=$(python3 -c "
+import json
+try:
+  with open('$AESOP_CONFIG') as f:
+    cfg = json.load(f)
+  fleet_root = cfg.get('fleet_root', '')
+  if fleet_root:
+    print(fleet_root)
+except:
+  pass
+" 2>/dev/null || true)
+    fi
+
     REPOS_CONFIG=$(python3 -c "
 import json
 try:
@@ -75,6 +180,9 @@ run_test_suite() {
   local temp_root
   temp_root=$(mktemp -d)
   trap "rm -rf $temp_root" EXIT
+
+  # Set fleet root to temp_root for test isolation
+  AESOP_FLEET_ROOT="$temp_root"
 
   local origin_bare="$temp_root/origin.bare"
   local cloned_repo="$temp_root/cloned"
@@ -162,9 +270,16 @@ reconstruct_fleet() {
     exit 0
   fi
 
+  # Get the fleet root for target validation
+  local fleet_root
+  fleet_root=$(get_fleet_root)
+
   echo "Processing repos..."
   while IFS= read -r line; do
     [ -z "$line" ] && continue
+
+    url=""
+    target=""
 
     # Try to parse as tab-delimited first (url\ttarget)
     if echo "$line" | grep -q $'\t'; then
@@ -172,8 +287,9 @@ reconstruct_fleet() {
       target=$(echo "$line" | cut -f2-)
     else
       # Fall back to space-delimited (url target) for backward compatibility
-      url=$(echo "$line" | awk '{print $1}')
-      target=$(echo "$line" | awk '{print $2}')
+      # ISSUE 3 FIX: Use read -r to preserve spaces in the remainder
+      # Split on first space only
+      read -r url target <<< "$line"
     fi
 
     if [ -z "$target" ]; then
@@ -192,6 +308,12 @@ reconstruct_fleet() {
         failed_count=$((failed_count + 1))
         continue
       fi
+    fi
+
+    # ISSUE 1 FIX: Validate target path against fleet root before any git operations
+    if ! validate_target "$target" "$fleet_root"; then
+      failed_count=$((failed_count + 1))
+      continue
     fi
 
     if [ ! -d "$target" ]; then
@@ -239,12 +361,24 @@ reconstruct_fleet() {
 main() {
   parse_args "$@"
 
-  if [ $TEST_MODE -eq 1 ]; then
+  # If --test flag was explicitly passed, run the built-in test suite
+  # Otherwise, use TEST_MODE from environment (if set) for external testing
+  # This allows external tests to use TEST_MODE=1 without triggering the built-in suite
+  if [ "${TEST_SUITE:-0}" -eq 1 ]; then
     run_test_suite
     exit $?
   fi
 
   reconstruct_fleet
 }
+
+# Check if --test was explicitly passed (before parse_args overwrites it)
+TEST_SUITE=0
+for arg in "$@"; do
+  if [ "$arg" = "--test" ]; then
+    TEST_SUITE=1
+    break
+  fi
+done
 
 main "$@"
