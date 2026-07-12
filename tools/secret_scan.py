@@ -142,14 +142,28 @@ def scan_file(filepath):
     """
     Scan a single file for secrets.
     Returns list of (line_num, rule, match_str, is_fatal).
-    is_fatal=True for credential filenames; is_fatal=False if pragma present and rule-based.
+    is_fatal=True for credential filenames and fatal rule categories;
+    is_fatal=False only if pragma present AND rule is in SOFTENED_BY_PRAGMA.
     """
+    # Rules that CAN be softened by pragma (doc-shaped rules only)
+    SOFTENED_BY_PRAGMA = {"generic_secret_assignment", "env_access"}
+
+    # Rules that are ALWAYS fatal, pragma never applies
+    FATAL_RULES = {
+        "pem_private_key",
+        "aws_access_key",
+        "github_token",
+        "slack_token",
+        "openai_anthropic_key",
+        "connection_string",
+    }
+
     findings = []
 
     if should_skip_file(filepath):
         return findings
 
-    # Check for pragma (applies only to rule-based findings, not filename findings)
+    # Check for pragma (applies only to specific rule-based findings, not filename findings)
     has_file_pragma = has_pragma(filepath)
 
     # Check if filename matches credential patterns (always fatal, pragma does NOT apply)
@@ -177,8 +191,17 @@ def scan_file(filepath):
                         if is_placeholder(match_str):
                             continue
 
-                        # Mark as non-fatal if pragma present (rule-based only)
-                        is_fatal = not has_file_pragma
+                        # Determine fatality based on rule category
+                        if rule_name in FATAL_RULES:
+                            # These are always fatal, pragma never applies
+                            is_fatal = True
+                        elif has_file_pragma and rule_name in SOFTENED_BY_PRAGMA:
+                            # Only these rules can be softened by pragma
+                            is_fatal = False
+                        else:
+                            # Other rules are fatal unless pragma and softened
+                            is_fatal = not has_file_pragma if rule_name in SOFTENED_BY_PRAGMA else True
+
                         findings.append((line_num, rule_name, match_str, is_fatal))
 
     except Exception:

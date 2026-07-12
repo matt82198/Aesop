@@ -10,12 +10,30 @@ json_escape() {
 }
 
 check_branch_policy() {
+  # Parse git pre-push stdin to check if any remote-ref targets main or master
+  # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+  # This catches attempts like: git push origin HEAD:main (even from feature branch)
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    # Skip empty lines
+    if [ -z "$remote_ref" ]; then
+      continue
+    fi
+
+    # Block if attempting to push to main or master
+    if [ "$remote_ref" = "refs/heads/main" ] || [ "$remote_ref" = "refs/heads/master" ]; then
+      return 1
+    fi
+  done
+
+  # If no protected branch in stdin, also check current branch as fallback
+  # (for safety, in case stdin is empty or hook runs without git pre-push)
   local current_branch
   current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
   if [ "$current_branch" = "main" ] || [ "$current_branch" = "master" ]; then
     return 1
   fi
+
   return 0
 }
 
@@ -36,8 +54,17 @@ check_secret_scan() {
     return 0
   fi
 
-  "$scan_bin" "$scan_script" --staged >/dev/null 2>&1
-  return $?
+  # Run scanner and capture output; surface ALLOWED-DOC lines to stderr for visibility
+  local scan_output
+  scan_output=$("$scan_bin" "$scan_script" --staged 2>&1)
+  local exit_code=$?
+
+  # Surface all output including ALLOWED-DOC findings to stderr
+  if [ -n "$scan_output" ]; then
+    printf '%s\n' "$scan_output" >&2
+  fi
+
+  return $exit_code
 }
 
 log_block() {
@@ -191,12 +218,40 @@ run_test_mode() {
     test_passed=$((test_passed + 1))
   fi
 
+  printf '\n=== Test 6: stdin refspec bypass detection (HEAD:main) ===\n'
+  (
+    cd "$tmpdir" || exit 1
+    git checkout -q feature/test 2>/dev/null || git checkout -q -b feature/bypass_test 2>/dev/null
+
+    # Simulate git pre-push stdin for: git push origin HEAD:main
+    # This is an explicit refspec that pushes to main even though local HEAD is feature/test
+    # The fixed check_branch_policy MUST block this by checking remote-ref in stdin
+    local_sha=$(git rev-parse HEAD 2>/dev/null || echo "0000000")
+    remote_main_sha="0000000000000000000000000000000000000000"
+
+    # Stdin format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+    # For "git push origin HEAD:main": refs/heads/feature/test <sha> refs/heads/main 0000...
+    printf '%s\n' "refs/heads/feature/test $local_sha refs/heads/main $remote_main_sha" | {
+      if check_branch_policy >/dev/null 2>&1; then
+        printf 'FAIL: Should have blocked push to main via stdin refspec\n'
+        exit 1
+      else
+        printf 'PASS: Correctly blocked push to main via stdin refspec\n'
+      fi
+    }
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 5 tests passed.\n'
+    printf '\nAll 6 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -210,6 +265,7 @@ main() {
     exit $?
   fi
 
+  # git pre-push provides ref info on stdin, pass it to check_branch_policy
   if ! check_branch_policy; then
     printf 'Error: Push to main/master is blocked by policy\n' >&2
     log_block "push_to_protected_branch"
