@@ -105,10 +105,13 @@ def generate_session_token():
     Token is generated once at startup and persisted to state/.ui-session-token (mode 0600).
     Subsequent imports of this module return the same token (in-memory).
 
+    SECURITY: File is created atomically with restricted permissions using os.open(O_CREAT|O_EXCL)
+    to avoid TOCTOU window where file exists with world-readable permissions.
+
     Returns:
         str: 43-character base64-like random token (256 bits / 3 bytes per char = ~43 chars)
     """
-    # Check if token file exists
+    # Check if token file exists and is readable
     if UI_SESSION_TOKEN_FILE.exists():
         try:
             token = UI_SESSION_TOKEN_FILE.read_text().strip()
@@ -120,18 +123,33 @@ def generate_session_token():
     # Generate new token: 32 random bytes → 43-char base64-like string
     token = secrets.token_urlsafe(32)
 
-    # Persist to file with restricted permissions (0600)
+    # Persist to file with restricted permissions (0600) using atomic creation
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        # Write with restricted permissions on Unix-like systems
-        # Windows ignores mode bits, but we'll set them anyway
-        UI_SESSION_TOKEN_FILE.write_text(token)
-        # Try to chmod on POSIX systems
+
+        # Atomically create file with 0600 permissions using os.open with O_CREAT|O_EXCL.
+        # This ensures the file is never world-readable (no TOCTOU window).
+        # On Windows, mode bits are largely ignored, which is fine.
         try:
-            os.chmod(str(UI_SESSION_TOKEN_FILE), 0o600)
-        except:
-            pass  # Windows or no chmod support
-    except:
+            fd = os.open(
+                str(UI_SESSION_TOKEN_FILE),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600
+            )
+            # Write token via the file descriptor (no separate chmod needed)
+            with os.fdopen(fd, 'w') as f:
+                f.write(token)
+        except FileExistsError:
+            # File already exists (race condition or previous run).
+            # Try to read it and use that token instead.
+            try:
+                token = UI_SESSION_TOKEN_FILE.read_text().strip()
+                if token and len(token) >= 32:
+                    return token
+            except:
+                pass
+            # If we can't read the existing file, fall back to in-memory token
+    except Exception:
         pass  # Fail-open: token exists in memory even if file write fails
 
     return token
