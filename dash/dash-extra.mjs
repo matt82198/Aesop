@@ -28,8 +28,14 @@ const TRANSCRIPTS_ROOT = path.resolve(
   config.transcripts_root ||
   path.join(process.env.HOME || '.', '.claude', 'projects')
 );
-const SCAN_DIR = path.join(AESOP_ROOT, 'state');
-const ALERTS_LOG = path.join(SCAN_DIR, 'SECURITY-ALERTS.log');
+
+// Resolve state_root: env var > config > default
+const STATE_ROOT = path.resolve(
+  process.env.AESOP_STATE_ROOT ||
+  config.state_root ||
+  path.join(AESOP_ROOT, 'state')
+);
+const ALERTS_LOG = path.join(STATE_ROOT, 'SECURITY-ALERTS.log');
 
 // ANSI colors for TUI output
 const c = {
@@ -61,7 +67,8 @@ try {
 } catch {}
 
 // Recursively walk directory tree to find agent-*.jsonl files.
-// Respects depth limit and prunes old directories (mtime older than activity window).
+// Respects depth limit. Activity window filtering happens per-file, not per-directory,
+// to avoid hiding active agents in dirs whose mtime was frozen at creation.
 function walk(dir, accumulator, depth = 0) {
   // Stop recursion if depth exceeds limit
   if (depth > MAX_DEPTH) return;
@@ -71,16 +78,10 @@ function walk(dir, accumulator, depth = 0) {
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        // Check directory mtime: skip descending into stale directories
-        let dirMtime = 0;
-        try {
-          dirMtime = fs.statSync(fullPath).mtimeMs;
-        } catch {}
-
-        // Only descend if directory was modified recently (within activity window)
-        if (now - dirMtime < ACTIVITY_WINDOW) {
-          walk(fullPath, accumulator, depth + 1);
-        }
+        // Always descend into subdirectories (respecting depth limit only)
+        // Do NOT prune based on directory mtime, as directories don't update
+        // when files inside are appended to.
+        walk(fullPath, accumulator, depth + 1);
       } else if (/^agent-.*\.jsonl$/.test(entry.name)) {
         accumulator.push(fullPath);
       }

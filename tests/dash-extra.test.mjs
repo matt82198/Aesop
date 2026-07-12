@@ -135,7 +135,7 @@ test('config precedence: AESOP_TRANSCRIPTS_ROOT from config file honored when en
   }
 });
 
-test('walk() respects depth limit of 6 and prunes old branches', () => {
+test('walk() respects depth limit of 6 without skipping based on directory mtime', () => {
   const fixture = makeFixture();
   try {
     const transcriptsRoot = fixture.transcriptsRoot;
@@ -162,8 +162,9 @@ test('walk() respects depth limit of 6 and prunes old branches', () => {
       // Set mtime to 15 minutes ago (outside activity window)
       fs.utimesSync(path.join(currentPath, staleAgent), now / 1000 - 900, now / 1000 - 900);
 
-      // Also set directory mtime to stale for d3 and deeper (to test pruning old directories)
-      if (depth >= 3) {
+      // Set directory mtime to very stale (15 min old) for all depths >= 1 to test
+      // that directory-mtime pruning is NOT used: fresh files inside old dirs must still appear
+      if (depth >= 1) {
         fs.utimesSync(currentPath, now / 1000 - 900, now / 1000 - 900);
       }
     }
@@ -189,6 +190,115 @@ test('walk() respects depth limit of 6 and prunes old branches', () => {
       ...freshAgents.map(a => parseInt(a.hint.match(/d(\d+)/)?.[1] || '0', 10))
     );
     assert.ok(maxDepthFound <= 6, `depth should be capped at 6, found agents at depth ${maxDepthFound}`);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('P1: old subagent-dir with fresh agent-*.jsonl inside shows agent (dir-mtime pruning removed)', () => {
+  const fixture = makeFixture();
+  try {
+    const transcriptsRoot = fixture.transcriptsRoot;
+    const now = Date.now();
+
+    // Simulate real layout: projects/project/session/subagents/agent-*.jsonl
+    // The subagents/ dir mtime freezes at creation (doesn't update when files appended to)
+    const subagentsDir = path.join(transcriptsRoot, 'myproject', 'session-abc', 'subagents');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+
+    // Create fresh agent file (modified 30 seconds ago = within 12 min activity window)
+    const agentPath = path.join(subagentsDir, 'agent-fresh.jsonl');
+    fs.writeFileSync(agentPath, '{"description":"fresh agent in old dir"}\n');
+    fs.utimesSync(agentPath, now / 1000 - 30, now / 1000 - 30);
+
+    // Set subagents/ dir mtime to 15 minutes old (outside activity window)
+    // This simulates: session created 15 min ago, agent recently updated inside
+    fs.utimesSync(subagentsDir, now / 1000 - 900, now / 1000 - 900);
+
+    const agents = runScript(fixture);
+    assert.ok(
+      agents.some(a => a.hint.includes('fresh agent in old dir')),
+      'agent with fresh mtime must appear even if parent dir is 15 min old (dir-mtime pruning must be removed)'
+    );
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('P2: AESOP_STATE_ROOT env var is honored for alerts path', () => {
+  const fixture = makeFixture();
+  try {
+    // Create a custom state directory separate from fixture.aesopRoot
+    const customStateDir = path.join(fixture.root, 'custom-state');
+    fs.mkdirSync(customStateDir, { recursive: true });
+
+    // Write alert to custom state location
+    fs.writeFileSync(
+      path.join(customStateDir, 'SECURITY-ALERTS.log'),
+      `2026-07-12T00:00:00Z HIGH ${AGENT_BASENAME} alert in custom state\n`
+    );
+
+    // Run script with AESOP_STATE_ROOT pointing to custom location
+    const stdout = execFileSync(process.execPath, [SCRIPT, '--json'], {
+      env: {
+        ...process.env,
+        AESOP_ROOT: fixture.aesopRoot,
+        AESOP_TRANSCRIPTS_ROOT: fixture.transcriptsRoot,
+        AESOP_STATE_ROOT: customStateDir  // Override state location
+      },
+      encoding: 'utf8'
+    });
+
+    const agents = JSON.parse(stdout);
+    assert.equal(agents.length, 1, 'fixture agent should be detected');
+    assert.equal(
+      agents[0].status,
+      'HIGH',
+      'alert in AESOP_STATE_ROOT must be honored (not hardcoded path)'
+    );
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('P2: config.state_root is honored when AESOP_STATE_ROOT env var not set', () => {
+  const fixture = makeFixture();
+  try {
+    // Create a custom state directory
+    const customStateDir = path.join(fixture.root, 'config-state');
+    fs.mkdirSync(customStateDir, { recursive: true });
+
+    // Write alert to config-specified state location
+    fs.writeFileSync(
+      path.join(customStateDir, 'SECURITY-ALERTS.log'),
+      `2026-07-12T00:00:00Z MED ${AGENT_BASENAME} alert in config state\n`
+    );
+
+    // Create aesop.config.json with custom state_root
+    const configPath = path.join(fixture.aesopRoot, 'aesop.config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      state_root: customStateDir,
+      repos: []
+    }), 'utf8');
+
+    // Run script WITHOUT AESOP_STATE_ROOT env var; should use config file value
+    const stdout = execFileSync(process.execPath, [SCRIPT, '--json'], {
+      env: {
+        ...process.env,
+        AESOP_ROOT: fixture.aesopRoot,
+        AESOP_TRANSCRIPTS_ROOT: fixture.transcriptsRoot
+        // NOTE: NOT setting AESOP_STATE_ROOT - should fall back to config
+      },
+      encoding: 'utf8'
+    });
+
+    const agents = JSON.parse(stdout);
+    assert.equal(agents.length, 1, 'fixture agent should be detected');
+    assert.equal(
+      agents[0].status,
+      'MED',
+      'alert in config.state_root must be honored when AESOP_STATE_ROOT env var is not set'
+    );
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
