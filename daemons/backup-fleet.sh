@@ -33,31 +33,60 @@ get_tracked_modifications() {
   ) | sort -u
 }
 
+get_untracked_files() {
+  local repo="$1"
+  (
+    cd "$repo" || return 1
+    git ls-files --others --exclude-standard 2>/dev/null
+  ) | sort -u
+}
+
 scan_tracked_files() {
   local repo="$1"
   local tracked_files
-  local file_paths=""
+  local untracked_files
+  local -a file_paths=()
+  local repo_win
+
+  # Convert repo path to Windows format for Python compatibility (Git Bash on Windows)
+  repo_win=$(cd "$repo" 2>/dev/null && pwd -W 2>/dev/null || echo "$repo")
+
   tracked_files=$(get_tracked_modifications "$repo")
+  untracked_files=$(get_untracked_files "$repo")
 
-  if [ -z "$tracked_files" ]; then
-    return 0
-  fi
-
-  while IFS= read -r file; do
-    if [ -n "$file" ] && [ -f "$repo/$file" ]; then
-      file_paths="$file_paths $repo/$file"
-    fi
-  done <<EOF
+  # Collect tracked modifications
+  if [ -n "$tracked_files" ]; then
+    while IFS= read -r file; do
+      if [ -n "$file" ] && [ -f "$repo/$file" ]; then
+        file_paths+=("$repo_win/$file")
+      fi
+    done <<EOF
 $tracked_files
 EOF
+  fi
 
-  if [ -z "$file_paths" ]; then
+  # Collect untracked files (ITEM 1 fix)
+  if [ -n "$untracked_files" ]; then
+    while IFS= read -r file; do
+      if [ -n "$file" ] && [ -f "$repo/$file" ]; then
+        file_paths+=("$repo_win/$file")
+      fi
+    done <<EOF
+$untracked_files
+EOF
+  fi
+
+  if [ ${#file_paths[@]} -eq 0 ]; then
     return 0
   fi
 
   if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
-    python "$AESOP_ROOT/tools/secret_scan.py" $file_paths >/dev/null 2>&1
+    # ITEM 2 fix: use "${file_paths[@]}" to properly quote array elements
+    python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+    return $?
   fi
+
+  return 0
 }
 
 get_default_branch() {
