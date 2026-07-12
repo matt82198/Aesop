@@ -76,8 +76,9 @@ const HOUR = 3600e3;
 const DAY = 24 * HOUR;
 
 // === Single-instance guard: check own heartbeat at startup ===
-// If heartbeat is <300s old and AESOP_MONITOR_FORCE is not set, skip this cycle (another instance is running)
-if (!process.env.AESOP_MONITOR_FORCE) {
+// If heartbeat is <300s old and AESOP_MONITOR_FORCE is not explicitly set to 'true' or '1', skip this cycle
+// (another instance is running). Match the AESOP_EXTENDED_SIGNALS truthiness pattern.
+if (process.env.AESOP_MONITOR_FORCE !== 'true' && process.env.AESOP_MONITOR_FORCE !== '1') {
   const heartbeatPath = path.join(MON, '.monitor-heartbeat');
   try {
     const content = fs.readFileSync(heartbeatPath, 'utf8').trim();
@@ -531,31 +532,113 @@ function performAutoJunkQuarantine(junkScripts, quarantineDir, manifestPath) {
   return { quarantined: quarantinedCount };
 }
 
+// === Locking utilities for PROPOSALS.md (atomic via mkdir on all platforms) ===
+function acquireLock(proposalsFile) {
+  const lockDir = proposalsFile + '.lock';
+  const lockMarkerFile = path.join(lockDir, 'pid-timestamp.txt');
+  const maxAttempts = 50;
+  let attempt = 0;
+  const STALE_LOCK_THRESHOLD = 60e3; // 60 seconds
+
+  while (attempt < maxAttempts) {
+    try {
+      fs.mkdirSync(lockDir, { exclusive: true });
+      // Lock acquired; write pid+timestamp for staleness detection
+      const lockMarker = `${process.pid}\n${Math.floor(Date.now() / 1000)}\n`;
+      try {
+        fs.writeFileSync(lockMarkerFile, lockMarker, 'utf8');
+      } catch {
+        // Marker write failed, but lock is held; continue
+      }
+      return lockDir;
+    } catch (e) {
+      if (e.code === 'EEXIST') {
+        // Lock exists; check if it's stale
+        try {
+          const markerPath = path.join(lockDir, 'pid-timestamp.txt');
+          const markerContent = fs.readFileSync(markerPath, 'utf8').trim();
+          const lines = markerContent.split('\n');
+          if (lines.length >= 2) {
+            const lockEpoch = parseInt(lines[1], 10);
+            const lockAge = Date.now() - lockEpoch * 1000;
+            if (lockAge > STALE_LOCK_THRESHOLD) {
+              // Stale lock detected; reclaim it
+              try {
+                fs.rmSync(lockDir, { recursive: true, force: true });
+                attempt++; // Retry acquisition after cleanup
+                if (attempt < maxAttempts) {
+                  const start = Date.now();
+                  while (Date.now() - start < 10) {
+                    // Busy-wait briefly
+                  }
+                }
+                continue;
+              } catch {
+                // Cleanup failed; will continue retrying or fail-open
+              }
+            }
+          }
+        } catch {
+          // Could not read marker; assume lock is active
+        }
+        // Lock is held; wait and retry
+        attempt++;
+        if (attempt < maxAttempts) {
+          const start = Date.now();
+          while (Date.now() - start < 10) {
+            // Busy-wait for ~10ms per attempt
+          }
+        }
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  // Failed to acquire lock after retries; warn and proceed without lock (fail-open)
+  console.error(`Warning: Could not acquire PROPOSALS.md.lock after ${maxAttempts * 10}ms; proceeding unlocked`);
+  return null;
+}
+
+function releaseLock(lockDir) {
+  if (lockDir) {
+    try {
+      fs.rmSync(lockDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+}
+
 // === Proposal Emission ===
-// Append PROPOSE-tier signals to monitor/PROPOSALS.md (idempotent per signal key)
+// Append PROPOSE-tier signals to monitor/PROPOSALS.md (idempotent per signal key, with atomic locking)
 function emitProposal(signalKey, problem, suggestedChange) {
   const proposalsPath = path.join(MON, 'PROPOSALS.md');
   const timestamp = new Date(now).toISOString();
 
-  // Read existing proposals to check for duplicate
-  let existingContent = '';
+  // Acquire lock before read-check-append
+  const lockDir = acquireLock(proposalsPath);
+
   try {
-    existingContent = fs.readFileSync(proposalsPath, 'utf8');
-  } catch {
-    // File doesn't exist yet; start fresh
-    if (!fs.existsSync(MON)) {
-      fs.mkdirSync(MON, { recursive: true });
+    // Read existing proposals to check for duplicate
+    let existingContent = '';
+    try {
+      existingContent = fs.readFileSync(proposalsPath, 'utf8');
+    } catch {
+      // File doesn't exist yet; start fresh
+      if (!fs.existsSync(MON)) {
+        fs.mkdirSync(MON, { recursive: true });
+      }
     }
-  }
 
-  // Check if this signal key already has an entry (idempotency check)
-  if (existingContent.includes(`**Signal:** ${signalKey}`)) {
-    // Entry already exists; skip to avoid duplicates
-    return;
-  }
+    // Check if this signal key already has an entry (idempotency check)
+    if (existingContent.includes(`**Signal:** ${signalKey}`)) {
+      // Entry already exists; skip to avoid duplicates
+      return;
+    }
 
-  // Append new proposal entry
-  const proposal = `
+    // Append new proposal entry
+    const proposal = `
 ## ${signalKey} — ${timestamp}
 
 **Signal:** ${signalKey}
@@ -569,11 +652,14 @@ ${suggestedChange}
 ---
 `;
 
-  try {
-    fs.appendFileSync(proposalsPath, proposal, 'utf8');
-  } catch (e) {
-    // Fail-open: log to BRIEF instead of crashing
-    console.error(`Failed to write PROPOSALS.md: ${e.message}`);
+    try {
+      fs.appendFileSync(proposalsPath, proposal, 'utf8');
+    } catch (e) {
+      // Fail-open: log to BRIEF instead of crashing
+      console.error(`Failed to write PROPOSALS.md: ${e.message}`);
+    }
+  } finally {
+    releaseLock(lockDir);
   }
 }
 
@@ -776,27 +862,91 @@ if (memory.staleCount > 0) {
   );
 }
 
-// Write outputs atomically
+// Helper: Atomic rename with EPERM/EBUSY retry and cleanup on failure
+function atomicRename(tmpPath, targetPath) {
+  const maxRetries = 5;
+  const baseDelayMs = 50;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      fs.renameSync(tmpPath, targetPath);
+      return true; // Success
+    } catch (e) {
+      if ((e.code === 'EPERM' || e.code === 'EBUSY') && i < maxRetries - 1) {
+        // Retry on Windows EPERM or EBUSY (file held by reader)
+        const delayMs = baseDelayMs * (i + 1); // Exponential backoff: 50ms, 100ms, 150ms, 200ms
+        const start = Date.now();
+        while (Date.now() - start < delayMs) {
+          // Busy-wait to avoid scheduling overhead
+        }
+      } else {
+        // Final failure or non-retryable error; clean up .tmp file and return false
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch {
+          // Cleanup failed; best effort
+        }
+        return false;
+      }
+    }
+  }
+
+  // Final failure after all retries; clean up and return false
+  try {
+    fs.unlinkSync(tmpPath);
+  } catch {
+    // Cleanup failed; best effort
+  }
+  return false;
+}
+
+// Write outputs atomically with per-file retry on EPERM
 try {
   fs.mkdirSync(MON, { recursive: true });
 
-  // Atomic write for BRIEF.md: write to .tmp, then rename
+  // Atomic write for BRIEF.md: write to .tmp, then rename with retry
   const briefPath = path.join(MON, 'BRIEF.md');
   const briefTmpPath = briefPath + '.tmp';
-  fs.writeFileSync(briefTmpPath, brief.join('\n'), 'utf8');
-  fs.renameSync(briefTmpPath, briefPath);
+  let briefSuccess = false;
+  try {
+    fs.writeFileSync(briefTmpPath, brief.join('\n'), 'utf8');
+    briefSuccess = atomicRename(briefTmpPath, briefPath);
+    if (!briefSuccess) {
+      console.error(`Warning: Failed to write BRIEF.md after retries; keeping prior file`);
+    }
+  } catch (e) {
+    console.error(`Warning: Failed to write BRIEF.md: ${e.message}`);
+  }
 
-  // Atomic write for SIGNALS.json: write to .tmp, then rename
+  // Atomic write for SIGNALS.json: write to .tmp, then rename with retry
   const signalsPath = path.join(MON, 'SIGNALS.json');
   const signalsTmpPath = signalsPath + '.tmp';
-  fs.writeFileSync(signalsTmpPath, JSON.stringify(signals, null, 2), 'utf8');
-  fs.renameSync(signalsTmpPath, signalsPath);
+  let signalsSuccess = false;
+  try {
+    fs.writeFileSync(signalsTmpPath, JSON.stringify(signals, null, 2), 'utf8');
+    signalsSuccess = atomicRename(signalsTmpPath, signalsPath);
+    if (!signalsSuccess) {
+      console.error(`Warning: Failed to write SIGNALS.json after retries; keeping prior file`);
+    }
+  } catch (e) {
+    console.error(`Warning: Failed to write SIGNALS.json: ${e.message}`);
+  }
 
-  fs.writeFileSync(path.join(MON, '.monitor-heartbeat'), String(Math.floor(now / 1000)), 'utf8');
-  fs.writeFileSync(path.join(MON, '.signal-state.json'), JSON.stringify({ cycleCount }, null, 2), 'utf8');
+  // Always write heartbeat and signal state (these use direct write, no rename)
+  try {
+    fs.writeFileSync(path.join(MON, '.monitor-heartbeat'), String(Math.floor(now / 1000)), 'utf8');
+  } catch (e) {
+    console.error(`Warning: Failed to write heartbeat: ${e.message}`);
+  }
+  try {
+    fs.writeFileSync(path.join(MON, '.signal-state.json'), JSON.stringify({ cycleCount }, null, 2), 'utf8');
+  } catch (e) {
+    console.error(`Warning: Failed to write signal state: ${e.message}`);
+  }
+
   const summaryLine = `stale-loops: ${staleLoops.length}, repos-dirty: ${gitState.filter(g => g.dirty > 0).length}, stale-mem: ${memory.staleCount}, logs-need-rotation: ${needsRotation.length}, junk-quarantinable: ${junk.quarantinable}, stray-repo-scripts: ${strayRepo.length}, alerts-high-med: ${alerts.highMedCount}, respawn-watch: ${respawnWatch.length}, cycle: ${cycleCount}`;
   console.log(summaryLine);
 } catch (e) {
-  console.error('Failed to write signals:', e.message);
+  console.error('Unexpected error during output write:', e.message);
   process.exit(1);
 }
