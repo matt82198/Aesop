@@ -64,7 +64,8 @@ const filesToCopy = [
   'aesop.config.example.json',
   'README.md',
   'LICENSE',
-  'CHANGELOG.md'
+  'CHANGELOG.md',
+  'CLAUDE-TEMPLATE.md'
 ];
 
 let copiedCount = 0;
@@ -98,12 +99,17 @@ try {
   });
 
   console.log(`\n✅ Scaffolded aesop template into "${targetDir}" (${copiedCount} files)`);
-  console.log('\nNext steps:');
+  console.log('\nConfiguration steps:');
   console.log(`  1. cd ${targetDir}`);
   console.log('  2. cp aesop.config.example.json aesop.config.json');
   console.log('  3. Edit aesop.config.json with your configuration');
-  console.log('  4. bash daemons/run-watchdog.sh --once  (test run)');
-  console.log('  5. python ui/serve.py  (launch dashboard)');
+  console.log('\nInitialize your brain (Claude Code team memory):');
+  console.log('  4. mkdir -p ~/.claude/memory');
+  console.log(`  5. cp ${targetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
+  console.log(`  6. cp ${targetDir}/docs/MEMORY-TEMPLATE.md ~/.claude/MEMORY.md  (then add your facts)`);
+  console.log('\nRun the daemon and dashboard:');
+  console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
+  console.log('  8. python ui/serve.py  (launch dashboard on localhost:8770)');
   console.log('\nFor full documentation, see the README.md in the scaffolded directory.');
   process.exit(0);
 } catch (err) {

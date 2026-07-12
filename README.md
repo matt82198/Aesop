@@ -189,14 +189,30 @@ Edit `aesop.config.json`:
 - Tune watchdog and monitor cycle times.
 - Disable secret-scan if you don't have `tools/secret_scan.py` yet.
 
-### 2. Create required directories
+### 2. Initialize your brain (Claude Code team memory)
+
+The team brain is your private copy of `CLAUDE.md` and `MEMORY.md` that lives in `~/.claude/`:
+
+```bash
+# Create the memory directory
+mkdir -p ~/.claude/memory
+
+# Copy templates and customize
+cp CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md    # Edit domains and team info
+cp docs/MEMORY-TEMPLATE.md ~/.claude/MEMORY.md  # Add your team facts
+```
+
+Edit `~/.claude/CLAUDE.md` to reflect your project domains, team principles, and setup steps.
+Edit `~/.claude/MEMORY.md` to add your own facts (one file per fact in `~/.claude/memory/`).
+
+### 3. Create required directories
 
 ```bash
 mkdir -p ~/aesop/state
 mkdir -p ~/.heartbeats
 ```
 
-### 3. (Optional) Add your secret-scan script
+### 4. (Optional) Add your secret-scan script
 
 If you have a security scanner, drop it at `aesop/tools/secret_scan.py`. The watchdog will call it before pushing.
 
@@ -207,7 +223,7 @@ import sys
 sys.exit(0)  # TODO: implement secret scanning
 ```
 
-### 4. Start the daemon
+### 5. Start the daemon
 
 ```bash
 export AESOP_ROOT=$HOME/aesop
@@ -216,13 +232,13 @@ bash $AESOP_ROOT/daemons/run-watchdog.sh &
 
 Test mode: `bash $AESOP_ROOT/daemons/run-watchdog.sh --once`
 
-### 5. Launch the dashboard
+### 6. Launch the dashboard
 
 ```bash
 bash ~/aesop/dash/watchdog-gui.sh
 ```
 
-### 6. Arm the monitor (optional)
+### 7. Arm the monitor (optional)
 
 If you're using Claude Code, add this to your orchestrator loop:
 ```bash
