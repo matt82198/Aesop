@@ -3,15 +3,18 @@
 //
 // Contract under test (stdin -> stdout JSON, exit 0 always):
 //  - Agent/Task dispatch with absent or non-haiku model  -> rewritten to policy model
-//  - prompt containing [[ALLOW-NON-HAIKU]]               -> pass through (no output)
+//  - prompt containing [[ALLOW-NON-HAIKU]]               -> no rewrite, but the bypass
+//    is announced via permissionDecisionReason AND appended to
+//    state/MODEL-POLICY-ESCAPES.log under the AESOP_ROOT state root
 //  - malformed stdin                                     -> no output, exit 0 (fail-open)
+//  - never-closing stdin                                 -> exits 0 within ~2s (fail-open)
 //  - aesop.config.json cardinal_rules.subagent_model     -> overrides the "haiku" default
 //
 // Run: node --test tests/force-model-policy.test.mjs
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,8 +43,11 @@ function runHook(stdinText, { config } = {}) {
     env: { ...process.env, AESOP_ROOT: root },
     encoding: 'utf8'
   });
+  res.root = root;
   return res;
 }
+
+const ESCAPE_LOG = path.join('state', 'MODEL-POLICY-ESCAPES.log');
 
 function payload(toolName, toolInput) {
   return JSON.stringify({
@@ -90,14 +96,99 @@ test('model already compliant passes through unchanged (no output)', () => {
   assert.equal(res.stdout.trim(), '', 'compliant dispatch must not be rewritten');
 });
 
-test('escape hatch [[ALLOW-NON-HAIKU]] in prompt passes through unchanged', () => {
+test('escape hatch [[ALLOW-NON-HAIKU]] suppresses the rewrite but emits a visible reason', () => {
   const res = runHook(payload('Agent', {
     description: 'heavy reasoning',
     prompt: 'Design the architecture. [[ALLOW-NON-HAIKU]]',
     model: 'opus'
   }));
   assert.equal(res.status, 0);
-  assert.equal(res.stdout.trim(), '', 'escape hatch must suppress the rewrite');
+  const out = JSON.parse(res.stdout);
+  const hso = out.hookSpecificOutput;
+  assert.equal(hso.hookEventName, 'PreToolUse');
+  assert.equal(hso.permissionDecision, 'allow');
+  assert.match(
+    hso.permissionDecisionReason,
+    /ALLOW-NON-HAIKU/,
+    'bypass must be announced in permissionDecisionReason'
+  );
+  assert.equal(hso.updatedInput, undefined, 'escape hatch must not rewrite tool_input');
+});
+
+test('escape hatch use is appended to state/MODEL-POLICY-ESCAPES.log', () => {
+  const res = runHook(JSON.stringify({
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Agent',
+    session_id: 'sess-123',
+    cwd: 'C:\\somewhere',
+    tool_input: {
+      description: 'heavy reasoning',
+      prompt: 'Design the architecture. [[ALLOW-NON-HAIKU]]',
+      model: 'opus'
+    }
+  }));
+  assert.equal(res.status, 0);
+  const logPath = path.join(res.root, ESCAPE_LOG);
+  assert.ok(fs.existsSync(logPath), 'escape-hatch use must be logged to ' + ESCAPE_LOG);
+  const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  const rec = JSON.parse(lines[0]);
+  assert.equal(rec.event, 'model_policy_escape');
+  assert.equal(rec.tool, 'Agent');
+  assert.equal(rec.session_id, 'sess-123');
+  assert.equal(rec.requested_model, 'opus');
+  assert.ok(rec.ts, 'log record must carry a timestamp');
+});
+
+test('escape-hatch log is append-only across uses', () => {
+  const body = payload('Task', {
+    description: 'big design',
+    prompt: 'x [[ALLOW-NON-HAIKU]]',
+    model: 'sonnet'
+  });
+  const first = runHook(body);
+  // Re-run against the same root so the second use appends.
+  const second = spawnSync(process.execPath, [HOOK], {
+    input: body,
+    cwd: first.root,
+    env: { ...process.env, AESOP_ROOT: first.root },
+    encoding: 'utf8'
+  });
+  assert.equal(first.status, 0);
+  assert.equal(second.status, 0);
+  const lines = fs.readFileSync(path.join(first.root, ESCAPE_LOG), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 2, 'each escape-hatch use must append one record');
+});
+
+test('normal dispatch (no escape hatch) writes no escape log', () => {
+  const res = runHook(payload('Agent', {
+    description: 'do a thing',
+    prompt: 'Implement the feature.',
+    model: 'opus'
+  }));
+  assert.equal(res.status, 0);
+  assert.ok(!fs.existsSync(path.join(res.root, ESCAPE_LOG)));
+});
+
+test('never-closing stdin: hook exits 0 within the timeout window (fail-open)', async () => {
+  const root = makeRoot();
+  const child = spawn(process.execPath, [HOOK], {
+    cwd: root,
+    env: { ...process.env, AESOP_ROOT: root },
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  child.stdin.on('error', () => {}); // child may exit first; ignore EPIPE
+  let stdout = '';
+  child.stdout.on('data', (d) => { stdout += d; });
+  // Pipe a full, valid payload but NEVER close stdin.
+  child.stdin.write(payload('Agent', { description: 'x', prompt: 'y', model: 'opus' }));
+  const exitCode = await new Promise((resolve) => {
+    const killer = setTimeout(() => { child.kill(); resolve('HUNG'); }, 5000);
+    child.on('exit', (code) => { clearTimeout(killer); resolve(code); });
+  });
+  assert.notEqual(exitCode, 'HUNG', 'hook must not hang when stdin never closes');
+  assert.equal(exitCode, 0, 'timeout path must exit 0');
+  assert.equal(stdout.trim(), '', 'timeout path must fail-open with no rewrite');
 });
 
 test('malformed stdin: no output, exit 0 (fail-open, never crash)', () => {
