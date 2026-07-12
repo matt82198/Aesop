@@ -336,7 +336,12 @@ def parse_audit_backlog():
     return result
 
 def get_heartbeat_status():
-    """Read daemon heartbeat age and status."""
+    """Read daemon heartbeat age and status.
+
+    Buckets age to prevent every-tick hash change: age is reported in 3-second buckets
+    (e.g., 0-2s → 0, 3-5s → 3, 6-8s → 6, ...) so the heartbeat snapshot only changes
+    every ~3 seconds, not every 1 second. This preserves the change-hash gate effectiveness.
+    """
     try:
         if not WATCHDOG_HEARTBEAT.exists():
             return {"alive": "UNKNOWN", "age": -1, "threshold": 300}
@@ -355,14 +360,21 @@ def get_heartbeat_status():
                 return {"alive": "unknown", "age": -1, "threshold": 300}
         # Age in seconds: now_seconds - heartbeat_seconds
         age_seconds = int(time()) - timestamp
+        # Bucket age to 3-second intervals to prevent hash churn
+        age_bucketed = (age_seconds // 3) * 3
         alive = "ALIVE" if age_seconds < 300 else "STALE"
-        return {"alive": alive, "age": age_seconds, "threshold": 300}
+        return {"alive": alive, "age": age_bucketed, "threshold": 300}
     except:
         return {"alive": "unknown", "age": -1, "threshold": 300}
 
 
 def get_monitor_heartbeat_status():
-    """Read orchestration monitor heartbeat age and status."""
+    """Read orchestration monitor heartbeat age and status.
+
+    Buckets age to prevent every-tick hash change: age is reported in 3-second buckets
+    (e.g., 0-2s → 0, 3-5s → 3, 6-8s → 6, ...) so the monitor snapshot only changes
+    every ~3 seconds, not every 1 second. This preserves the change-hash gate effectiveness.
+    """
     try:
         # Check both possible paths: state/.monitor-heartbeat and monitor/.monitor-heartbeat
         monitor_hb = MONITOR_HEARTBEAT
@@ -388,8 +400,10 @@ def get_monitor_heartbeat_status():
                 return {"alive": "unknown", "age": -1, "threshold": 3600}
         # Age in seconds: now_seconds - heartbeat_seconds
         age_seconds = int(time()) - timestamp
+        # Bucket age to 3-second intervals to prevent hash churn
+        age_bucketed = (age_seconds // 3) * 3
         alive = "ALIVE" if age_seconds < 3600 else "STALE"
-        return {"alive": alive, "age": age_seconds, "threshold": 3600}
+        return {"alive": alive, "age": age_bucketed, "threshold": 3600}
     except:
         return {"alive": "unknown", "age": -1, "threshold": 3600}
 
@@ -659,9 +673,13 @@ def extract_agent_dispatch_prompt(agent_id):
 # check so they're only re-derived when their underlying input actually changed.
 COLLECTOR_INTERVAL = float(os.getenv("AESOP_UI_COLLECT_INTERVAL", "1.0"))
 SSE_KEEPALIVE_SECONDS = 15
+SSE_MAX_CLIENTS = 100  # Resource cap: reject new connections past this
+SSE_QUEUE_MAXSIZE = 50  # Per-client bounded queue (drops oldest on overflow)
+SSE_WRITE_TIMEOUT = 5.0  # Write timeout in seconds to prevent stalled clients
 
 _sse_lock = threading.Lock()
 _sse_clients = []  # list[queue.Queue]
+_sse_client_count = 0  # Track concurrent connections for cap enforcement
 
 _latest_lock = threading.Lock()
 _latest_snapshots = {"data": None, "backlog": None, "agents": None}  # name -> json str
@@ -709,9 +727,11 @@ def _transcripts_fingerprint():
 
 
 def register_sse_client():
-    """Register a new SSE client queue. Returns the queue to read events from."""
-    q = queue.Queue()
+    """Register a new SSE client queue. Returns the queue to read events from, or None if cap exceeded."""
     with _sse_lock:
+        if len(_sse_clients) >= SSE_MAX_CLIENTS:
+            return None  # Caller will return HTTP 503
+        q = queue.Queue(maxsize=SSE_QUEUE_MAXSIZE)
         _sse_clients.append(q)
     return q
 
@@ -724,12 +744,23 @@ def unregister_sse_client(q):
 
 
 def broadcast_sse(event_name, payload):
-    """Push (event_name, payload) onto every currently-registered client queue."""
+    """Push (event_name, payload) onto every currently-registered client queue.
+
+    If a client queue is full, drop the oldest event to make room (bounded backpressure).
+    This prevents one slow client from blocking the broadcast.
+    """
     with _sse_lock:
         clients = list(_sse_clients)
     for q in clients:
         try:
             q.put_nowait((event_name, payload))
+        except queue.Full:
+            # Queue is full: drop the oldest event and retry
+            try:
+                q.get_nowait()  # Remove oldest
+                q.put_nowait((event_name, payload))  # Add new
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -985,6 +1016,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 <div class="header-value">
                     <span id="conn-live" style="color: #0a0;">● live</span>
                     <span id="conn-reconnecting" style="color: #f80; display: none;">◌ reconnecting…</span>
+                    <span id="connection-degraded" style="color: #f44; display: none; margin-left: 8px;">⚠ frame error</span>
                 </div>
             </div>
         </div>
@@ -1080,6 +1112,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         function setConnectionStatus(connected) {
             document.getElementById('conn-live').style.display = connected ? '' : 'none';
             document.getElementById('conn-reconnecting').style.display = connected ? 'none' : '';
+        }
+
+        function setConnectionDegraded(degraded) {
+            document.getElementById('connection-degraded').style.display = degraded ? '' : 'none';
         }
 
         // ---- header (watchdog / monitor / alert count) --------------------
@@ -1459,19 +1495,40 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         const evtSource = new EventSource('/events');
 
         evtSource.addEventListener('data', (e) => {
-            patchDataSection(JSON.parse(e.data));
-            setConnectionStatus(true);
+            try {
+                patchDataSection(JSON.parse(e.data));
+                setConnectionStatus(true);
+                setConnectionDegraded(false);
+            } catch (err) {
+                console.error('Failed to parse data frame:', err);
+                setConnectionDegraded(true);
+            }
         });
         evtSource.addEventListener('backlog', (e) => {
-            patchBacklog(JSON.parse(e.data));
-            setConnectionStatus(true);
+            try {
+                patchBacklog(JSON.parse(e.data));
+                setConnectionStatus(true);
+                setConnectionDegraded(false);
+            } catch (err) {
+                console.error('Failed to parse backlog frame:', err);
+                setConnectionDegraded(true);
+            }
         });
         evtSource.addEventListener('agents', (e) => {
-            patchAgents(JSON.parse(e.data));
-            patchHeaderRunningCount(latestAgents);
-            setConnectionStatus(true);
+            try {
+                patchAgents(JSON.parse(e.data));
+                patchHeaderRunningCount(latestAgents);
+                setConnectionStatus(true);
+                setConnectionDegraded(false);
+            } catch (err) {
+                console.error('Failed to parse agents frame:', err);
+                setConnectionDegraded(true);
+            }
         });
-        evtSource.addEventListener('open', () => setConnectionStatus(true));
+        evtSource.addEventListener('open', () => {
+            setConnectionStatus(true);
+            setConnectionDegraded(false);
+        });
         evtSource.addEventListener('error', () => setConnectionStatus(false));
 
         // Manual refresh fallback (one-shot fetch, reuses the exact same patch
@@ -1626,10 +1683,24 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
     def _write_sse_event(self, event_name, payload):
-        """Write one SSE frame. Caller handles disconnect exceptions."""
+        """Write one SSE frame with timeout. Caller handles disconnect exceptions."""
         msg = f"event: {event_name}\ndata: {payload}\n\n"
-        self.wfile.write(msg.encode("utf-8"))
-        self.wfile.flush()
+        # Set socket timeout to prevent stalled writes from blocking the server
+        try:
+            old_timeout = self.connection.gettimeout()
+            self.connection.settimeout(SSE_WRITE_TIMEOUT)
+        except (AttributeError, OSError):
+            pass
+        try:
+            self.wfile.write(msg.encode("utf-8"))
+            self.wfile.flush()
+        finally:
+            # Restore original timeout
+            try:
+                if 'old_timeout' in locals():
+                    self.connection.settimeout(old_timeout)
+            except (AttributeError, OSError):
+                pass
 
     def serve_events(self):
         """GET /events — Server-Sent Events stream.
@@ -1638,8 +1709,23 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         /submit keeps its token requirement unchanged). Holds the connection open
         for the life of the client; requires ThreadingHTTPServer (see run_server)
         so one SSE client can't block every other request.
+
+        Returns HTTP 503 if concurrent connection cap (SSE_MAX_CLIENTS) is exceeded.
         """
         start_collector_thread()
+
+        q = register_sse_client()
+        if q is None:
+            # Connection cap exceeded; return 503 Service Unavailable
+            try:
+                self.send_response(503)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Retry-After", "30")
+                self.end_headers()
+                self.wfile.write(b"Service overloaded: too many concurrent clients\n")
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+                pass
+            return
 
         try:
             self.send_response(200)
@@ -1649,9 +1735,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("X-Accel-Buffering", "no")
             self.end_headers()
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+            unregister_sse_client(q)
             return
-
-        q = register_sse_client()
         try:
             # Send an immediate full snapshot so first paint isn't empty. If the
             # collector hasn't produced anything yet (first-ever request), compute

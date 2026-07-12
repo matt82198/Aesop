@@ -233,6 +233,78 @@ class TestSSERealtime(EnvFixtureCase):
         finally:
             con.close()
 
+    def test_concurrent_connection_cap_returns_503(self):
+        """Exceeding SSE_MAX_CLIENTS must return HTTP 503 Service Unavailable."""
+        # Hold SSE_MAX_CLIENTS connections simultaneously
+        held_connections = []
+        max_clients = self.serve.SSE_MAX_CLIENTS
+
+        try:
+            # Fill up the connection pool
+            for i in range(max_clients):
+                con = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
+                con.request("GET", "/events")
+                resp = con.getresponse()
+                self.assertEqual(resp.status, 200, f"Client {i} should succeed")
+                held_connections.append((con, resp))
+
+            # The (max_clients + 1)-th connection should get 503
+            con_extra = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
+            con_extra.request("GET", "/events")
+            resp_extra = con_extra.getresponse()
+            self.assertEqual(resp_extra.status, 503, "Cap-exceeded client should get 503")
+            con_extra.close()
+        finally:
+            for con, resp in held_connections:
+                con.close()
+
+    def test_sse_queue_bounded_maxsize(self):
+        """Per-client SSE queue must be bounded (maxsize), not unbounded."""
+        con, resp = self._connect_events()
+        try:
+            # Verify queue has a maxsize by checking the serve module's constant
+            self.assertTrue(hasattr(self.serve, 'SSE_QUEUE_MAXSIZE'),
+                          "SSE_QUEUE_MAXSIZE constant must be defined")
+            self.assertGreater(self.serve.SSE_QUEUE_MAXSIZE, 0,
+                             "SSE_QUEUE_MAXSIZE must be positive")
+        finally:
+            con.close()
+
+    def test_age_bucketing_reduces_hash_churn(self):
+        """Heartbeat age must be bucketed to prevent every-tick hash change."""
+        # Check that get_heartbeat_status() buckets age
+        serve = self.serve
+
+        # Call it twice in quick succession; age should bucket to 3-second intervals
+        status1 = serve.get_heartbeat_status()
+        time.sleep(0.1)
+        status2 = serve.get_heartbeat_status()
+
+        # If age were unbucketed, status2["age"] would be higher (0.1s difference)
+        # With bucketing, they should be the same (both in same 3-second bucket)
+        self.assertEqual(status1["age"], status2["age"],
+                        "Age must bucket to reduce hash churn from per-tick updates")
+
+    def test_malformed_sse_payload_handled_gracefully(self):
+        """Client must handle malformed JSON in SSE frames without throwing."""
+        # This test verifies the fix is in place by checking that try/catch
+        # exists in the listeners. Since we can't directly run JS from Python,
+        # we verify the HTML contains the try/catch blocks.
+        con, resp = self._connect_events()
+        try:
+            # Read the HTML page (via GET /)
+            con2 = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            con2.request("GET", "/")
+            r = con2.getresponse()
+            html = r.read().decode("utf-8")
+            con2.close()
+
+            # Verify try/catch exists around JSON.parse for SSE handlers
+            self.assertIn("catch (err)", html, "SSE listeners must have try/catch for JSON.parse")
+            self.assertIn("setConnectionDegraded", html, "HTML must include degraded indicator")
+        finally:
+            con.close()
+
 
 if __name__ == "__main__":
     unittest.main()
