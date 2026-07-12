@@ -2,12 +2,19 @@
 # TDD tests for run-watchdog.sh lock mechanism
 # Ensures single-instance guard (atomic lockfile) gates both loop and --once modes
 # Tests concurrent starts → only one runs cycle, other exits with lock-held message
+#
+# HERMETIC: every run-watchdog.sh invocation below is pointed at a throwaway
+# AESOP_ROOT (a mktemp -d fixture), never at the real project checkout. That
+# guarantees LOCK_DIR / FLEET-BACKUP.log / heartbeat all live under
+# $TMP_DIR/state, so this suite can never race a live daemon or touch real
+# project state. REPO_ROOT is used ONLY to locate the run-watchdog.sh script
+# under test — it is never passed as AESOP_ROOT to any invocation.
 
 set -e
 
-TEST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AESOP_ROOT="${TEST_ROOT}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR=$(mktemp -d)
+AESOP_ROOT="${TMP_DIR}"
 TEST_STATE_DIR="${TMP_DIR}/state"
 CYCLE_COUNTER="${TMP_DIR}/cycle-counter"
 
@@ -47,13 +54,13 @@ EXIT2=""
 # Start first instance in background
 AESOP_ROOT="${AESOP_ROOT}" \
   AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
-  bash "${AESOP_ROOT}/daemons/run-watchdog.sh" --once > "$OUT1" 2>&1 &
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT1" 2>&1 &
 PID1=$!
 
 # Start second instance immediately (should be blocked by lock)
 AESOP_ROOT="${AESOP_ROOT}" \
   AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
-  bash "${AESOP_ROOT}/daemons/run-watchdog.sh" --once > "$OUT2" 2>&1 &
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT2" 2>&1 &
 PID2=$!
 
 # Wait for both to complete
@@ -99,7 +106,9 @@ rm -rf "${TEST_STATE_DIR}"
 mkdir -p "${TEST_STATE_DIR}"
 echo "0" > "${CYCLE_COUNTER}"
 
-# Create an old lock (manually for test) — P1 fix: write timestamp file
+# Create an old lock (manually for test) — this now lives at the SAME path the
+# script under test reads (AESOP_ROOT is the throwaway fixture root), so aging
+# it genuinely exercises acquire_lock's staleness/reclaim branch.
 OLD_LOCK="${TEST_STATE_DIR}/.watchdog-lock"
 mkdir -p "$OLD_LOCK"
 # Write stale timestamp (500 seconds ago) into the file that acquire_lock checks
@@ -114,7 +123,7 @@ cat "$OLD_LOCK/timestamp"
 # Run watchdog with stale lock present
 AESOP_ROOT="${AESOP_ROOT}" \
   AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
-  bash "${AESOP_ROOT}/daemons/run-watchdog.sh" --once > "$OUT1" 2>&1
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT1" 2>&1
 EXIT1=$?
 
 CYCLE_RUN_COUNT=$(cat "${CYCLE_COUNTER}")
@@ -127,6 +136,12 @@ if [ "$CYCLE_RUN_COUNT" != "1" ]; then
   exit 1
 fi
 echo "PASS: Stale lock was reclaimed and cycle ran"
+
+if ! grep -q "reclaimed" "$OUT1" 2>/dev/null; then
+  echo "FAIL: Expected acquire_lock to report reclaiming the stale lock, but 'reclaimed' not found in output"
+  exit 1
+fi
+echo "PASS: acquire_lock reported reclaiming the stale lock"
 
 rm -f "$OUT1" "$OUT2"
 
@@ -154,72 +169,134 @@ sleep "$SLEEP_TIME"
 EOFSLOW
 chmod +x "${SLOW_MOCK}"
 
-# Process A: holds lock and sleeps (becomes stale while holding)
+LOCK_PATH="${TEST_STATE_DIR}/.watchdog-lock"
+
+# Process A: acquires the (real) lock and holds it for A_SLEEP seconds — the
+# "original holder" whose lock will be forcibly aged into staleness while A
+# is still mid-cycle, unaware it has been reclaimed out from under it.
+A_SLEEP=2
 OUT_A=$(mktemp)
 (
   AESOP_ROOT="${AESOP_ROOT}" \
-    AESOP_WATCHDOG_CYCLE_CMD="${SLOW_MOCK} ${CYCLE_COUNTER} 2" \
-    bash "${AESOP_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_A" 2>&1
+    AESOP_WATCHDOG_CYCLE_CMD="${SLOW_MOCK} ${CYCLE_COUNTER} ${A_SLEEP}" \
+    bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_A" 2>&1
 ) &
 PID_A=$!
 
-# Wait a moment for A to acquire lock
-sleep 0.3
-
-# Process B: will reclaim the stale lock (after 300s threshold, but we fake it by aging timestamp)
-# Manually age the lock to trigger reclaim
-LOCK_PATH="${TEST_STATE_DIR}/.watchdog-lock"
-if [ -f "$LOCK_PATH/timestamp" ]; then
-  echo $(($(date +%s) - 350)) > "$LOCK_PATH/timestamp"
+# Wait for A to acquire the lock (poll instead of a fixed sleep — robust
+# under process-start jitter, e.g. on Git-Bash/Windows).
+ACQUIRE_WAIT=0
+while [ ! -f "$LOCK_PATH/timestamp" ] && [ "$ACQUIRE_WAIT" -lt 50 ]; do
+  sleep 0.1
+  ACQUIRE_WAIT=$((ACQUIRE_WAIT + 1))
+done
+if [ ! -f "$LOCK_PATH/timestamp" ]; then
+  echo "FAIL: Process A never acquired the lock at $LOCK_PATH"
+  exit 1
 fi
 
+# A writes its OWN real pid here (unlike Test 2's manually-planted "9999"
+# sentinel) — capture it so the reclaim-detection poll below can watch for
+# the pid actually changing away from A, rather than an irrelevant sentinel.
+ORIGINAL_PID=$(cat "$LOCK_PATH/pid" 2>/dev/null || echo "")
+if [ -z "$ORIGINAL_PID" ]; then
+  echo "FAIL: Process A's lock has no pid file at $LOCK_PATH/pid"
+  exit 1
+fi
+
+# Age A's lock past the staleness threshold. This is the ACTUAL lock path the
+# script under test reads (AESOP_ROOT is the same throwaway fixture root used
+# by both A and B), so this genuinely triggers acquire_lock's reclaim branch —
+# unlike the old decoy path, which aged a directory nobody read.
+echo $(($(date +%s) - 350)) > "$LOCK_PATH/timestamp"
+
+# Process B: reclaims the now-stale lock and holds it for B_SLEEP seconds —
+# long enough that B is STILL holding the lock when A finishes its own
+# (now-orphaned) cycle and calls release_lock. This is exactly the race the
+# ownership check (PR #23 release_lock fix) exists to guard: A must NOT be
+# able to delete a lock it no longer owns.
+B_SLEEP=3
 OUT_B=$(mktemp)
 AESOP_ROOT="${AESOP_ROOT}" \
-  AESOP_WATCHDOG_CYCLE_CMD="${SLOW_MOCK} ${CYCLE_COUNTER} 0.1" \
-  bash "${AESOP_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_B" 2>&1 &
+  AESOP_WATCHDOG_CYCLE_CMD="${SLOW_MOCK} ${CYCLE_COUNTER} ${B_SLEEP}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_B" 2>&1 &
 PID_B=$!
 
-# Wait for B to complete
-wait $PID_B
-EXIT_B=$?
+# Wait for B to reclaim. Poll for BOTH the pid file flipping away from A's
+# ORIGINAL_PID AND the "reclaimed" message landing in OUT_B — checking only
+# the pid file races the stderr write (mkdir/pid/timestamp land on disk a
+# hair before the echo flushes), which is enough jitter on Git-Bash/Windows
+# to false-fail this assertion.
+RECLAIM_WAIT=0
+RECLAIMER_PID=""
+RECLAIM_SEEN=0
+while [ "$RECLAIM_WAIT" -lt 100 ]; do
+  if [ -z "$RECLAIMER_PID" ] && [ -f "$LOCK_PATH/pid" ]; then
+    CANDIDATE=$(cat "$LOCK_PATH/pid" 2>/dev/null || echo "")
+    if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "$ORIGINAL_PID" ]; then
+      RECLAIMER_PID="$CANDIDATE"
+    fi
+  fi
+  if grep -q "reclaimed" "$OUT_B" 2>/dev/null; then
+    RECLAIM_SEEN=1
+  fi
+  if [ -n "$RECLAIMER_PID" ] && [ "$RECLAIM_SEEN" -eq 1 ]; then
+    break
+  fi
+  sleep 0.1
+  RECLAIM_WAIT=$((RECLAIM_WAIT + 1))
+done
 
-echo "Process B (reclaimer) output:"
-cat "$OUT_B"
+if [ "$RECLAIM_SEEN" -ne 1 ]; then
+  echo "FAIL: Process B did not report reclaiming the stale lock (no 'reclaimed' in output)"
+  cat "$OUT_B"
+  exit 1
+fi
+echo "PASS: Process B reported reclaiming the stale lock"
 
-# Check B successfully reclaimed
-if grep -q "reclaimed" "$OUT_B"; then
-  echo "✓ Process B successfully reclaimed stale lock"
-else
-  echo "WARNING: Process B output doesn't show reclaim message, but that's OK if lock was held"
+if [ -z "$RECLAIMER_PID" ]; then
+  echo "FAIL: Could not read reclaimer's pid from $LOCK_PATH/pid"
+  exit 1
 fi
 
-# Wait for A to finish (should exit cleanly even though lock was reclaimed)
+# Wait for A to finish its (orphaned) cycle and attempt release_lock. B is
+# still sleeping (B_SLEEP > A_SLEEP), so this is the exact moment the
+# ownership check is exercised: A's release_lock must be a no-op here.
 wait $PID_A
 EXIT_A=$?
+
+if [ ! -d "$LOCK_PATH" ]; then
+  echo "FAIL: Lock directory was removed by A — ownership check did NOT hold (release_lock deleted a lock it doesn't own)"
+  exit 1
+fi
+
+CURRENT_PID=$(cat "$LOCK_PATH/pid" 2>/dev/null || echo "")
+if [ "$CURRENT_PID" != "$RECLAIMER_PID" ]; then
+  echo "FAIL: Lock pid changed after A's release attempt (expected reclaimer's pid $RECLAIMER_PID, got '$CURRENT_PID')"
+  exit 1
+fi
+echo "PASS: Process A's release_lock did not touch B's live (reclaimed) lock — ownership check held"
+
+# Now wait for B to finish its own cycle and release its own lock.
+wait $PID_B
+EXIT_B=$?
 
 echo ""
 echo "Process A (original holder) exit code: $EXIT_A"
 echo "Process B (reclaimer) exit code: $EXIT_B"
 
-# Verify lock dir is cleaned up and B's pid was written
-if [ ! -d "$LOCK_PATH" ]; then
-  echo "✓ Lock directory was cleaned up"
-elif [ -f "$LOCK_PATH/pid" ]; then
-  B_PID=$(cat "$LOCK_PATH/pid" 2>/dev/null || echo "")
-  if [ "$B_PID" = "$PID_B" ]; then
-    echo "✓ Lock directory contains reclaimer's PID (ownership correct)"
-  else
-    echo "FAIL: Lock directory PID is $B_PID, reclaimer was $PID_B"
-    exit 1
-  fi
+if [ -d "$LOCK_PATH" ]; then
+  echo "FAIL: Lock directory still exists after B's own release_lock — B failed to clean up its own lock"
+  exit 1
 fi
+echo "PASS: Lock directory was cleaned up by its rightful owner (B)"
 
 CYCLE_RUN_COUNT=$(cat "${CYCLE_COUNTER}")
-if [ "$CYCLE_RUN_COUNT" = "2" ]; then
-  echo "✓ Both cycles ran (A and B each ran once)"
-else
-  echo "WARNING: Cycle count is $CYCLE_RUN_COUNT (expected 2, but ownership check may still work)"
+if [ "$CYCLE_RUN_COUNT" != "2" ]; then
+  echo "FAIL: Expected both cycles to run (A and B each once), but count=$CYCLE_RUN_COUNT"
+  exit 1
 fi
+echo "PASS: Both cycles ran (A and B each ran once)"
 
 rm -f "$OUT_A" "$OUT_B" "$SLOW_MOCK"
 echo "PASS: Lock ownership enforced"
@@ -233,10 +310,10 @@ TEST_STATE_DIR_SPACES="${TMP_DIR}/state with spaces"
 mkdir -p "${TEST_STATE_DIR_SPACES}"
 echo "0" > "${CYCLE_COUNTER}"
 
-# Run with AESOP_ROOT containing spaces
+# Create a path with spaces
 AESOP_ROOT_WITH_SPACES="${TMP_DIR}/aesop with spaces"
 mkdir -p "$AESOP_ROOT_WITH_SPACES"
-cp "${AESOP_ROOT}/daemons/run-watchdog.sh" "$AESOP_ROOT_WITH_SPACES/"
+cp "${REPO_ROOT}/daemons/run-watchdog.sh" "$AESOP_ROOT_WITH_SPACES/"
 
 OUT_SPACES=$(mktemp)
 AESOP_ROOT="${AESOP_ROOT_WITH_SPACES}" \

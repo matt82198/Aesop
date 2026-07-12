@@ -58,19 +58,166 @@ ACCEPTANCE = the test gate; flip the box per landed PR.
 
 ## Wave 5b — UI realtime (user-reported, in flight)
 
-- 🔵 **[feat] Realtime SSE dashboard rebuild** — polling full re-render replaced with /events
+- ✅ **[feat] Realtime SSE dashboard rebuild** — polling full re-render replaced with /events
   SSE push + keyed in-place DOM patching; clicks/expansion survive; playwright-proven in a
-  real browser (console-error-free, live update without reload). Branch feat/dash-realtime-sse.
+  real browser (console-error-free, live update without reload). PR #35 (`491f4af`).
 - ✅ **[test] Post-merge monitor test reconcile** — heartbeat-guard fixture + stale FORCE test
   names; revert-proof assertions. PR #32.
 
+---
+
+# Wave 6 — audit #2 (seven-lens: +frontend-engineer +design-analyst)
+
+Deduped from 40 raw findings across 7 lenses → **26 unique items**. Priority list built
+BEFORE any WIP (per standing order). Branch-per-item; UI items → frontend specialist +
+playwright acceptance gate. Overlaps folded (annotated `[lenses: …]`). All HIGH/P0 items
+below were empirically reproduced by the reporting lens, not just read.
+
+## P0 — correctness / security (reproduced exploits; do first)
+
+- ⬜ **[js+bash] Lock release has no ownership check (3 files)** — `releaseLock()` in
+  `tools/proposals.mjs:87-95` + `monitor/collect-signals.mjs:603-611` and `release_audit_lock`
+  in `hooks/pre-push-policy.sh:53-57` all `rm -rf` unconditionally; a slow-but-alive holder
+  reclaimed as stale deletes the reclaimer's LIVE lock → mutual exclusion broken, concurrent
+  writers into PROPOSALS.md/SIGNALS.json/audit-log. Same class PR #23 fixed in run-watchdog.sh.
+  [lenses: js#1 P0, shell#B]. ACC: marker/pid ownership check before rm + two-holder test in each.
+- ⬜ **[sec] Path traversal / arbitrary file read via `GET /agent?id=`** — id spliced unescaped
+  into glob `**/{id}*.output`; no `..`/metachar reject, no `is_relative_to` check, no token.
+  PoC: `id=../outside_secret/leaked` → 200 + file content; `id=*` enumerates every transcript.
+  `ui/serve.py:524-601,1474-1501`. [lenses: security#1]. ACC: reject `/ \ .. *?[]`; resolve +
+  is_relative_to(TRANSCRIPTS_ROOT); regression test.
+- ⬜ **[bash+sec] reconstitute.sh validate_target symlink/junction-blind** — logical `cd+pwd`
+  (no `-P`) → junction inside fleet root escapes containment; real `git clone` landed OUTSIDE
+  fleet root (defeats PR #27). SAME function also false-REJECTS a legit target when its parent
+  dir doesn't exist yet. `tools/reconstitute.sh:111-124`. [lenses: shell#A HIGH + shell#F MED].
+  ACC: physical-path resolve (realpath -m style, walk to existing ancestor); junction-escape
+  reject test + nested-new-dir accept test.
+- ⬜ **[sec] bin/cli.js scaffold: symlinked `.git` escapes hooks guard** — PR #24 guarded
+  `.git/hooks` + `pre-push` but not `.git` itself; symlinked `.git` in a shared starter folder
+  → hook written OUTSIDE targetDir (PoC write-through). `bin/cli.js:75-97,243-267`.
+  [lenses: security#3]. ACC: lstat gitDir + allowlisted entries, reject symlinks; test.
+- ⬜ **[test] test-run-watchdog.sh not hermetic — P0 regression test asserts nothing** — runs
+  against the REAL checkout (races the live daemon); Test 3 (guards the PR #23 lock-ownership
+  P0) builds its decoy lock at an unused tmp path, so staleness-aging is a silent no-op and
+  every hard assert degrades to a warning. `tests/test-run-watchdog.sh:8-9,171-174,205`.
+  [lenses: shell#E HIGH]. ACC: export AESOP_ROOT=$TMP_DIR per invocation; exit-1 paths fire.
+- ⬜ **[ui] /submit inbox write encoding corruption breaks INBOX pipeline (Windows)** —
+  header `write_text()` (no `encoding=`) → cp1252 em-dash `0x97`, appends use utf-8 → file not
+  valid UTF-8; strict-utf-8 readers throw. Breaks the "orchestrator reads INBOX each turn" model
+  on this exact OS. Repro'd end-to-end. `ui/serve.py:1591-1598`. [lenses: frontend#1 P0].
+  ACC: `encoding='utf-8'` (+ LF newline) + playwright decode test.
+
+## P1 — hardening / real bugs
+
+- ⬜ **[sec+arch] `/events` resource exhaustion** — unbounded per-client `queue.Queue()` (no
+  maxsize), no connection cap, no Origin/Referer check; PoC 25 conns→28 threads, 50k events→
+  ~200MB for one stalled client. `ui/serve.py:663-698,1509-1561,1609-1630`.
+  [lenses: security#2 HIGH + architect#2 — DUPLICATE, high confidence]. ACC: conn cap→503,
+  bounded queue drop-oldest, write timeout; N+1-rejected + flood-capped tests.
+- ⬜ **[perf] SSE `data` section rebroadcasts every collector tick** — embedded `age` counter
+  ticks every second, defeating the change-hash gate; every client gets ~1 snapshot/s
+  regardless of real change (root cause amplifying the exhaustion above).
+  `ui/serve.py:339-341,372-374,626-635,689-698`. [lenses: architect#1]. ACC: exclude age (or
+  bucket it) from the hash; freeze-inputs-3-ticks → ≤1 `data` emit test.
+- ⬜ **[bash+arch] verify_audit_log reads log+sidecar without the write lock** — false-positive
+  TRUNCATION vs an in-flight two-write appender. `hooks/pre-push-policy.sh:93-167,681-685`.
+  [lenses: architect#3 + shell#D — DUPLICATE]. ACC: acquire lock in --verify-audit-log;
+  concurrent write-vs-verify test asserts no false report.
+- ⬜ **[bash] sha256sum fallback covers only 1 of 5 call sites** — lines 121,155,269,306
+  hardcode `sha256sum`, errors swallowed `2>/dev/null` → empty hash on shasum-only hosts
+  (macOS/BSD) → spurious chain-broken/truncation. `hooks/pre-push-policy.sh`. [lenses: shell#C].
+  ACC: single hash_bin helper across all 5 sites + masked-sha256sum test.
+- ⬜ **[js] dash-extra.mjs tokensUsed undercounts >60% on long transcripts** — 50+50 line cap
+  sums only the sampled subset (45000 true → 14700 reported). `dash/dash-extra.mjs:87-94,127-131`.
+  [lenses: js#2 P1]. ACC: full-file token scan (cap only prompt/label extraction) + exact-total
+  test — AND fix the tautological guard `tests/dash-agents-panel.test.mjs:304` [js#5] in the same PR.
+- ⬜ **[ui] dash-extra.mjs hard 8-agent cap silently truncates + header misreports count** —
+  `.slice(0,8)` hides extra agents AND "Fleet Agents (N active)" shows 8 not the true total
+  (15 active→8) — exactly at the burst scale that matters. `dash/dash-extra.mjs:187-197`,
+  `ui/serve.py:379-419,1035-1039`. [lenses: frontend#4 P1]. ACC: true total count or "+N more".
+- ⬜ **[ui] Malformed SSE payload → uncaught JSON.parse throw, section stalls silently** — no
+  guard on the three listeners; a mangled frame drops that tick with zero user signal.
+  `ui/serve.py:1347-1359`. [lenses: frontend#2 P1 + design#7 — merge with a page-wide staleness
+  banner]. ACC: try/catch + `#connection-degraded` indicator; bad-frame dispatch test.
+- ⬜ **[arch] test_reconstitute_fixes.sh wired into nothing** — the P0 target-path-validation
+  regression suite (PR #27) is absent from `package.json` test:sh, test:all, and ci.yml — dead
+  test guarding a security fix. `package.json:53`, `.github/workflows/ci.yml:40-50`.
+  [lenses: architect#4]. ACC: add to test:sh; regress validate_target → suite fails.
+- ⬜ **[docs] Root CLAUDE.md domain map omits `ui/` entirely** — the largest, most
+  concurrency/security-sensitive new surface has no domain-map line and no contract section
+  (only a bare setup command). `CLAUDE.md:5-14,273`. [lenses: architect#5]. ACC: `ui/` map line
+  + contract section (CSRF/session-token model, SSE event names, collector-thread lifecycle,
+  config precedence) + a drift-test for dirs-with-code-lacking-a-map-entry.
+
+## P2 — UX / polish / test-debt
+
+- ⬜ **[ui] UX: alarm states aren't alarming + color language contradicts** — header alert-count
+  hardcoded gray at any severity; green = "done" in backlog but "running" in agents; alerts
+  panel container styled identical to neutral panels. Route to frontend specialist.
+  `ui/serve.py:872,910,1032,1144,856,962`. [lenses: design#1,#2,#4]. ACC: alarm color at
+  count>0; one color per semantic state across panels; alarm container treatment — screenshot-verified.
+- ⬜ **[ui] UX: layout order ≠ urgency + done items hog space** — Fleet Agents + Security Alerts
+  buried below the Queue-Work box and backlog; done ✅ rows same height as active work.
+  `ui/serve.py:925-970,881,1336`. [lenses: design#3,#6]. ACC: Agents+Alerts in top third;
+  done rows dense/collapsed — screenshot-verified.
+- ⬜ **[ui] UX: weak affordances + truncation cues + header responsive** — 11px gray chevron is
+  the only click cue on agent rows; 200px tier scroll boxes have no "+N more"; header flex row
+  has no wrap below 900px. `ui/serve.py:829-830,1118,876,805`. [lenses: design#5,#8,#9].
+  ACC: stronger affordance visible in static screenshot; count badge/fade; graceful wrap.
+- ⬜ **[ui] Live patches destroy scroll position + text selection** — `renderAgentDetails`
+  rebuilds children (`textContent=''`) every ~1s for the active expanded agent (wipes scroll in
+  the prompt box); `textContent=` in keyed panels tears down Text nodes (kills selection).
+  `ui/serve.py:1042-1088,1152-1155,1185-1235,1337-1339`. [lenses: js#4 + frontend#5 — DUPLICATE].
+  ACC: field-level patch, leave unchanged nodes untouched; scroll + selection survive a live change.
+- ⬜ **[ui] promptCache Map never evicted on row removal** — grows with every agent ever expanded
+  (120 cached / 3 visible). `ui/serve.py:1090-1105,1138-1141`. [lenses: frontend#3 + js#4-minor].
+  ACC: evict alongside patchAgents newIds diff; bounded-size test.
+- ⬜ **[js] collect-signals.mjs summary line prints `undefined` every cycle (default config)** —
+  junk/strayRepo/respawnWatch are `{skipped:true}` when extended off, read with `.length`/
+  `.quarantinable`. `monitor/collect-signals.mjs:947`. [lenses: js#3]. ACC: normalize to 0;
+  test asserts no "undefined" substring in default-config summary.
+- ⬜ **[test] Expand verify_dash.py coverage** — add reconnect (2.66s resync, benign
+  ERR_CONNECTION_RESET allowance), malformed-SSE, scale (30/100), promptCache eviction,
+  selection-preservation, /submit encoding, 8-cap-vs-header cases. [lenses: frontend#6 test-debt].
+  ACC: each becomes a failures.append case.
+- ⬜ **[bash] backup-fleet.sh has no cleanup trap** — mktemp temp_json/temp_result leak on
+  interrupt over the daemon's long life. `daemons/backup-fleet.sh:185,209`. [lenses: shell#G].
+  ACC: `trap 'rm -f' EXIT INT TERM`, hoist vars.
+- ⬜ **[bash] watchdog-gui.sh `printf '%b'` mangles backslash content** — repo names / log tails
+  with literal `\t`/`\n`/`\U` tear lines or throw `printf: missing unicode digit for \U` on
+  Windows/Git-Bash paths. `dash/watchdog-gui.sh:135-137`. [lenses: shell#H]. ACC: `printf '%s'`
+  (ESC codes are already real bytes); backslash-content render test.
+- ⬜ **[sec] CSRF token file world-readable window** — `write_text()` then `chmod(0600)` TOCTOU,
+  first run + POSIX only. `ui/serve.py:120-137`. [lenses: security#4 LOW].
+  ACC: `os.open(O_CREAT|O_EXCL,0o600)`.
+
+## P3 — docs / strategic (may fold into a single docs PR)
+
+- ⬜ **[docs] Document the audit-log truncation-anchor trust model** — hash chain = in-band
+  tamper detection, anchor = accidental truncation, git history = final authority; adversary
+  with `--no-verify` / `state/` write already owns it (confirmed structurally unfixable locally,
+  don't expand it). [lenses: honest#2 + security "verified" note]. ACC: NOTES.md section.
+- ⬜ **[arch] Pillar 4 (forensic replay) is the weakest — wire it into the loop** — agent-
+  forensics.sh is untested and not used by the refinement loop; add test coverage + an
+  auto-bisect hook so a future refactor can catch regressions at old commits. [lenses: honest#3].
+  ACC: forensics test + a documented loop step. (Strategic — schedule, don't rush.)
+
 ## Needs a user decision (⏸)
 
-- (none open)
+- ⏸ **[arch] serve.py embedded-UI split (~850 lines HTML/CSS/JS in a Python string)** — extract
+  `ui/static/dashboard.{html,js,css}`; serve.py → ~400-line backend. High maintainability ROI
+  but a large refactor that touches every UI item above — **user call on sequencing**: do it
+  LAST (after the P0–P2 UI bug fixes land on the current single file) to avoid rebasing every UI
+  branch onto a moved target. [lenses: honest#1]. Recommendation: defer to end of wave 6.
 
 ---
 
 ## Landing log
-- 2026-07-12: five-lens re-audit (architect 6, security 5, bash 8, js 6, honest 2-docs findings;
-  overlaps deduped into the 9 item-branches + 2 ports above). Honest lens otherwise CLEAN.
-- Audit cadence: this is audit #1 after the wave-1–4 clear; loop ends after 2 consecutive clean audits.
+- 2026-07-12: five-lens re-audit (audit #1) → 9 item-branches + 2 ports, all ✅ merged (PRs
+  #17–#35). Honest lens CLEAN.
+- 2026-07-12: **seven-lens re-audit (audit #2)** — architect 5, security 4, shell 8, js 5,
+  frontend-eng 5+1, design 9, honest CLEAN+4-docs = 40 raw → **26 unique** after dedupe
+  (ownership-check ×3-files, /events-exhaustion ×2, verify-audit-lock ×2, scroll/selection ×2,
+  path-resolution family ×2). NOT clean → this is wave 6.
+- Audit cadence: audit #2 found real work → loop continues. Loop ends after 2 consecutive clean
+  audits; the next audit after wave 6 lands is audit #3.

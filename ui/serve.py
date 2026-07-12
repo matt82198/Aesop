@@ -1633,7 +1633,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             inbox_content = f"- [{datetime.now().isoformat()}] {text}\n"
             if not INBOX_FILE.exists():
                 INBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
-                INBOX_FILE.write_text("# UI Inbox — orchestrator reads each turn / on /power\n\n")
+                # Must match the encoding (utf-8) AND newline convention (LF) of the
+                # append below — text-mode write_text() with no encoding= falls back
+                # to the locale-preferred encoding (cp1252 on Windows), which mangles
+                # non-ASCII bytes like the em-dash and leaves the file as a whole not
+                # valid UTF-8 for anything that reads it with encoding="utf-8".
+                with open(INBOX_FILE, 'w', encoding='utf-8', newline='\n') as f:
+                    f.write("# UI Inbox — orchestrator reads each turn / on /power\n\n")
 
             with open(INBOX_FILE, 'a', encoding='utf-8') as f:
                 f.write(inbox_content)
