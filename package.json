@@ -14,7 +14,9 @@
     "tools/",
     "ui/",
     "docs/",
+    "hooks/",
     "aesop.config.example.json",
+    "CLAUDE-TEMPLATE.md",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
