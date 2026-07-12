@@ -2,13 +2,17 @@
 """
 Aesop Web Dashboard — stdlib-only local observability.
 Serves a dark-theme HTML dashboard on a configurable port (default 8770).
-No external dependencies. Auto-refresh every 3s via fetch('/data') → JSON.
+No external dependencies. Realtime via GET /events (Server-Sent Events) —
+a background collector thread emits a section (data/backlog/agents) only
+when its content actually changed; the client patches the DOM in place
+(no interval polling, no full-page rebuild).
 
 Configuration:
   - AESOP_ROOT: env var pointing to aesop installation (default: $HOME/aesop)
   - aesop.config.json: optional config file with paths and settings
   - PORT env var: override dashboard port (default: 8770)
   - AESOP_TRANSCRIPTS_ROOT: env var for Claude transcript directory
+  - AESOP_UI_COLLECT_INTERVAL: env var, seconds between collector polls (default: 1.0)
 
 CSRF Protection:
   - Per-session token generated at startup and persisted to state/.ui-session-token (0600)
@@ -16,14 +20,29 @@ CSRF Protection:
   - /submit endpoint requires X-Aesop-Token header matching session token
   - Legitimate dashboard submits: token injected into HTML and sent by browser JS
   - Local CLI clients: read token from state/.ui-session-token (0600)
+  - GET /events (SSE) requires no token: it is a read-only stream, not a mutation
+
+Realtime (SSE) model:
+  - Server: a daemon collector thread polls cheap sources (heartbeat files, log
+    tails, AUDIT-BACKLOG.md mtime, a transcripts-dir fingerprint) on a short
+    cadence. It only re-derives + re-emits a section when its underlying input
+    actually changed (mtime/fingerprint gate), and only broadcasts to clients
+    when the section's content-hash changed. This avoids spawning `node
+    dash-extra.mjs` on every tick.
+  - GET /events (ThreadingHTTPServer — required, since SSE holds one connection
+    open per client) streams `event: data|backlog|agents` / `data: <json>`
+    frames, plus a comment-line keepalive (`: keepalive`) every ~15s.
 """
+import hashlib
 import http.server
 import json
 import os
+import queue
 import re
 import secrets
 import subprocess
 import sys
+import threading
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -200,18 +219,21 @@ def parse_audit_backlog():
     # Split into lines
     lines = content.split('\n')
 
-    # Parse sections and items
+    # Parse sections and items.
+    #
+    # NOTE: tier headers are matched by REGEX PREFIX (e.g. "## P0\b"), not by exact/startswith
+    # comparison against a fixed full title string. The backlog file's section titles evolve
+    # over time (suffixes like "(do first)" become "(wave 5, from five-lens re-audit)"), and a
+    # hardcoded full-string tier_map silently stops matching anything when that happens — the
+    # panel then renders "no backlog found" forever even though the file is full of live items.
+    # Regex-on-prefix survives any suffix/rename of the tier header.
     current_tier = None
-    tier_map = {
-        "## P0 — correctness / security (do first)": "P0",
-        "## P0": "P0",
-        "## P1 — hardening / robustness": "P1",
-        "## P1": "P1",
-        "## P2 — honesty / polish / docs": "P2",
-        "## P2": "P2",
-        "## Needs a user decision (⏸)": "Needs decision",
-        "## Needs a user decision": "Needs decision",
-    }
+    tier_patterns = [
+        (re.compile(r'^##\s*P0\b'), "P0"),
+        (re.compile(r'^##\s*P1\b'), "P1"),
+        (re.compile(r'^##\s*P2\b'), "P2"),
+        (re.compile(r'^##\s*Needs a user decision\b', re.IGNORECASE), "Needs decision"),
+    ]
 
     # Stop parsing at these sections
     stop_sections = ["## Landing log", "## Dispatch plan"]
@@ -225,13 +247,20 @@ def parse_audit_backlog():
         if any(line_stripped.startswith(stop) for stop in stop_sections):
             break
 
-        # Check if this is a tier header
-        for header, tier_name in tier_map.items():
-            if line_stripped == header or line_stripped.startswith(header):
-                current_tier = tier_name
-                if current_tier not in tiers_data:
-                    tiers_data[current_tier] = []
-                break
+        # Any level-2 header re-evaluates current_tier. This is deliberate: a header that
+        # doesn't match a known tier (e.g. "## Features (user-requested)") resets current_tier
+        # to None, so its items are NOT silently attributed to whatever tier came before it
+        # (bleed-through bug from sticky state).
+        if line_stripped.startswith("## "):
+            matched_tier = None
+            for pattern, tier_name in tier_patterns:
+                if pattern.match(line_stripped):
+                    matched_tier = tier_name
+                    break
+            current_tier = matched_tier
+            if current_tier and current_tier not in tiers_data:
+                tiers_data[current_tier] = []
+            continue
 
         # Parse item line (starts with "- " and a status glyph)
         if current_tier and line_stripped.startswith("- "):
@@ -348,7 +377,16 @@ def get_monitor_heartbeat_status():
 
 
 def get_fleet_agents():
-    """Detect running subagents by calling dash-extra.mjs --json."""
+    """Detect running subagents by calling dash-extra.mjs --json.
+
+    dash-extra.mjs truncates agent ids to 13 characters for display. With enough
+    concurrently-active agents, two distinct agents can share the same 13-char
+    prefix and collide onto the same id. The dashboard keys DOM rows (and the
+    click-to-expand lookup) by this id, so a collision silently merges two
+    different agents into one row and can show mismatched detail on click. Since
+    dash-extra.mjs is out of scope here, disambiguate post-hoc: keep the original
+    (display-friendly) id as a prefix, but suffix it to guarantee uniqueness.
+    """
     agents = []
     try:
         # Call the working detector (dash-extra.mjs) with --json flag
@@ -367,6 +405,17 @@ def get_fleet_agents():
         pass
     except Exception:
         pass
+
+    seen = {}
+    for a in agents:
+        if not isinstance(a, dict):
+            continue
+        aid = a.get("id", "")
+        if aid in seen:
+            seen[aid] += 1
+            a["id"] = f"{aid}-{seen[aid]}"
+        else:
+            seen[aid] = 1
     return agents
 
 
@@ -553,6 +602,146 @@ def extract_agent_dispatch_prompt(agent_id):
 
 
 # ==============================================================================
+# Realtime collector (SSE) — background thread, change-hash gated broadcast
+# ==============================================================================
+
+# How often the collector wakes up to check for changes. Cheap sources (heartbeat
+# files, log tails) are re-read every tick; expensive sources (backlog parse, the
+# `node dash-extra.mjs` subprocess for agents) are gated behind a mtime/fingerprint
+# check so they're only re-derived when their underlying input actually changed.
+COLLECTOR_INTERVAL = float(os.getenv("AESOP_UI_COLLECT_INTERVAL", "1.0"))
+SSE_KEEPALIVE_SECONDS = 15
+
+_sse_lock = threading.Lock()
+_sse_clients = []  # list[queue.Queue]
+
+_latest_lock = threading.Lock()
+_latest_snapshots = {"data": None, "backlog": None, "agents": None}  # name -> json str
+
+_collector_lock = threading.Lock()
+_collector_started = False
+_collector_stop_event = threading.Event()
+
+
+def _snapshot_data():
+    """Everything the 'data' SSE section covers (header, repos, events, alerts, messages)."""
+    return {
+        "watchdog": get_heartbeat_status(),
+        "monitor": get_monitor_heartbeat_status(),
+        "repos": get_repos_status(),
+        "events": get_recent_events(),
+        "alerts": get_alerts(),
+        "messages": get_main_thread_messages(),
+    }
+
+
+def _transcripts_fingerprint():
+    """Cheap fs-stat-only fingerprint of the transcripts tree.
+
+    Used to decide whether it's worth re-invoking `node dash-extra.mjs` (which is
+    comparatively expensive: process spawn + re-parsing every agent transcript).
+    Only file count + max mtime — no file content is read.
+    """
+    try:
+        if not TRANSCRIPTS_ROOT.exists():
+            return (0, 0.0)
+        count = 0
+        latest = 0.0
+        for p in TRANSCRIPTS_ROOT.glob("**/agent-*.jsonl"):
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            count += 1
+            if mtime > latest:
+                latest = mtime
+        return (count, latest)
+    except Exception:
+        return (0, 0.0)
+
+
+def register_sse_client():
+    """Register a new SSE client queue. Returns the queue to read events from."""
+    q = queue.Queue()
+    with _sse_lock:
+        _sse_clients.append(q)
+    return q
+
+
+def unregister_sse_client(q):
+    """Remove a disconnected SSE client's queue."""
+    with _sse_lock:
+        if q in _sse_clients:
+            _sse_clients.remove(q)
+
+
+def broadcast_sse(event_name, payload):
+    """Push (event_name, payload) onto every currently-registered client queue."""
+    with _sse_lock:
+        clients = list(_sse_clients)
+    for q in clients:
+        try:
+            q.put_nowait((event_name, payload))
+        except Exception:
+            pass
+
+
+def _maybe_emit(name, snapshot, last_hashes):
+    """Hash-gate: only store + broadcast a section if its content actually changed."""
+    payload = json.dumps(snapshot, default=str, sort_keys=True)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    if last_hashes.get(name) == digest:
+        return
+    last_hashes[name] = digest
+    with _latest_lock:
+        _latest_snapshots[name] = payload
+    broadcast_sse(name, payload)
+
+
+def collector_loop(stop_event):
+    """Background loop: poll cheap sources, gate expensive ones, broadcast on change."""
+    last_hashes = {}
+    last_backlog_mtime = object()  # sentinel guaranteed != any real mtime/None
+    last_agents_fingerprint = None
+    cached_backlog_snapshot = {"tiers": []}
+    cached_agents_snapshot = []
+
+    while not stop_event.is_set():
+        try:
+            _maybe_emit("data", _snapshot_data(), last_hashes)
+
+            try:
+                backlog_mtime = AUDIT_BACKLOG_FILE.stat().st_mtime if AUDIT_BACKLOG_FILE.exists() else None
+            except OSError:
+                backlog_mtime = None
+            if backlog_mtime != last_backlog_mtime:
+                last_backlog_mtime = backlog_mtime
+                cached_backlog_snapshot = parse_audit_backlog()
+            _maybe_emit("backlog", cached_backlog_snapshot, last_hashes)
+
+            fingerprint = _transcripts_fingerprint()
+            if fingerprint != last_agents_fingerprint:
+                last_agents_fingerprint = fingerprint
+                cached_agents_snapshot = get_fleet_agents()
+            _maybe_emit("agents", cached_agents_snapshot, last_hashes)
+        except Exception:
+            pass
+        stop_event.wait(COLLECTOR_INTERVAL)
+
+
+def start_collector_thread():
+    """Idempotently start the background collector daemon thread (safe to call from
+    multiple request handlers / run_server — only the first call actually starts it)."""
+    global _collector_started
+    with _collector_lock:
+        if _collector_started:
+            return
+        _collector_started = True
+        t = threading.Thread(target=collector_loop, args=(_collector_stop_event,), daemon=True)
+        t.start()
+
+
+# ==============================================================================
 # HTTP Server
 # ==============================================================================
 
@@ -575,6 +764,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_agents()
         elif self.path.startswith("/agent?"):
             self.serve_agent()
+        elif self.path == "/events":
+            self.serve_events()
         else:
             self.send_error(404)
 
@@ -722,6 +913,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 <div class="header-label">Running Agents</div>
                 <div class="header-value" id="running-count" style="color: #999;">—</div>
             </div>
+            <div class="header-item" style="flex: 0 0 auto; text-align: right;">
+                <div class="header-label">Live</div>
+                <div class="header-value">
+                    <span id="conn-live" style="color: #0a0;">● live</span>
+                    <span id="conn-reconnecting" style="color: #f80; display: none;">◌ reconnecting…</span>
+                </div>
+            </div>
         </div>
 
         <div class="inbox-box">
@@ -772,12 +970,26 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         </div>
 
         <div style="text-align: center; margin-top: 30px; color: #666; font-size: 11px;">
-            Auto-refresh every 3s · Dashboard · Click agent rows to inspect dispatches
+            Realtime via SSE (push on change) · Click agent rows to inspect dispatches ·
+            <button id="manual-refresh-button" style="background: none; border: 1px solid #444; color: #999; border-radius: 2px; padding: 2px 8px; cursor: pointer; font-size: 11px;">⟳ Refresh now</button>
         </div>
     </div>
 
     <script>
-        let lastRefresh = 0;
+        // ------------------------------------------------------------------
+        // Realtime model: one EventSource('/events'), keyed in-place DOM
+        // patching per section. No interval polling, no full-page rebuild —
+        // clicks, expansion state, scroll position, and text selection all
+        // survive indefinitely because existing DOM nodes are mutated in
+        // place rather than replaced.
+        // ------------------------------------------------------------------
+
+        // Client-side cache of the last snapshot per section, used by the
+        // click handler (synchronous lookup — no network round-trip on click)
+        // and by the manual refresh fallback.
+        let latestAgents = [];
+        let latestBacklog = { tiers: [] };
+        let latestData = {};
 
         function formatTimestamp(iso) {
             if (!iso) return '';
@@ -791,211 +1003,381 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             return div.innerHTML;
         }
 
-        async function refresh() {
-            try {
-                const response = await fetch('/data');
-                if (!response.ok) return;
-                const data = await response.json();
+        // CSS.escape wrapper (with a conservative fallback) so item/tier keys
+        // containing brackets, quotes, etc. can't break attribute selectors.
+        function cssEscape(s) {
+            if (window.CSS && typeof CSS.escape === 'function') return CSS.escape(String(s));
+            return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => '\\\\' + c);
+        }
 
-                // Fetch backlog data
-                let backlogData = { tiers: [] };
-                try {
-                    const backlogResp = await fetch('/api/backlog');
-                    if (backlogResp.ok) {
-                        backlogData = await backlogResp.json();
+        function setConnectionStatus(connected) {
+            document.getElementById('conn-live').style.display = connected ? '' : 'none';
+            document.getElementById('conn-reconnecting').style.display = connected ? 'none' : '';
+        }
+
+        // ---- header (watchdog / monitor / alert count) --------------------
+        function patchHeader(data) {
+            const watchdog = data.watchdog || {};
+            const watchdogAlive = document.getElementById('watchdog-alive');
+            watchdogAlive.textContent = watchdog.alive || '—';
+            watchdogAlive.className = 'status-' + (watchdog.alive || 'unknown').toLowerCase();
+            document.getElementById('watchdog-age').textContent = watchdog.age >= 0 ? watchdog.age + 's' : '—';
+
+            const monitor = data.monitor || {};
+            const monitorAlive = document.getElementById('monitor-alive');
+            monitorAlive.textContent = monitor.alive || '—';
+            monitorAlive.className = 'status-' + (monitor.alive || 'unknown').toLowerCase();
+            document.getElementById('monitor-age').textContent = monitor.age >= 0 ? monitor.age + 's' : '—';
+
+            document.getElementById('alert-count').textContent = (data.alerts && data.alerts.count) || 0;
+        }
+
+        function patchHeaderRunningCount(agents) {
+            const running = (agents || []).filter(a => a.status === 'running').length;
+            document.getElementById('running-count').textContent = running;
+            document.getElementById('running-agents-count').textContent = (agents || []).length;
+        }
+
+        // ---- agents panel: keyed rows, click-to-expand survives updates --
+        function renderAgentDetails(row, agent) {
+            const detailsDiv = row.querySelector('.agent-details');
+            const now = Date.now();
+            const startTime = agent.startedAt ? new Date(agent.startedAt).getTime() : now;
+            const runtime = Math.floor((now - startTime) / 1000);
+            const runtimeStr = runtime < 60 ? runtime + 's' : Math.floor(runtime / 60) + 'm';
+
+            detailsDiv.textContent = '';
+            const fields = [
+                ['Task:', agent.taskLabel || 'N/A'],
+                ['Status:', agent.status || 'unknown'],
+                ['Runtime:', runtimeStr],
+                ['Tokens:', String(agent.tokensUsed || 0)],
+            ];
+            for (const [label, value] of fields) {
+                const rowEl = document.createElement('div');
+                rowEl.className = 'detail-row';
+                const labelEl = document.createElement('span');
+                labelEl.className = 'detail-label';
+                labelEl.textContent = label;
+                const valueEl = document.createElement('span');
+                valueEl.className = 'detail-value';
+                valueEl.textContent = value;
+                rowEl.appendChild(labelEl);
+                rowEl.appendChild(document.createTextNode(' '));
+                rowEl.appendChild(valueEl);
+                detailsDiv.appendChild(rowEl);
+            }
+            const promptLabelRow = document.createElement('div');
+            promptLabelRow.className = 'detail-row';
+            const promptLabel = document.createElement('span');
+            promptLabel.className = 'detail-label';
+            promptLabel.textContent = 'Prompt:';
+            promptLabelRow.appendChild(promptLabel);
+            detailsDiv.appendChild(promptLabelRow);
+
+            const promptBox = document.createElement('div');
+            promptBox.className = 'dispatch-prompt';
+            // The list payload (dash-extra) has no prompt; the full dispatch prompt
+            // comes from GET /agent?id=. Fetch once per agent and cache — push
+            // updates re-render expanded rows, and must neither clobber a loaded
+            // prompt nor refetch on every SSE event.
+            const cached = promptCache.get(agent.id);
+            promptBox.textContent = (typeof cached === 'string') ? cached : 'Loading…';
+            detailsDiv.appendChild(promptBox);
+            if (!promptCache.has(agent.id)) fetchDispatchPrompt(agent.id);
+        }
+
+        const promptCache = new Map();  // agent id -> prompt string (null while in flight)
+        function fetchDispatchPrompt(agentId) {
+            promptCache.set(agentId, null);
+            fetch('/agent?id=' + encodeURIComponent(agentId))
+                .then(r => r.json())
+                .then(d => {
+                    const text = d.dispatch_prompt || ('(' + (d.error || 'no prompt found') + ')');
+                    promptCache.set(agentId, text);
+                    const row = document.querySelector(`[data-agent-id="${cssEscape(agentId)}"]`);
+                    if (row) {
+                        const box = row.querySelector('.dispatch-prompt');
+                        if (box) box.textContent = text;  // textContent: XSS-safe
                     }
-                } catch (e) {
-                    console.error('Backlog fetch error:', e);
+                })
+                .catch(() => { promptCache.delete(agentId); });
+        }
+
+        function buildAgentRow(a) {
+            const row = document.createElement('div');
+            row.className = 'agent-row';
+            row.dataset.agentId = a.id;
+            row.innerHTML = `
+                <span class="agent-status-icon"></span>
+                <div class="agent-row-header">
+                    <span class="agent-id-badge"></span>
+                    <span class="agent-age"></span>
+                    <span class="agent-preview"></span>
+                </div>
+                <span class="agent-expand-toggle">▶</span>
+                <div class="agent-details"></div>
+            `;
+            return row;
+        }
+
+        function patchAgents(agents) {
+            latestAgents = agents || [];
+            const container = document.getElementById('agents-list');
+            container.classList.remove('loading');
+
+            if (latestAgents.length === 0) {
+                if (!container.querySelector('.empty-state')) {
+                    container.innerHTML = '<div class="empty-state" style="color: #666; font-size: 12px;">💤 No active agents — fleet is idle</div>';
                 }
+                return;
+            }
+            const emptyState = container.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
 
-                // Update header
-                const watchdog = data.watchdog || {};
-                const watchdogAlive = document.getElementById('watchdog-alive');
-                watchdogAlive.textContent = watchdog.alive || '—';
-                watchdogAlive.className = 'status-' + (watchdog.alive || 'unknown').toLowerCase();
-                document.getElementById('watchdog-age').textContent = watchdog.age >= 0 ? watchdog.age + 's' : '—';
+            const newIds = new Set(latestAgents.map(a => a.id));
+            container.querySelectorAll('[data-agent-id]').forEach(row => {
+                if (!newIds.has(row.dataset.agentId)) row.remove();
+            });
 
-                const monitor = data.monitor || {};
-                const monitorAlive = document.getElementById('monitor-alive');
-                monitorAlive.textContent = monitor.alive || '—';
-                monitorAlive.className = 'status-' + (monitor.alive || 'unknown').toLowerCase();
-                document.getElementById('monitor-age').textContent = monitor.age >= 0 ? monitor.age + 's' : '—';
+            latestAgents.forEach(a => {
+                const statusEmoji = a.status === 'running' ? '🟢' : (a.status === 'idle' ? '⚪' : '⚠️');
+                const preview = (a.hint || '').substring(0, 60);
 
-                document.getElementById('alert-count').textContent = data.alerts?.count || 0;
-                const runningAgents = (data.agents || []).filter(a => a.status === 'running').length;
-                document.getElementById('running-count').textContent = runningAgents;
+                let row = container.querySelector(`[data-agent-id="${cssEscape(a.id)}"]`);
+                if (!row) {
+                    row = buildAgentRow(a);
+                    container.appendChild(row);
+                }
+                row.querySelector('.agent-status-icon').textContent = statusEmoji;
+                row.querySelector('.agent-id-badge').textContent = a.id;
+                row.querySelector('.agent-age').textContent = a.age_s + 's';
+                row.querySelector('.agent-preview').textContent = preview;
 
-                // Agents with expandable details — incremental DOM updates to preserve state & interaction
-                const agentsList = document.getElementById('agents-list');
-                document.getElementById('running-agents-count').textContent = (data.agents || []).length;
+                // If this row is currently expanded, keep its live fields (runtime,
+                // tokens, age) fresh in place — the click-to-expand state itself is
+                // never touched here, so it survives every push update.
+                if (row.classList.contains('expanded')) {
+                    renderAgentDetails(row, a);
+                }
+            });
+        }
 
-                if (data.agents && data.agents.length > 0) {
-                    // Track which agents exist in new data
-                    const newAgentIds = new Set(data.agents.map(a => a.id));
-
-                    // Remove agents that are no longer active
-                    agentsList.querySelectorAll('[data-agent-id]').forEach(row => {
-                        if (!newAgentIds.has(row.dataset.agentId)) {
-                            row.remove();
-                        }
-                    });
-
-                    // Update or add agents
-                    data.agents.forEach((a, index) => {
-                        const statusEmoji = a.status === 'running' ? '🟢' : a.status === 'done' ? '⚪' : '⚠️';
-                        const preview = (a.hint || '').substring(0, 60);
-
-                        let row = agentsList.querySelector(`[data-agent-id="${a.id}"]`);
-
-                        if (row) {
-                            // Update existing row in place
-                            row.querySelector('.agent-status-icon').textContent = statusEmoji;
-                            row.querySelector('.agent-age').textContent = a.age_s + 's';
-                            row.querySelector('.agent-preview').textContent = preview;
-                        } else {
-                            // Create new row
-                            row = document.createElement('div');
-                            row.className = 'agent-row fade-in';
-                            row.dataset.agentId = a.id;
-                            row.innerHTML = `
-                                <span class="agent-status-icon">${statusEmoji}</span>
-                                <div class="agent-row-header">
-                                    <span class="agent-id-badge">${sanitize(a.id)}</span>
-                                    <span class="agent-age">${a.age_s}s</span>
-                                    <span class="agent-preview">${sanitize(preview)}</span>
-                                </div>
-                                <span class="agent-expand-toggle">▶</span>
-                                <div class="agent-details" style="display: none;"></div>
-                            `;
-                            agentsList.appendChild(row);
-
-                            // Attach click handler only to new rows
-                            row.addEventListener('click', async function(e) {
-                                e.stopPropagation();
-                                const agentId = this.dataset.agentId;
-                                this.classList.toggle('expanded');
-                                const detailsDiv = this.querySelector('.agent-details');
-                                if (this.classList.contains('expanded') && !detailsDiv.innerHTML) {
-                                    // Fetch details on first expand
-                                    try {
-                                        const resp = await fetch('/api/agents');
-                                        const agents = await resp.json();
-                                        const agent = agents.find(x => x.id === agentId);
-                                        if (agent) {
-                                            const now = Date.now();
-                                            const startTime = agent.startedAt ? new Date(agent.startedAt).getTime() : now;
-                                            const runtime = Math.floor((now - startTime) / 1000);
-                                            const runtimeStr = runtime < 60 ? runtime + 's' : Math.floor(runtime / 60) + 'm';
-                                            detailsDiv.innerHTML = `
-                                                <div class="detail-row"><span class="detail-label">Task:</span> <span class="detail-value">${sanitize(agent.taskLabel || 'N/A')}</span></div>
-                                                <div class="detail-row"><span class="detail-label">Status:</span> <span class="detail-value">${sanitize(agent.status)}</span></div>
-                                                <div class="detail-row"><span class="detail-label">Runtime:</span> <span class="detail-value">${runtimeStr}</span></div>
-                                                <div class="detail-row"><span class="detail-label">Tokens:</span> <span class="detail-value">${agent.tokensUsed || 0}</span></div>
-                                                <div class="detail-row"><span class="detail-label">Prompt:</span></div>
-                                                <div class="dispatch-prompt">${sanitize(agent.promptFull || 'N/A')}</div>
-                                            `;
-                                        } else {
-                                            detailsDiv.textContent = 'Agent details not found';
-                                        }
-                                    } catch (e) {
-                                        detailsDiv.textContent = 'Failed to fetch details: ' + e.message;
-                                    }
-                                }
-                            });
-                        }
-                    });
+        // Event delegation on the stable container: attached once, works for
+        // every row (past, present, and future) without re-binding per row.
+        document.getElementById('agents-list').addEventListener('click', function (e) {
+            const row = e.target.closest('.agent-row');
+            if (!row || !this.contains(row)) return;
+            row.classList.toggle('expanded');
+            if (row.classList.contains('expanded')) {
+                const agent = latestAgents.find(a => a.id === row.dataset.agentId);
+                if (agent) {
+                    renderAgentDetails(row, agent);
                 } else {
-                    agentsList.innerHTML = '<div style="color: #666; font-size: 12px;">💤 No active agents — fleet is idle</div>';
+                    row.querySelector('.agent-details').textContent = 'Agent details not found';
                 }
+            }
+        });
 
-                // Repos
-                const reposList = document.getElementById('repos-list');
-                if (data.repos && data.repos.length > 0) {
-                    reposList.innerHTML = data.repos.map(r => {
-                        const repo = r.repo || Object.keys(r)[0] || 'unknown';
-                        const state = r.state || r[repo] || 'unknown';
-                        return `<div class="item"><span class="item-id">${sanitize(repo.substring(0, 30))}</span> <span style="color: #999;">${sanitize(state)}</span></div>`;
-                    }).join('');
-                } else {
-                    reposList.textContent = '(no repos)';
-                    reposList.style.color = '#666';
-                }
-
-                // Events
-                const eventsList = document.getElementById('events-list');
-                if (data.events && data.events.length > 0) {
-                    eventsList.innerHTML = data.events.map(e =>
-                        `<div class="item"><span style="color: #999; font-size: 10px;">${sanitize(e.substring(0, 80))}</span></div>`
-                    ).join('');
-                } else {
-                    eventsList.textContent = '(no recent events)';
-                    eventsList.style.color = '#666';
-                }
-
-                // Alerts
-                const alertsList = document.getElementById('alerts-list');
-                if (data.alerts && data.alerts.lines && data.alerts.lines.length > 0) {
-                    alertsList.innerHTML = data.alerts.lines.map(line =>
-                        `<div class="alert-line">${sanitize(line.substring(0, 120))}</div>`
-                    ).join('');
-                } else {
-                    alertsList.innerHTML = '<div class="alert-none">(no alerts)</div>';
-                }
-
-                // Messages
-                const messagesList = document.getElementById('messages-list');
-                if (data.messages && data.messages.length > 0) {
-                    messagesList.innerHTML = data.messages.map(m =>
-                        `<div class="message fade-in"><span class="message-role">${sanitize(m.role)}</span><span class="message-time">${formatTimestamp(m.timestamp)}</span><div class="message-text">${sanitize(m.text)}</div></div>`
-                    ).join('');
-                } else {
-                    messagesList.textContent = '(no messages)';
-                    messagesList.style.color = '#666';
-                }
-
-                // Audit Backlog Tiers
-                const backlogTiersDiv = document.getElementById('backlog-tiers');
-                if (backlogData && backlogData.tiers && backlogData.tiers.length > 0) {
-                    backlogTiersDiv.innerHTML = backlogData.tiers.map(tier => {
-                        const total = tier.total || 0;
-                        const done = tier.done || 0;
-                        const inflight = tier.inflight || 0;
-                        const donePercent = total > 0 ? (done / total) * 100 : 0;
-                        const inflightPercent = total > 0 ? (inflight / total) * 100 : 0;
-
-                        const itemsHtml = (tier.items || []).map(item => {
-                            const itemClass = item.status === '✅' ? 'done' : '';
-                            return `<div class="backlog-item ${itemClass}">
-                                <span class="backlog-item-glyph">${sanitize(item.status)}</span>
-                                <span class="backlog-item-tag">${sanitize(item.tag)}</span>
-                                <span class="backlog-item-title">${sanitize(item.title)}</span>
-                            </div>`;
-                        }).join('');
-
-                        return `<div class="backlog-tier fade-in">
-                            <div class="backlog-tier-header">
-                                <span class="backlog-tier-name">${sanitize(tier.tier)}</span>
-                            </div>
-                            <div class="backlog-progress-container">
-                                <div class="backlog-progress-bar">
-                                    <div class="backlog-progress-done" style="width: ${donePercent}%;"></div>
-                                    <div class="backlog-progress-inflight" style="width: ${inflightPercent}%;"></div>
-                                    <div class="backlog-progress-empty" style="width: ${100 - donePercent - inflightPercent}%;"></div>
-                                </div>
-                            </div>
-                            <div class="backlog-stats">${done}/${total} cleared · ${inflight} in flight</div>
-                            <div class="backlog-items">${itemsHtml}</div>
-                        </div>`;
-                    }).join('');
-                } else {
-                    backlogTiersDiv.innerHTML = '<div style="color: #666; font-size: 12px;">📋 No audit backlog found</div>';
-                }
-
-                lastRefresh = Date.now();
-            } catch (e) {
-                console.error('Refresh error:', e);
+        // ---- repos / events / alerts / messages: presentational lists,
+        // no click/expand state to preserve, so a hash-gated (not interval-
+        // gated) full swap per section is safe. ----------------------------
+        function patchRepos(repos) {
+            const reposList = document.getElementById('repos-list');
+            reposList.classList.remove('loading');
+            if (repos && repos.length > 0) {
+                reposList.innerHTML = repos.map(r => {
+                    const repo = r.repo || Object.keys(r)[0] || 'unknown';
+                    const state = r.state || r[repo] || 'unknown';
+                    return `<div class="item"><span class="item-id">${sanitize(repo.substring(0, 30))}</span> <span style="color: #999;">${sanitize(state)}</span></div>`;
+                }).join('');
+            } else {
+                reposList.textContent = '(no repos)';
+                reposList.style.color = '#666';
             }
         }
+
+        function patchEvents(events) {
+            const eventsList = document.getElementById('events-list');
+            eventsList.classList.remove('loading');
+            if (events && events.length > 0) {
+                eventsList.innerHTML = events.map(e =>
+                    `<div class="item"><span style="color: #999; font-size: 10px;">${sanitize(e.substring(0, 80))}</span></div>`
+                ).join('');
+            } else {
+                eventsList.textContent = '(no recent events)';
+                eventsList.style.color = '#666';
+            }
+        }
+
+        function patchAlerts(alerts) {
+            const alertsList = document.getElementById('alerts-list');
+            if (alerts && alerts.lines && alerts.lines.length > 0) {
+                alertsList.innerHTML = alerts.lines.map(line =>
+                    `<div class="alert-line">${sanitize(line.substring(0, 120))}</div>`
+                ).join('');
+            } else {
+                alertsList.innerHTML = '<div class="alert-none">(no alerts)</div>';
+            }
+        }
+
+        function patchMessages(messages) {
+            const messagesList = document.getElementById('messages-list');
+            messagesList.classList.remove('loading');
+            if (messages && messages.length > 0) {
+                messagesList.innerHTML = messages.map(m =>
+                    `<div class="message"><span class="message-role">${sanitize(m.role)}</span><span class="message-time">${formatTimestamp(m.timestamp)}</span><div class="message-text">${sanitize(m.text)}</div></div>`
+                ).join('');
+            } else {
+                messagesList.textContent = '(no messages)';
+                messagesList.style.color = '#666';
+            }
+        }
+
+        function patchDataSection(data) {
+            latestData = data || {};
+            patchHeader(latestData);
+            patchRepos(latestData.repos || []);
+            patchEvents(latestData.events || []);
+            patchAlerts(latestData.alerts || { count: 0, lines: [] });
+            patchMessages(latestData.messages || []);
+        }
+
+        // ---- audit backlog panel: tiers + items keyed, so live status
+        // changes (⬜ → 🔵 → ✅) update in place without losing scroll or
+        // flashing the whole panel on every unrelated tick. -----------------
+        function backlogItemKey(item) {
+            return (item.tag || '') + '||' + (item.title || '');
+        }
+
+        function buildBacklogTier(tier) {
+            const tierEl = document.createElement('div');
+            tierEl.className = 'backlog-tier';
+            tierEl.dataset.tier = tier.tier;
+            tierEl.innerHTML = `
+                <div class="backlog-tier-header"><span class="backlog-tier-name"></span></div>
+                <div class="backlog-progress-container">
+                    <div class="backlog-progress-bar">
+                        <div class="backlog-progress-done"></div>
+                        <div class="backlog-progress-inflight"></div>
+                        <div class="backlog-progress-empty"></div>
+                    </div>
+                </div>
+                <div class="backlog-stats"></div>
+                <div class="backlog-items"></div>
+            `;
+            return tierEl;
+        }
+
+        function buildBacklogItem(key) {
+            const itemEl = document.createElement('div');
+            itemEl.className = 'backlog-item';
+            itemEl.dataset.itemKey = key;
+            itemEl.innerHTML = `
+                <span class="backlog-item-glyph"></span>
+                <span class="backlog-item-tag"></span>
+                <span class="backlog-item-title"></span>
+            `;
+            return itemEl;
+        }
+
+        function patchBacklog(backlogData) {
+            latestBacklog = backlogData || { tiers: [] };
+            const container = document.getElementById('backlog-tiers');
+            container.classList.remove('loading');
+            const tiers = latestBacklog.tiers || [];
+
+            if (tiers.length === 0) {
+                if (!container.querySelector('.empty-state')) {
+                    container.innerHTML = '<div class="empty-state" style="color: #666; font-size: 12px;">📋 No audit backlog found</div>';
+                }
+                return;
+            }
+            const emptyState = container.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+
+            const newTierNames = new Set(tiers.map(t => t.tier));
+            container.querySelectorAll('[data-tier]').forEach(el => {
+                if (!newTierNames.has(el.dataset.tier)) el.remove();
+            });
+
+            tiers.forEach(tier => {
+                let tierEl = container.querySelector(`[data-tier="${cssEscape(tier.tier)}"]`);
+                if (!tierEl) {
+                    tierEl = buildBacklogTier(tier);
+                    container.appendChild(tierEl);
+                }
+                tierEl.querySelector('.backlog-tier-name').textContent = tier.tier;
+
+                const total = tier.total || 0;
+                const done = tier.done || 0;
+                const inflight = tier.inflight || 0;
+                const donePercent = total > 0 ? (done / total) * 100 : 0;
+                const inflightPercent = total > 0 ? (inflight / total) * 100 : 0;
+                tierEl.querySelector('.backlog-progress-done').style.width = donePercent + '%';
+                tierEl.querySelector('.backlog-progress-inflight').style.width = inflightPercent + '%';
+                tierEl.querySelector('.backlog-progress-empty').style.width = (100 - donePercent - inflightPercent) + '%';
+                tierEl.querySelector('.backlog-stats').textContent = `${done}/${total} cleared · ${inflight} in flight`;
+
+                const itemsContainer = tierEl.querySelector('.backlog-items');
+                const items = tier.items || [];
+                const newKeys = new Set(items.map(backlogItemKey));
+                itemsContainer.querySelectorAll('[data-item-key]').forEach(el => {
+                    if (!newKeys.has(el.dataset.itemKey)) el.remove();
+                });
+
+                items.forEach(item => {
+                    const key = backlogItemKey(item);
+                    let itemEl = itemsContainer.querySelector(`[data-item-key="${cssEscape(key)}"]`);
+                    if (!itemEl) {
+                        itemEl = buildBacklogItem(key);
+                        itemsContainer.appendChild(itemEl);
+                    }
+                    itemEl.classList.toggle('done', item.status === '✅');
+                    itemEl.querySelector('.backlog-item-glyph').textContent = item.status;
+                    itemEl.querySelector('.backlog-item-tag').textContent = item.tag;
+                    itemEl.querySelector('.backlog-item-title').textContent = item.title;
+                });
+            });
+        }
+
+        // ---- SSE wiring ----------------------------------------------------
+        const evtSource = new EventSource('/events');
+
+        evtSource.addEventListener('data', (e) => {
+            patchDataSection(JSON.parse(e.data));
+            setConnectionStatus(true);
+        });
+        evtSource.addEventListener('backlog', (e) => {
+            patchBacklog(JSON.parse(e.data));
+            setConnectionStatus(true);
+        });
+        evtSource.addEventListener('agents', (e) => {
+            patchAgents(JSON.parse(e.data));
+            patchHeaderRunningCount(latestAgents);
+            setConnectionStatus(true);
+        });
+        evtSource.addEventListener('open', () => setConnectionStatus(true));
+        evtSource.addEventListener('error', () => setConnectionStatus(false));
+
+        // Manual refresh fallback (one-shot fetch, reuses the exact same patch
+        // functions as the push path so there's a single rendering code path).
+        async function manualRefresh() {
+            try {
+                const [dataResp, backlogResp, agentsResp] = await Promise.all([
+                    fetch('/data'), fetch('/api/backlog'), fetch('/api/agents')
+                ]);
+                if (dataResp.ok) patchDataSection(await dataResp.json());
+                if (backlogResp.ok) patchBacklog(await backlogResp.json());
+                if (agentsResp.ok) {
+                    patchAgents(await agentsResp.json());
+                    patchHeaderRunningCount(latestAgents);
+                }
+            } catch (e) {
+                console.error('Manual refresh error:', e);
+            }
+        }
+        document.getElementById('manual-refresh-button').addEventListener('click', manualRefresh);
 
         async function handleInboxSubmit() {
             const input = document.getElementById('inbox-input');
@@ -1033,9 +1415,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         document.getElementById('inbox-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') handleInboxSubmit();
         });
-
-        refresh();
-        setInterval(refresh, 3000);
     </script>
 </body>
 </html>"""
@@ -1121,6 +1500,66 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
+    def _write_sse_event(self, event_name, payload):
+        """Write one SSE frame. Caller handles disconnect exceptions."""
+        msg = f"event: {event_name}\ndata: {payload}\n\n"
+        self.wfile.write(msg.encode("utf-8"))
+        self.wfile.flush()
+
+    def serve_events(self):
+        """GET /events — Server-Sent Events stream.
+
+        No CSRF token required: this is a read-only stream, not a mutation (POST
+        /submit keeps its token requirement unchanged). Holds the connection open
+        for the life of the client; requires ThreadingHTTPServer (see run_server)
+        so one SSE client can't block every other request.
+        """
+        start_collector_thread()
+
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+            return
+
+        q = register_sse_client()
+        try:
+            # Send an immediate full snapshot so first paint isn't empty. If the
+            # collector hasn't produced anything yet (first-ever request), compute
+            # it inline once.
+            with _latest_lock:
+                initial = dict(_latest_snapshots)
+            if all(v is None for v in initial.values()):
+                initial["data"] = json.dumps(_snapshot_data(), default=str, sort_keys=True)
+                initial["backlog"] = json.dumps(parse_audit_backlog(), default=str, sort_keys=True)
+                initial["agents"] = json.dumps(get_fleet_agents(), default=str, sort_keys=True)
+                with _latest_lock:
+                    _latest_snapshots.update(initial)
+
+            for name in ("data", "backlog", "agents"):
+                payload = initial.get(name)
+                if payload is not None:
+                    self._write_sse_event(name, payload)
+
+            while True:
+                try:
+                    event_name, payload = q.get(timeout=SSE_KEEPALIVE_SECONDS)
+                    self._write_sse_event(event_name, payload)
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+            # Client disconnected (tab closed, network drop) — normal, not an error.
+            pass
+        except Exception:
+            pass
+        finally:
+            unregister_sse_client(q)
+
     def handle_submit(self):
         """Handle /submit POST with CSRF protection."""
         try:
@@ -1168,9 +1607,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 
 def run_server():
-    """Start the HTTP server."""
+    """Start the HTTP server.
+
+    Must be ThreadingHTTPServer, not HTTPServer: GET /events (SSE) holds its
+    connection open for the life of the client, so a single-threaded server would
+    wedge every other request (including the initial page load and /submit)
+    behind that one held connection.
+    """
     addr = ("127.0.0.1", PORT)
-    httpd = http.server.HTTPServer(addr, DashboardHandler)
+    httpd = http.server.ThreadingHTTPServer(addr, DashboardHandler)
+    httpd.daemon_threads = True
+    start_collector_thread()
     print(f"Dashboard: http://localhost:{PORT}")
     print(f"AESOP_ROOT: {AESOP_ROOT}")
     print(f"Transcripts: {TRANSCRIPTS_ROOT}")
@@ -1178,6 +1625,7 @@ def run_server():
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
+        _collector_stop_event.set()
         print("\nShutdown complete.")
         sys.exit(0)
 
