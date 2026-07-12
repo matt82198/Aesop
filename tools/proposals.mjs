@@ -87,7 +87,26 @@ function acquireLock(proposalsFile) {
 function releaseLock(lockDir) {
   if (lockDir) {
     try {
-      fs.rmSync(lockDir, { recursive: true, force: true });
+      // P0 fix: verify ownership before deletion
+      // Only delete if the pid in the marker matches the current process
+      const markerFile = path.join(lockDir, 'pid-timestamp.txt');
+      let shouldDelete = false;
+      try {
+        const markerContent = fs.readFileSync(markerFile, 'utf8').trim();
+        const lines = markerContent.split('\n');
+        if (lines.length >= 1) {
+          const lockPid = lines[0];
+          if (lockPid === String(process.pid)) {
+            shouldDelete = true;
+          }
+        }
+      } catch {
+        // If we can't read the marker, don't delete (fail-safe)
+      }
+
+      if (shouldDelete) {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+      }
     } catch {
       // Ignore cleanup errors
     }
