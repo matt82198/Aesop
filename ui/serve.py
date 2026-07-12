@@ -60,11 +60,131 @@ REPOS_JSON = STATE_DIR / ".watchdog-repos.json"
 BACKUP_LOG = STATE_DIR / "FLEET-BACKUP.log"
 ALERTS_LOG = STATE_DIR / "SECURITY-ALERTS.log"
 INBOX_FILE = STATE_DIR / "ui-inbox.md"
+AUDIT_BACKLOG_FILE = AESOP_ROOT / "AUDIT-BACKLOG.md"
 
 
 # ==============================================================================
 # Data Collection Functions
 # ==============================================================================
+
+def parse_audit_backlog():
+    """
+    Parse AUDIT-BACKLOG.md and return structured tier data.
+
+    Returns:
+        dict with 'tiers' list, each tier containing:
+        {
+            "tier": "P0" | "P1" | "P2" | "Needs decision",
+            "items": [
+                {"status": "✅"|"🔵"|"⬜"|"⏸", "tag": "[sec]", "title": "..."},
+                ...
+            ],
+            "done": int,
+            "inflight": int,
+            "todo": int,
+            "total": int
+        }
+    """
+    result = {"tiers": []}
+
+    try:
+        if not AUDIT_BACKLOG_FILE.exists():
+            return result
+
+        content = AUDIT_BACKLOG_FILE.read_text(encoding='utf-8')
+    except:
+        return result
+
+    # Split into lines
+    lines = content.split('\n')
+
+    # Parse sections and items
+    current_tier = None
+    tier_map = {
+        "## P0 — correctness / security (do first)": "P0",
+        "## P0": "P0",
+        "## P1 — hardening / robustness": "P1",
+        "## P1": "P1",
+        "## P2 — honesty / polish / docs": "P2",
+        "## P2": "P2",
+        "## Needs a user decision (⏸)": "Needs decision",
+        "## Needs a user decision": "Needs decision",
+    }
+
+    # Stop parsing at these sections
+    stop_sections = ["## Landing log", "## Dispatch plan"]
+
+    tiers_data = {}  # tier_name -> list of items
+
+    for line in lines:
+        line_stripped = line.strip()
+
+        # Check if we hit a stop section
+        if any(line_stripped.startswith(stop) for stop in stop_sections):
+            break
+
+        # Check if this is a tier header
+        for header, tier_name in tier_map.items():
+            if line_stripped == header or line_stripped.startswith(header):
+                current_tier = tier_name
+                if current_tier not in tiers_data:
+                    tiers_data[current_tier] = []
+                break
+
+        # Parse item line (starts with "- " and a status glyph)
+        if current_tier and line_stripped.startswith("- "):
+            # Status glyphs: ✅ 🔵 ⬜ ⏸
+            status = None
+            rest = line_stripped[2:].strip()  # Remove "- "
+
+            if rest.startswith("✅"):
+                status = "✅"
+                rest = rest[1:].strip()
+            elif rest.startswith("🔵"):
+                status = "🔵"
+                rest = rest[1:].strip()
+            elif rest.startswith("⬜"):
+                status = "⬜"
+                rest = rest[1:].strip()
+            elif rest.startswith("⏸"):
+                status = "⏸"
+                rest = rest[1:].strip()
+
+            if status:
+                # Extract tag and title from "**[tag] Title...**"
+                # Pattern: **[something] rest**
+                if rest.startswith("**"):
+                    # Find the closing **
+                    match = re.match(r'\*\*\[([^\]]+)\]\s+(.+?)\*\*', rest)
+                    if match:
+                        tag = f"[{match.group(1)}]"
+                        title = match.group(2)
+
+                        tiers_data[current_tier].append({
+                            "status": status,
+                            "tag": tag,
+                            "title": title
+                        })
+
+    # Convert to result format with counts
+    tier_order = ["P0", "P1", "P2", "Needs decision"]
+    for tier_name in tier_order:
+        if tier_name in tiers_data:
+            items = tiers_data[tier_name]
+            done = sum(1 for item in items if item["status"] == "✅")
+            inflight = sum(1 for item in items if item["status"] == "🔵")
+            todo = sum(1 for item in items if item["status"] == "⬜")
+
+            result["tiers"].append({
+                "tier": tier_name,
+                "items": items,
+                "done": done,
+                "inflight": inflight,
+                "todo": todo,
+                "total": len(items)
+            })
+
+    return result
 
 def get_heartbeat_status():
     """Read daemon heartbeat age and status."""
@@ -347,6 +467,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_html()
         elif self.path == "/data":
             self.serve_data()
+        elif self.path == "/api/backlog":
+            self.serve_backlog()
         elif self.path.startswith("/agent?"):
             self.serve_agent()
         else:
@@ -443,6 +565,22 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .message-time { color: #666; font-size: 10px; margin-left: 8px; }
         .message-text { color: #ccc; margin-top: 4px; }
 
+        .backlog-tier { margin-bottom: 16px; padding: 12px; background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 3px; }
+        .backlog-tier-header { font-size: 12px; font-weight: bold; color: #8ac; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+        .backlog-tier-name { font-size: 13px; }
+        .backlog-progress-container { width: 100%; background: #0a0a0a; border: 1px solid #333; border-radius: 2px; height: 20px; overflow: hidden; margin-bottom: 6px; }
+        .backlog-progress-bar { height: 100%; display: flex; background: #0a0a0a; }
+        .backlog-progress-done { background: #0a0; }
+        .backlog-progress-inflight { background: #88f; }
+        .backlog-progress-empty { background: #333; flex: 1; }
+        .backlog-stats { font-size: 11px; color: #999; }
+        .backlog-items { font-size: 11px; margin-top: 8px; max-height: 200px; overflow-y: auto; }
+        .backlog-item { padding: 4px 0; color: #ccc; display: flex; gap: 8px; align-items: flex-start; }
+        .backlog-item-glyph { min-width: 14px; font-size: 12px; }
+        .backlog-item-tag { color: #8ac; font-weight: bold; min-width: 60px; }
+        .backlog-item-title { color: #999; flex: 1; word-break: break-word; }
+        .backlog-item.done .backlog-item-title { opacity: 0.6; }
+
         .loading { color: #666; font-style: italic; }
         .error { color: #f44; }
         .fade-in { animation: fadeIn 0.3s ease-in; }
@@ -483,6 +621,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             <input type="text" class="inbox-input" id="inbox-input" placeholder="Type your task here...">
             <button class="inbox-button" id="inbox-button">Send to Inbox</button>
             <div class="inbox-status" id="inbox-status">Queued ✓</div>
+        </div>
+
+        <div class="panel" style="margin-bottom: 20px;">
+            <div class="panel-title">
+                <span class="panel-title-emoji">📋</span>
+                <span>Audit Backlog — Clearing Progress</span>
+            </div>
+            <div id="backlog-tiers" class="loading">—</div>
         </div>
 
         <div class="grid">
@@ -542,6 +688,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 const response = await fetch('/data');
                 if (!response.ok) return;
                 const data = await response.json();
+
+                // Fetch backlog data
+                let backlogData = { tiers: [] };
+                try {
+                    const backlogResp = await fetch('/api/backlog');
+                    if (backlogResp.ok) {
+                        backlogData = await backlogResp.json();
+                    }
+                } catch (e) {
+                    console.error('Backlog fetch error:', e);
+                }
 
                 // Update header
                 const watchdog = data.watchdog || {};
@@ -657,6 +814,44 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     messagesList.style.color = '#666';
                 }
 
+                // Audit Backlog Tiers
+                const backlogTiersDiv = document.getElementById('backlog-tiers');
+                if (backlogData && backlogData.tiers && backlogData.tiers.length > 0) {
+                    backlogTiersDiv.innerHTML = backlogData.tiers.map(tier => {
+                        const total = tier.total || 0;
+                        const done = tier.done || 0;
+                        const inflight = tier.inflight || 0;
+                        const donePercent = total > 0 ? (done / total) * 100 : 0;
+                        const inflightPercent = total > 0 ? (inflight / total) * 100 : 0;
+
+                        const itemsHtml = (tier.items || []).map(item => {
+                            const itemClass = item.status === '✅' ? 'done' : '';
+                            return `<div class="backlog-item ${itemClass}">
+                                <span class="backlog-item-glyph">${sanitize(item.status)}</span>
+                                <span class="backlog-item-tag">${sanitize(item.tag)}</span>
+                                <span class="backlog-item-title">${sanitize(item.title)}</span>
+                            </div>`;
+                        }).join('');
+
+                        return `<div class="backlog-tier fade-in">
+                            <div class="backlog-tier-header">
+                                <span class="backlog-tier-name">${sanitize(tier.tier)}</span>
+                            </div>
+                            <div class="backlog-progress-container">
+                                <div class="backlog-progress-bar">
+                                    <div class="backlog-progress-done" style="width: ${donePercent}%;"></div>
+                                    <div class="backlog-progress-inflight" style="width: ${inflightPercent}%;"></div>
+                                    <div class="backlog-progress-empty" style="width: ${100 - donePercent - inflightPercent}%;"></div>
+                                </div>
+                            </div>
+                            <div class="backlog-stats">${done}/${total} cleared · ${inflight} in flight</div>
+                            <div class="backlog-items">${itemsHtml}</div>
+                        </div>`;
+                    }).join('');
+                } else {
+                    backlogTiersDiv.innerHTML = '<div style="color: #666; font-size: 12px;">📋 No audit backlog found</div>';
+                }
+
                 lastRefresh = Date.now();
             } catch (e) {
                 console.error('Refresh error:', e);
@@ -722,6 +917,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+
+    def serve_backlog(self):
+        """Serve audit backlog data as JSON via GET /api/backlog."""
+        try:
+            data = parse_audit_backlog()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
     def serve_agent(self):
         """Serve agent dispatch prompt and metadata via GET /agent?id=<agent_id>"""
