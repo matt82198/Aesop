@@ -157,6 +157,45 @@ When an agent's behavior regressed (e.g., "rules started being ignored on July 1
 
 4. Restore or correct the rule, commit, and monitor spend in the next cycle.
 
+## Integration with the Refinement Loop
+
+Forensic replay strengthens the orchestration refinement cycle by enabling rapid root-cause analysis when the fleet exhibits unexpected behavior changes.
+
+**When to invoke forensics in refinement:**
+
+1. **Suspected behavior regression** — If PROPOSALS.md or monitoring signals suggest rules changed unexpectedly:
+   ```bash
+   # Find the suspect commit range
+   git log --oneline --all | head -20
+   
+   # Compare behavior-controlling files between two commits
+   bash tools/agent-forensics.sh --diff <last-known-good> <suspect-bad>
+   ```
+   This immediately shows what changed in CLAUDE.md, STATE.md, docs/, hooks/, and monitor/CHARTER.md.
+
+2. **Cost or performance spike** — If SIGNALS.json reports elevated token spend or cost anomalies:
+   ```bash
+   # Snapshot state at the anomaly time
+   bash tools/agent-forensics.sh <commit-at-spike-time>
+   ```
+   Check the BUILDLOG.md excerpt for cost-related entries, parallelism changes, or dispatch budget adjustments.
+
+3. **After merging a PR** — Before rolling to production, verify no unintended behavior changes were introduced:
+   ```bash
+   # Compare main...feature-branch
+   bash tools/agent-forensics.sh --diff main <feature-branch-head>
+   ```
+   If behavior-controlling files show unexpected changes, halt the merge and investigate.
+
+**Output interpretation:**
+
+- **CLAUDE.md or STATE.md changed** → review what rules or phase-state was altered
+- **docs/CARDINAL-RULES.md modified** → check if dispatch budgets, retry caps, or cost levers were adjusted
+- **hooks/ or monitor/CHARTER.md changed** → verify policy enforcement or signal thresholds are intentional
+- **No changes in behavior-controlling files** → regression is likely in agent logic (non-behavior files) or external state
+
+**Integration point:** The monitor/collect-signals.mjs can emit a PROPOSAL when it detects rule drift or state anomalies, prompting operators to run forensics on the linked commits to verify the change was intentional.
+
 ## See Also
 
 - **docs/CARDINAL-RULES.md** — The executable spec for agent behavior.
