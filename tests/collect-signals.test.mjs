@@ -643,3 +643,24 @@ test('AESOP_MONITOR_FORCE=false: false string does NOT bypass heartbeat gate', a
   }
 });
 
+// === P2 Bug: Summary line contains undefined when extended_signals is OFF ===
+test('P2 fix: summary line contains no undefined with default config (extended_signals OFF)', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Run collector with default config (extended_signals OFF)
+    const result = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+
+    // Extract the summary line from stdout (should be the last line printed)
+    const summaryMatch = result.stdout.match(/stale-loops:\s*\d+.*cycle:\s*\d+/);
+    assert.ok(summaryMatch, 'Collector should output a summary line with cycle count');
+
+    const summaryLine = summaryMatch[0];
+
+    // Assert that the summary line does NOT contain the literal string "undefined"
+    assert.ok(!summaryLine.includes('undefined'),
+      `Summary line should not contain undefined: "${summaryLine}"`);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
