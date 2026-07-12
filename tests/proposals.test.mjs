@@ -287,9 +287,13 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
     // Spawn accept subprocess in background (will read, filter, and write)
     const proposalsPath = path.resolve('./tools/proposals.mjs');
 
+    // stdio: 'ignore' so unconsumed piped stdout/stderr can never wedge the
+    // process teardown on Linux — the test only inspects files afterward, it
+    // never reads child output. (proposals.mjs does not read stdin, and its
+    // acquireLock is bounded + fail-open, so the child always exits promptly.)
     const acceptProcess = spawn('node', [proposalsPath, 'accept', 'signal-1', '--file', proposalsFile], {
       cwd: tempDir,
-      stdio: 'pipe',
+      stdio: 'ignore',
       timeout: 30000,
       killSignal: 'SIGKILL'
     });
@@ -301,13 +305,17 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
     await new Promise(r => setTimeout(r, 50));
     fs.appendFileSync(proposalsFile, proposal2, 'utf8');
 
-    // Wait for accept to complete
+    // Wait for accept to terminate. Resolve on 'exit' (fires on process
+    // termination regardless of stream state) rather than 'close' (waits for
+    // all stdio streams to close, which can never fire for unconsumed pipes on
+    // Linux). Defensive kill-timeout guarantees the wait can never block.
     await new Promise((resolve, reject) => {
-      acceptProcess.on('close', (code) => {
-        // Clean up streams to prevent lingering handles on Linux
-        acceptProcess.stdout?.destroy();
-        acceptProcess.stderr?.destroy();
-        acceptProcess.stdin?.destroy();
+      const killer = setTimeout(() => {
+        acceptProcess.kill('SIGKILL');
+        reject(new Error('Accept subprocess did not exit within 15s'));
+      }, 15000);
+      acceptProcess.on('exit', (code) => {
+        clearTimeout(killer);
         if (code === 0) resolve();
         else reject(new Error(`Accept exited with code ${code}`));
       });
