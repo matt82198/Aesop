@@ -50,10 +50,15 @@ acquire_lock() {
   return 1
 }
 
-# Release lock
+# Release lock: verify ownership before removing (P0 fix)
 release_lock() {
   local lock_dir="$1"
-  rm -rf "$lock_dir" 2>/dev/null
+  if [ -f "$lock_dir/pid" ]; then
+    local lock_pid=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
+    if [ "$lock_pid" = "$$" ]; then
+      rm -rf "$lock_dir" 2>/dev/null
+    fi
+  fi
 }
 
 # Try to acquire lock (applies to both --once and daemon modes)
@@ -73,10 +78,17 @@ echo "[$(date '+%F %T')] === watchdog daemon (shell) STARTED ===" >> "$AESOP_ROO
 trap "release_lock \"$LOCK_DIR\"; echo \"[$(date '+%F %T')] === watchdog daemon (shell) STOPPED ===\" >> \"$AESOP_ROOT/state/FLEET-BACKUP.log\"; echo \"stopped.\"; exit 0" INT TERM
 
 # Allow override of backup cycle command (for testing)
-CYCLE_CMD="${AESOP_WATCHDOG_CYCLE_CMD:-bash $AESOP_ROOT/daemons/backup-fleet.sh}"
+# Use array to safely handle paths with spaces (P1 fix)
+if [ -n "$AESOP_WATCHDOG_CYCLE_CMD" ]; then
+  # Override: run as-is through bash -c
+  CYCLE_CMD_ARRAY=("bash" "-c" "$AESOP_WATCHDOG_CYCLE_CMD")
+else
+  # Default: array form for proper quoting
+  CYCLE_CMD_ARRAY=("bash" "$AESOP_ROOT/daemons/backup-fleet.sh")
+fi
 
 if [ "$MODE" = "--once" ]; then
-  eval "$CYCLE_CMD" 2>&1
+  "${CYCLE_CMD_ARRAY[@]}" 2>&1
   release_lock "$LOCK_DIR"
   exit 0
 fi
@@ -84,7 +96,7 @@ fi
 n=0
 while true; do
   n=$((n+1))
-  out=$(eval "$CYCLE_CMD" 2>&1 | tail -2)
+  out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1 | tail -2)
   printf '%s  cycle #%d\n%s\n' "$(date '+%H:%M:%S')" "$n" "$out"
   sleep 150
 done
