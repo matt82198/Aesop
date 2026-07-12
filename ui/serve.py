@@ -1109,6 +1109,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => '\\\\' + c);
         }
 
+        // Test hook: expose cache size for verify_dash.py
+        window.__getPromptCacheSize = function() { return promptCache.size; };
+
         function setConnectionStatus(connected) {
             document.getElementById('conn-live').style.display = connected ? '' : 'none';
             document.getElementById('conn-reconnecting').style.display = connected ? 'none' : '';
