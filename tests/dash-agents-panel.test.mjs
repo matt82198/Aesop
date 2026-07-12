@@ -32,7 +32,9 @@ function runScript(fixture, extraEnv = {}) {
       AESOP_TRANSCRIPTS_ROOT: fixture.transcriptsRoot,
       ...extraEnv
     },
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 30000,
+    killSignal: 'SIGKILL'
   });
   return JSON.parse(stdout);
 }
