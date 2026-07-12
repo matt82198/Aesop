@@ -8,12 +8,14 @@
     {
       "path": "/path/to/project1",
       "name": "project1",
+      "url": "https://github.com/user/project1.git",
       "primary_branch": "main",
       "backup_branch": "backup/wip"
     },
     {
       "path": "/path/to/project2",
       "name": "project2",
+      "url": "git@github.com:user/project2.git",
       "primary_branch": "main",
       "backup_branch": "backup/wip"
     }

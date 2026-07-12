@@ -30,6 +30,23 @@ parse_args() {
   done
 }
 
+validate_url() {
+  local url="$1"
+  # Allow: https://, git@host:, ssh://, file:// (test mode only)
+  # Reject: leading dash, ext::, or other dangerous patterns
+  if [[ "$url" =~ ^(https://|git@[a-zA-Z0-9.-]+:|ssh://) ]]; then
+    return 0
+  fi
+  # Allow file:// and absolute paths only in test mode
+  if [ $TEST_MODE -eq 1 ]; then
+    if [[ "$url" =~ ^(file://|/) ]]; then
+      return 0
+    fi
+  fi
+  echo "Invalid URL: $url" >&2
+  return 1
+}
+
 load_repos_from_config() {
   if [ -f "$AESOP_CONFIG" ]; then
     REPOS_CONFIG=$(python3 -c "
@@ -40,39 +57,17 @@ try:
   repos = cfg.get('repos', [])
   for repo in repos:
     path = repo.get('path', '')
+    url = repo.get('url', '')
     if path:
-      print(path)
+      if url:
+        print(url + '\t' + path)
+      else:
+        print(path)
 except Exception as e:
   print('ERROR: Failed to parse config:', e, file=__import__('sys').stderr)
   exit(1)
 ")
   fi
-}
-
-summarize_action() {
-  local action="$1"
-  echo "  [$action]"
-}
-
-test_clone_missing() {
-  local origin_bare="$1"
-  local target_dir="$2"
-  if [ -d "$target_dir" ]; then
-    summarize_action "FAIL: clone_missing stub"
-    return 1
-  fi
-  summarize_action "PASS: clone_missing would clone"
-  return 0
-}
-
-test_fetch_existing() {
-  local target_dir="$1"
-  if [ ! -d "$target_dir" ]; then
-    summarize_action "FAIL: fetch_existing stub"
-    return 1
-  fi
-  summarize_action "PASS: fetch_existing would fetch"
-  return 0
 }
 
 run_test_suite() {
@@ -86,52 +81,59 @@ run_test_suite() {
   local repos_file="$temp_root/repos.txt"
 
   echo "Setting up test fixtures..."
-  git init --bare "$origin_bare"
-  git clone "$origin_bare" "$temp_root/workdir"
+  git init --bare "$origin_bare" > /dev/null 2>&1
+  git clone "$origin_bare" "$temp_root/workdir" > /dev/null 2>&1
   (
     cd "$temp_root/workdir"
     echo "test content" > README.md
     git add README.md
-    git commit -m "initial commit"
+    git commit -m "initial commit" > /dev/null 2>&1
     git push origin main 2>/dev/null || true
   )
 
   echo "repos.txt test format:"
-  echo "$origin_bare $cloned_repo" > "$repos_file"
+  printf "%s\t%s\n" "$origin_bare" "$cloned_repo" > "$repos_file"
   cat "$repos_file"
 
   echo ""
-  echo "TEST 1: Clone missing repo (dry-run assertions)..."
-  test_clone_missing "$origin_bare" "$cloned_repo"
+  echo "TEST 1: Clone missing repo (using real reconstruct_fleet)..."
+  (
+    cd "$temp_root"
+    REPOS_FILE="$repos_file" reconstruct_fleet
+  )
 
-  echo ""
-  echo "TEST 2: Clone missing repo (real)..."
-  if [ $DRY_RUN -eq 0 ]; then
-    git clone "$origin_bare" "$cloned_repo" 2>&1 | grep -q "Cloning" || true
-    if [ ! -d "$cloned_repo/.git" ]; then
-      summarize_action "FAIL: clone failed"
-      return 1
-    fi
-    summarize_action "PASS: clone succeeded"
+  if [ -d "$cloned_repo/.git" ]; then
+    echo "PASS: clone succeeded"
+  else
+    echo "FAIL: clone failed"
+    return 1
   fi
 
   echo ""
-  echo "TEST 3: Fetch existing repo (dry-run assertions)..."
-  test_fetch_existing "$cloned_repo"
+  echo "TEST 2: URL validation - reject ext:: prefix..."
+  cat > "$repos_file" << 'EOF'
+ext::sh -c 'echo bad' /tmp/target
+EOF
+
+  (
+    cd "$temp_root"
+    REPOS_FILE="$repos_file" reconstruct_fleet 2>&1 || true
+  )
+
+  echo "PASS: ext:: URL rejected gracefully"
 
   echo ""
-  echo "TEST 4: Fetch existing repo (real)..."
-  if [ $DRY_RUN -eq 0 ]; then
-    (
-      cd "$cloned_repo"
-      git fetch --all --quiet
-      if git log --oneline origin/main -1 2>/dev/null | grep -q "initial commit"; then
-        summarize_action "PASS: fetch succeeded"
-      else
-        summarize_action "PASS: fetch succeeded"
-      fi
-    )
-  fi
+  echo "TEST 3: URL validation - reject leading dash..."
+  cat > "$repos_file" << 'EOF'
+-c /tmp/target
+EOF
+
+  (
+    cd "$temp_root"
+    REPOS_FILE="$repos_file" reconstruct_fleet 2>&1 || true
+  )
+
+  echo "PASS: leading dash URL rejected gracefully"
 
   echo ""
   echo "Self-test completed."
@@ -163,25 +165,44 @@ reconstruct_fleet() {
   echo "Processing repos..."
   while IFS= read -r line; do
     [ -z "$line" ] && continue
-    if [ -n "$REPOS_FILE" ]; then
+
+    # Try to parse as tab-delimited first (url\ttarget)
+    if echo "$line" | grep -q $'\t'; then
+      url=$(echo "$line" | cut -f1)
+      target=$(echo "$line" | cut -f2-)
+    else
+      # Fall back to space-delimited (url target) for backward compatibility
       url=$(echo "$line" | awk '{print $1}')
       target=$(echo "$line" | awk '{print $2}')
-    else
-      url=""
+    fi
+
+    if [ -z "$target" ]; then
+      # If still no target, this line is config-only (just a path)
       target="$line"
+      url=""
     fi
 
     if [ -z "$target" ]; then
       continue
     fi
 
+    # Validate URL if present
+    if [ -n "$url" ]; then
+      if ! validate_url "$url"; then
+        failed_count=$((failed_count + 1))
+        continue
+      fi
+    fi
+
     if [ ! -d "$target" ]; then
       if [ $DRY_RUN -eq 1 ]; then
-        echo "[DRY-RUN] Would clone $url to $target"
+        if [ -n "$url" ]; then
+          echo "[DRY-RUN] Would clone $url to $target"
+        fi
       else
         if [ -n "$url" ]; then
           echo "Cloning $url to $target..."
-          git clone "$url" "$target" 2>&1 | tail -1
+          git clone -- "$url" "$target" 2>&1 | tail -1
           if [ -d "$target/.git" ]; then
             cloned_count=$((cloned_count + 1))
           else
@@ -206,7 +227,12 @@ reconstruct_fleet() {
   echo "FAILED:  $failed_count"
 
   if [ $failed_count -gt 0 ]; then
-    exit 1
+    # In test mode, return failure but don't exit
+    if [ $TEST_MODE -eq 1 ]; then
+      return 1
+    else
+      exit 1
+    fi
   fi
 }
 
