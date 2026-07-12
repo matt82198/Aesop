@@ -14,7 +14,7 @@ function createTempDir() {
 function runProposals(args, cwd) {
   const cmd = `node ${path.resolve('./tools/proposals.mjs')} ${args}`;
   try {
-    const output = execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const output = execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, killSignal: 'SIGKILL' }).trim();
     return { success: true, output };
   } catch (e) {
     return { success: false, output: e.stdout?.toString() || '', error: e.stderr?.toString() || e.message };
@@ -287,9 +287,38 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
     // Spawn accept subprocess in background (will read, filter, and write)
     const proposalsPath = path.resolve('./tools/proposals.mjs');
 
+    // stdio: 'ignore' so unconsumed piped stdout/stderr can never wedge the
+    // process teardown on Linux — the test only inspects files afterward, it
+    // never reads child output. (proposals.mjs does not read stdin, and its
+    // acquireLock is bounded + fail-open, so the child always exits promptly.)
     const acceptProcess = spawn('node', [proposalsPath, 'accept', 'signal-1', '--file', proposalsFile], {
       cwd: tempDir,
-      stdio: 'pipe',
+      stdio: 'ignore',
+      timeout: 30000,
+      killSignal: 'SIGKILL'
+    });
+
+    // CRITICAL: attach the exit listener SYNCHRONOUSLY, before any awaited
+    // delay. The accept child is fast (~65ms) and purely synchronous; on Linux
+    // it can exit inside the 50ms window below. If we attach the listener only
+    // after that delay, 'exit' has already fired and will never fire again,
+    // wedging the wait until the timeout. Registering it now guarantees the
+    // event is caught regardless of how quickly the child exits. The 'error'
+    // handler covers spawn failures; the kill-timeout is a defensive backstop.
+    const acceptDone = new Promise((resolve, reject) => {
+      const killer = setTimeout(() => {
+        acceptProcess.kill('SIGKILL');
+        reject(new Error('Accept subprocess did not exit within 15s'));
+      }, 15000);
+      acceptProcess.on('exit', (code) => {
+        clearTimeout(killer);
+        if (code === 0) resolve();
+        else reject(new Error(`Accept exited with code ${code}`));
+      });
+      acceptProcess.on('error', (err) => {
+        clearTimeout(killer);
+        reject(err);
+      });
     });
 
     // While accept is running, append a new proposal (simulating emitProposal)
@@ -299,13 +328,8 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
     await new Promise(r => setTimeout(r, 50));
     fs.appendFileSync(proposalsFile, proposal2, 'utf8');
 
-    // Wait for accept to complete
-    await new Promise((resolve, reject) => {
-      acceptProcess.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Accept exited with code ${code}`));
-      });
-    });
+    // Wait for accept to terminate (listener already attached above).
+    await acceptDone;
 
     // Verify both proposals are accounted for (not lost)
     const finalProposals = fs.readFileSync(proposalsFile, 'utf8');

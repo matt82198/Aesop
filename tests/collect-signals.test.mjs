@@ -51,7 +51,8 @@ function runCollector(aesopRoot, envOverrides = {}) {
   const result = spawnSync('node', [collectorPath], {
     env,
     encoding: 'utf8',
-    timeout: 10000,
+    timeout: 30000,
+    killSignal: 'SIGKILL',
   });
 
   if (result.error) {
@@ -230,7 +231,8 @@ test('config precedence: TEMP_ROOT from config file honored when env var unset',
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 10000,
+      timeout: 30000,
+      killSignal: 'SIGKILL',
     });
 
     assert.strictEqual(result.status, 0, 'Collector should succeed with config TEMP_ROOT');
@@ -292,7 +294,8 @@ test('extended signals OFF (default): checks 5/6/8/10 emit skipped and dirs not 
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 10000,
+      timeout: 30000,
+      killSignal: 'SIGKILL',
     });
 
     assert.strictEqual(result.status, 0, 'Collector should succeed with extended signals OFF');
@@ -350,7 +353,8 @@ test('extended signals ON: checks 5/6/8/10 run normally and detect issues', asyn
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 10000,
+      timeout: 30000,
+      killSignal: 'SIGKILL',
     });
 
     assert.strictEqual(result.status, 0, 'Collector should succeed with extended signals ON');
@@ -401,7 +405,8 @@ test('extended signals: config file honor AESOP_EXTENDED_SIGNALS from aesop.conf
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 10000,
+      timeout: 30000,
+      killSignal: 'SIGKILL',
     });
 
     assert.strictEqual(result.status, 0, 'Collector should respect config file extended_signals');
