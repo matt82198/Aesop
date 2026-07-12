@@ -963,7 +963,12 @@ try {
     console.error(`Warning: Failed to write signal state: ${e.message}`);
   }
 
-  const summaryLine = `stale-loops: ${staleLoops.length}, repos-dirty: ${gitState.filter(g => g.dirty > 0).length}, stale-mem: ${memory.staleCount}, logs-need-rotation: ${needsRotation.length}, junk-quarantinable: ${junk.quarantinable}, stray-repo-scripts: ${strayRepo.length}, alerts-high-med: ${alerts.highMedCount}, respawn-watch: ${respawnWatch.length}, cycle: ${cycleCount}`;
+  // Normalize skipped signals to 0 for summary display
+  const junkQuarantinable = junk.skipped ? 0 : (junk.quarantinable || 0);
+  const strayRepoCount = strayRepo.skipped ? 0 : (Array.isArray(strayRepo) ? strayRepo.length : 0);
+  const respawnWatchCount = respawnWatch.skipped ? 0 : (Array.isArray(respawnWatch) ? respawnWatch.length : 0);
+
+  const summaryLine = `stale-loops: ${staleLoops.length}, repos-dirty: ${gitState.filter(g => g.dirty > 0).length}, stale-mem: ${memory.staleCount}, logs-need-rotation: ${needsRotation.length}, junk-quarantinable: ${junkQuarantinable}, stray-repo-scripts: ${strayRepoCount}, alerts-high-med: ${alerts.highMedCount}, respawn-watch: ${respawnWatchCount}, cycle: ${cycleCount}`;
   console.log(summaryLine);
 } catch (e) {
   console.error('Unexpected error during output write:', e.message);
