@@ -44,7 +44,8 @@ jobs:
           fi
 
       - name: Publish to npm with OIDC
+        # No NODE_AUTH_TOKEN: trusted publishing authenticates via the OIDC
+        # id-token (permissions.id-token: write above). Setting an empty token
+        # here would make npm attempt token auth and fail instead of using OIDC.
         run: |
           npm publish --access public --tag "${{ steps.tag.outputs.tag }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.npm_token || '' }}
