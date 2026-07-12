@@ -34,8 +34,8 @@ A filesystem-first orchestration system that:
 
 Aesop ships behavior as versioned, portable, diffable filesystem artifacts in git—enabling review, versioning, inheritance, enforcement, and forensics over how agents work. The implementation consists of five integrated capabilities:
 
-1. **Onboarding-by-clone** — [CLAUDE-TEMPLATE.md](./CLAUDE-TEMPLATE.md) and [docs/MEMORY-TEMPLATE.md](./docs/MEMORY-TEMPLATE.md) scaffold team brains; sync via `bin/cli.js`.
-2. **Guardrails-in-code** — [hooks/pre-push-policy.sh](./hooks/pre-push-policy.sh) enforces branch discipline and secret-scanning gates; audit trail in [state/SECURITY-AUDIT.log](./state/SECURITY-AUDIT.log).
+1. **Onboarding-by-clone** — [CLAUDE-TEMPLATE.md](./CLAUDE-TEMPLATE.md) and [docs/MEMORY-TEMPLATE.md](./docs/MEMORY-TEMPLATE.md) scaffold team brains; sync via `bin/cli.js`. The pre-push hook is **auto-installed during scaffold**.
+2. **Guardrails-in-code** — [hooks/pre-push-policy.sh](./hooks/pre-push-policy.sh) enforces branch discipline and secret-scanning gates; auto-installed into `.git/hooks/pre-push` during scaffold (idempotent, preserves customizations); audit trail in [state/SECURITY-AUDIT.log](./state/SECURITY-AUDIT.log).
 3. **Behavioral PRs** — [.github/pull_request_template.md](./.github/pull_request_template.md) enforces behavioral-change descriptions; [docs/BEHAVIORAL-PR-REVIEW.md](./docs/BEHAVIORAL-PR-REVIEW.md) provides the checklist; [CONTRIBUTING.md](./CONTRIBUTING.md) documents the process.
 4. **Forensic replay** — [tools/agent-forensics.sh](./tools/agent-forensics.sh) reconstructs behavior at any commit with `--diff behavior-surface` mode; [docs/FORENSICS.md](./docs/FORENSICS.md) shows git-bisect recipes.
 5. **Cross-machine continuity** — [docs/RESTORE.md](./docs/RESTORE.md) reconstitution playbook for recovery on new machines.
@@ -64,6 +64,8 @@ python ui/serve.py
 ```
 
 Open `http://localhost:8770` to monitor your fleet.
+
+**Pre-push hook active by default:** The scaffold automatically installs the pre-push policy hook into `.git/hooks/pre-push`. It enforces branch protection (no direct pushes to main/master) and secret scanning. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for details and customization.
 
 Alternatively, install globally:
 ```bash

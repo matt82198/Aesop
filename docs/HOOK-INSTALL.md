@@ -1,6 +1,6 @@
 # Git Pre-Push Hook Installation Guide
 
-**Ship a hook, not a memo.** This guide explains how to install and customize the pre-push policy hook that turns organizational security rules into executable code.
+**Ship a hook, not a memo.** The pre-push policy hook is **auto-installed during scaffold** (see below). This guide explains customization, verification, and org-wide distribution.
 
 ## What the Hook Does
 
@@ -11,7 +11,32 @@
 
 Both blocks append a JSON audit record to `state/SECURITY-AUDIT.log` with timestamp, repo, reason, and user — creating a reviewable trail of policy enforcement.
 
-## Installation
+## Auto-Installation During Scaffold
+
+**Default Behavior:** When you scaffold a new aesop fleet with `npx @matt82198/aesop [target-dir]`, the CLI automatically installs the pre-push hook into `.git/hooks/pre-push`.
+
+- **On Unix/macOS/Git Bash**: Creates a symlink so hook updates are automatic
+- **On Windows**: Copies the hook directly (symlinks don't work reliably on all NTFS setups)
+- **Idempotent**: Re-running scaffold doesn't clobber a user-customized hook
+- **Preserve Existing**: If you have a different pre-push hook, scaffold warns and preserves it
+- **Force Replace**: Use `npx @matt82198/aesop [target-dir] --force` to replace any existing hook
+
+**Example:**
+
+```bash
+# Initial scaffold (creates and installs hook automatically)
+npx @matt82198/aesop my-fleet
+
+# Later: re-scaffold the same directory (preserves customizations)
+npx @matt82198/aesop my-fleet
+
+# Force replace (even if hook was customized)
+npx @matt82198/aesop my-fleet --force
+```
+
+## Manual Installation
+
+If you're installing into an existing repo (not scaffolded), or you need to manually add the hook:
 
 ### Option 1: Symlink (Linux / macOS / Git Bash on Windows)
 

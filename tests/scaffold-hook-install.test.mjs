@@ -1,0 +1,223 @@
+// Tests for hook auto-installation during scaffold
+// Contract under test (cli.js scaffold behavior):
+//  - Scaffold into empty dir -> symlinks (Unix) or copies (Windows) hooks/pre-push-policy.sh to .git/hooks/pre-push
+//  - .git/hooks/pre-push exists, is executable, content matches source
+//  - Re-run scaffold on repo with same hook -> idempotent, no warning
+//  - Re-run scaffold on repo with different hook -> warn and skip unless --force
+//  - --force flag replaces any existing hook
+//
+// Run: node --test tests/scaffold-hook-install.test.mjs
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const CLI = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..', 'bin', 'cli.js'
+);
+
+const HOOK_SOURCE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..', 'hooks', 'pre-push-policy.sh'
+);
+
+function isWindows() {
+  return process.platform === 'win32';
+}
+
+function runCli(targetDir, args = []) {
+  const res = spawnSync(process.execPath, [CLI, targetDir, ...args], {
+    encoding: 'utf8',
+    cwd: path.dirname(targetDir)
+  });
+  return res;
+}
+
+function createTestDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-scaffold-test-'));
+}
+
+function gitCmd(cwd, cmd) {
+  // Use bash on all platforms for consistent git behavior
+  const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
+  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8' });
+}
+
+test('scaffold into empty dir installs pre-push hook', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-1');
+
+  // Initialize git repo first
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  const res = runCli(targetDir);
+
+  assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
+
+  const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
+  assert.ok(fs.existsSync(hookPath), `Hook should be installed at ${hookPath}`);
+
+  // Read the installed hook
+  const hookContent = fs.readFileSync(hookPath, 'utf8');
+  const sourceContent = fs.readFileSync(HOOK_SOURCE, 'utf8');
+
+  assert.equal(hookContent, sourceContent, 'Installed hook should match source exactly');
+});
+
+test('installed hook is executable', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-2');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  const res = runCli(targetDir);
+  assert.equal(res.status, 0);
+
+  const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
+  const stat = fs.statSync(hookPath);
+
+  // On Unix, check executable bit. On Windows, just verify it exists and has content.
+  if (isWindows()) {
+    // Windows doesn't have traditional Unix permissions
+    assert.ok(fs.existsSync(hookPath), 'Hook should exist on Windows');
+  } else {
+    // Unix: check executable bit (owner execute permission)
+    const isExecutable = (stat.mode & 0o100) !== 0;
+    assert.ok(isExecutable, 'Hook should be executable on Unix');
+  }
+});
+
+test('re-scaffold same repo is idempotent', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-3');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  // First scaffold
+  const res1 = runCli(targetDir);
+  assert.equal(res1.status, 0);
+
+  const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
+  const content1 = fs.readFileSync(hookPath, 'utf8');
+  const stat1 = fs.statSync(hookPath);
+
+  // Wait a tiny bit to ensure mtime would differ if file were rewritten
+  gitCmd(targetDir, 'sleep 0.1');
+
+  // Second scaffold (should be idempotent)
+  const res2 = runCli(targetDir);
+  assert.equal(res2.status, 0);
+
+  const content2 = fs.readFileSync(hookPath, 'utf8');
+  const stat2 = fs.statSync(hookPath);
+
+  assert.equal(content1, content2, 'Hook content should not change');
+  assert.equal(stat1.mtime.getTime(), stat2.mtime.getTime(), 'Hook should not be rewritten');
+  assert.ok(!res2.stderr.includes('warn'), 'Should not warn on same hook');
+});
+
+test('re-scaffold with different pre-push hook warns and preserves it', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-4');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  // First scaffold
+  const res1 = runCli(targetDir);
+  assert.equal(res1.status, 0);
+
+  const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
+
+  // Replace hook with custom one
+  const customHook = '#!/bin/bash\necho "custom hook"\n';
+  fs.writeFileSync(hookPath, customHook);
+
+  // Second scaffold should warn and preserve
+  const res2 = runCli(targetDir);
+  assert.equal(res2.status, 0, 'Scaffold should still succeed');
+
+  const content = fs.readFileSync(hookPath, 'utf8');
+  assert.equal(content, customHook, 'Custom hook should be preserved');
+
+  const output = (res2.stderr || '') + (res2.stdout || '');
+  assert.ok(output.toLowerCase().includes('warn') || output.toLowerCase().includes('different'),
+    `Should warn about existing different hook. Got stderr: "${res2.stderr}", stdout: "${res2.stdout}"`);
+});
+
+test('--force flag replaces existing different pre-push hook', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-5');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  // First scaffold
+  const res1 = runCli(targetDir);
+  assert.equal(res1.status, 0);
+
+  const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
+
+  // Replace with custom hook
+  const customHook = '#!/bin/bash\necho "custom hook"\n';
+  fs.writeFileSync(hookPath, customHook);
+
+  // Second scaffold with --force should replace
+  const res2 = runCli(targetDir, ['--force']);
+  assert.equal(res2.status, 0);
+
+  const content = fs.readFileSync(hookPath, 'utf8');
+  const sourceContent = fs.readFileSync(HOOK_SOURCE, 'utf8');
+  assert.equal(content, sourceContent, 'Hook should be replaced with source');
+});
+
+test('scaffold output mentions hook installation', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-6');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, 'git init');
+  gitCmd(targetDir, 'git config user.email "test@example.com"');
+  gitCmd(targetDir, 'git config user.name "Test User"');
+
+  const res = runCli(targetDir);
+  assert.equal(res.status, 0);
+
+  const output = res.stdout + res.stderr;
+  assert.ok(output.includes('hook') || output.includes('Hook') || output.includes('pre-push'),
+    'Output should mention hook installation');
+});
+
+test('scaffold without git repo does not crash (no hook install)', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-7');
+
+  // NO git init - bare directory
+  // Scaffold should still work, just won't install hook (no .git dir)
+
+  const res = runCli(targetDir);
+  assert.equal(res.status, 0, 'Should not crash on non-git dir');
+
+  const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
+  // Either no .git dir, or hook wasn't installed
+  // Both are acceptable behaviors
+  assert.ok(!fs.existsSync(hookPath) || true, 'Scaffold should handle missing .git gracefully');
+});

@@ -2,27 +2,31 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const args = process.argv.slice(2);
 const helpFlag = args.includes('--help') || args.includes('-h');
+const forceFlag = args.includes('--force');
 
 if (helpFlag) {
   console.log(`
 aesop — Multi-agent orchestration template scaffolder
 
 Usage:
-  npx @matt82198/aesop [target-dir]
+  npx @matt82198/aesop [target-dir] [options]
 
 Arguments:
   target-dir    Directory to scaffold the template into (default: "aesop-fleet")
+
+Options:
+  --help, -h    Show this help message
+  --force       Replace any existing .git/hooks/pre-push during scaffold
 
 Examples:
   npx @matt82198/aesop                    # Creates ./aesop-fleet/
   npx @matt82198/aesop my-fleet           # Creates ./my-fleet/
   npx @matt82198/aesop /tmp/my-orchestrator  # Creates /tmp/my-orchestrator/
-
-Options:
-  --help, -h    Show this help message
+  npx @matt82198/aesop my-fleet --force   # Re-scaffold and replace hooks
 
 After scaffolding, cd into the directory and:
   1. Copy aesop.config.example.json → aesop.config.json
@@ -33,18 +37,20 @@ After scaffolding, cd into the directory and:
   process.exit(0);
 }
 
-const targetDir = args[0] || 'aesop-fleet';
+// Extract targetDir (first non-flag argument)
+const targetDir = args.filter(arg => !arg.startsWith('--') && !arg.startsWith('-'))[0] || 'aesop-fleet';
 
-if (args.length > 1) {
-  console.error('Error: Too many arguments. Use --help for usage.');
-  process.exit(1);
-}
-
-// Validate target directory doesn't exist or is empty
+// Validate target directory doesn't exist or is empty (except for .git and aesop files)
 if (fs.existsSync(targetDir)) {
   const contents = fs.readdirSync(targetDir);
-  if (contents.length > 0) {
-    console.error(`Error: Directory "${targetDir}" exists and is not empty.`);
+  // Allow .git and aesop scaffolded files to already exist (for idempotency)
+  const aesopDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui', 'docs', '.git'];
+  const aesopFiles = ['aesop.config.example.json', 'README.md', 'LICENSE', 'CHANGELOG.md', 'CLAUDE-TEMPLATE.md'];
+  const allowedItems = new Set([...aesopDirs, ...aesopFiles]);
+
+  const unexpectedContents = contents.filter(item => !allowedItems.has(item));
+  if (unexpectedContents.length > 0) {
+    console.error(`Error: Directory "${targetDir}" exists and contains unexpected files.`);
     console.error('Please choose a different target directory or remove the existing one.');
     process.exit(1);
   }
@@ -88,6 +94,76 @@ function copyRecursive(src, dest) {
   }
 }
 
+function installPrePushHook(targetDir, templateRoot) {
+  // Try to locate .git directory
+  const gitDir = path.join(targetDir, '.git');
+  if (!fs.existsSync(gitDir)) {
+    // No git repo, skip hook installation silently
+    return;
+  }
+
+  // Ensure hooks directory exists
+  const gitHooksDir = path.join(gitDir, 'hooks');
+  if (!fs.existsSync(gitHooksDir)) {
+    fs.mkdirSync(gitHooksDir, { recursive: true });
+  }
+
+  const hookSource = path.join(templateRoot, 'hooks', 'pre-push-policy.sh');
+  const hookDest = path.join(gitHooksDir, 'pre-push');
+
+  if (!fs.existsSync(hookSource)) {
+    // Hook source doesn't exist, skip
+    return;
+  }
+
+  const hookSourceContent = fs.readFileSync(hookSource, 'utf8');
+
+  // Check if hook already exists
+  if (fs.existsSync(hookDest)) {
+    const existingContent = fs.readFileSync(hookDest, 'utf8');
+
+    // If content matches, it's idempotent, do nothing
+    if (existingContent === hookSourceContent) {
+      console.log('✓ Pre-push hook already installed (no changes)');
+      return;
+    }
+
+    // Different hook exists
+    if (!forceFlag) {
+      console.warn('⚠ Warning: A different pre-push hook already exists at ' + hookDest);
+      console.warn('  Use --force to replace it, or customize manually.');
+      return;
+    }
+
+    // --force: replace the existing hook
+    console.log('✓ Replacing existing pre-push hook with --force');
+  }
+
+  // Install the hook
+  if (process.platform === 'win32') {
+    // Windows: copy the file
+    fs.copyFileSync(hookSource, hookDest);
+    console.log('✓ Copied pre-push policy hook to .git/hooks/pre-push');
+  } else {
+    // Unix: symlink for easy updates
+    // First remove if exists
+    if (fs.existsSync(hookDest)) {
+      fs.unlinkSync(hookDest);
+    }
+    // Create symlink relative to .git/hooks/
+    const relPath = path.relative(gitHooksDir, hookSource);
+    fs.symlinkSync(relPath, hookDest);
+    console.log('✓ Symlinked pre-push policy hook to .git/hooks/pre-push');
+  }
+
+  // Ensure hook is executable
+  try {
+    fs.chmodSync(hookDest, 0o755);
+  } catch (e) {
+    // On Windows, chmod may fail; that's okay
+  }
+}
+
 try {
   filesToCopy.forEach(item => {
     const src = path.join(templateRoot, item);
@@ -97,6 +173,9 @@ try {
       console.log(`✓ Copied ${item}`);
     }
   });
+
+  // Install the pre-push hook
+  installPrePushHook(targetDir, templateRoot);
 
   console.log(`\n✅ Scaffolded aesop template into "${targetDir}" (${copiedCount} files)`);
   console.log('\nConfiguration steps:');
