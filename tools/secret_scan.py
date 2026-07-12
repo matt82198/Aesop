@@ -101,9 +101,19 @@ def is_binary_file(filepath):
 
 
 def should_skip_file(filepath):
-    """Check if file should be skipped entirely (only .git/ directories)."""
+    """Check if file should be skipped entirely (.git/, __pycache__, .pyc, .pyo)."""
+    # Skip .git directories
     if ".git" in filepath.parts or ".git" in str(filepath):
         return True
+
+    # Skip __pycache__ directories
+    if "__pycache__" in filepath.parts:
+        return True
+
+    # Skip compiled Python artifacts
+    if filepath.name.endswith(".pyc") or filepath.name.endswith(".pyo"):
+        return True
+
     return False
 
 
