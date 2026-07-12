@@ -24,14 +24,16 @@ disjoint ownership, TDD-first). Proactive: never idle while agents run. On sessi
 death: resume from this file — waves in flight are listed under Phase.
 
 ## Phase
-`wave-2` — pillars v1 shipped + QA'd + pushed (through 2b15eec). Wave 2 in flight
-(7 implementers, TDD-first): npm test harness + collector tests; Claude model-policy
-hook; rotate_logs.py; reconstitute.sh; proposals.mjs lifecycle; CI workflow;
-launch_tui.py portability. Plus: dash-extra.mjs fix awaiting TDD test evidence
-(uncommitted until then); monitor cycle 7; standing 30-min wakeup armed.
+`pr-open` — PR #16 (feature/behavior-as-code → main) opened 2026-07-12 after
+final-catch (leakage sweep clean, full suite green: 26 node + 16 python + shell
+self-tests). Waves 1+2 complete through ae1dc4b. Conductor3 fixes on separate
+branch fix/monitor-path-and-rotation (c00c4fa), proposals #9/#10 annotated.
+Outstanding: dash-extra.mjs fix + tests/dash-extra.test.mjs uncommitted, awaiting
+TDD failing-first evidence from its agent; commit as follow-up on this branch.
 Wave-3 candidates (from audits, unclaimed): state/ auto-creation; BUILDLOG lifecycle
-doc; ACTIONS.log rotation wiring; commit-format check in pre-push hook; config key
-for fleet repo list (reconstitute TODO); INCIDENT-LOG correlation.
+doc; ACTIONS.log rotation wiring (use new rotate_logs.py); commit-format check in
+pre-push hook; config key for fleet repo list (reconstitute TODO); INCIDENT-LOG
+correlation; CI badge in README.
 
 Implementation map (wave 1, as shipped):
 1. onboarding: CLAUDE-TEMPLATE.md, docs/MEMORY-TEMPLATE.md, bin/cli.js, README.md
