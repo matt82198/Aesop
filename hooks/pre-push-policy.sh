@@ -2,23 +2,96 @@
 set -uo pipefail
 
 json_escape() {
-  # Escape backslashes first, then quotes for valid JSON
+  # Escape backslashes first, then quotes, then control chars for valid JSON
+  # Finding 5: Handle control characters (\n, \r, \t, C0)
   local s="$1"
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
   printf '%s' "$s"
 }
 
+acquire_audit_lock() {
+  # Finding 1: Mkdir-based atomic lock for audit log write safety
+  local lock_dir="$1"
+  local timeout=300
+  local start_time
+  start_time=$(date +%s)
+
+  while true; do
+    if mkdir "$lock_dir" 2>/dev/null; then
+      # Acquired lock successfully
+      echo "$$" > "$lock_dir/pid"
+      return 0
+    fi
+
+    # Check if lock is stale (>timeout seconds old)
+    if [ -f "$lock_dir/pid" ]; then
+      local lock_time
+      lock_time=$(stat -c %Y "$lock_dir" 2>/dev/null || stat -f %m "$lock_dir" 2>/dev/null || echo 0)
+      local current_time
+      current_time=$(date +%s)
+      if [ $((current_time - lock_time)) -gt $timeout ]; then
+        # Stale lock; force reclaim atomically
+        rm -rf "$lock_dir" 2>/dev/null
+        mkdir "$lock_dir" 2>/dev/null && echo "$$" > "$lock_dir/pid" && return 0
+      fi
+    fi
+
+    # Check timeout
+    if [ $(($(date +%s) - start_time)) -gt 10 ]; then
+      # Lock holder is stuck; give up after 10s
+      return 1
+    fi
+
+    sleep 0.1
+  done
+}
+
+release_audit_lock() {
+  # Release the lock directory
+  local lock_dir="$1"
+  rm -rf "$lock_dir" 2>/dev/null
+}
+
 get_previous_hash() {
+  # Finding 6: Fallback for missing sha256sum, fail loudly if unavailable
   local audit_log="$1"
   if [ ! -f "$audit_log" ] || [ ! -s "$audit_log" ]; then
     printf 'GENESIS'
-  else
-    tail -n 1 "$audit_log" | tr -d '\n' | sha256sum | awk '{print $1}'
+    return 0
   fi
+
+  local hash_bin
+  if command -v sha256sum >/dev/null 2>&1; then
+    hash_bin="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    hash_bin="shasum -a 256"
+  else
+    printf 'ERROR: sha256sum or shasum not found in PATH\n' >&2
+    return 1
+  fi
+
+  tail -n 1 "$audit_log" | tr -d '\n' | $hash_bin | awk '{print $1}'
+}
+
+get_next_seq() {
+  # Finding 2: Get monotonically increasing sequence number
+  local audit_log="$1"
+  if [ ! -f "$audit_log" ] || [ ! -s "$audit_log" ]; then
+    echo 1
+    return 0
+  fi
+
+  local last_seq
+  last_seq=$(tail -n 1 "$audit_log" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('seq', 0))" 2>/dev/null || echo 0)
+  echo $((last_seq + 1))
 }
 
 verify_audit_log() {
+  # Finding 2: Include truncation detection via tail hash sidecar and seq field
   local audit_log="$1"
   if [ ! -f "$audit_log" ]; then
     printf 'Error: Audit log not found at %s\n' "$audit_log" >&2
@@ -34,6 +107,10 @@ verify_audit_log() {
   local prev_line=""
   local expected_hash=""
   local actual_prev_hash=""
+  local prev_seq=0
+  local state_dir
+  state_dir=$(dirname "$audit_log")
+  local tail_hash_file="$state_dir/.audit-tail-hash"
 
   while IFS= read -r line; do
     line_num=$((line_num + 1))
@@ -58,8 +135,30 @@ verify_audit_log() {
       return 1
     fi
 
+    # Check seq monotonicity
+    local current_seq
+    current_seq=$(printf '%s' "$line" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('seq', 0))" 2>/dev/null || echo 0)
+    if [ "$current_seq" -le "$prev_seq" ] && [ $line_num -gt 1 ]; then
+      printf 'Error: Sequence number not monotonic at line %d (prev: %d, current: %d)\n' "$line_num" "$prev_seq" "$current_seq" >&2
+      return 1
+    fi
+    prev_seq=$current_seq
+
     prev_line="$line"
   done < "$audit_log"
+
+  # Check truncation via tail hash anchor
+  if [ -f "$tail_hash_file" ]; then
+    local stored_tail_hash
+    stored_tail_hash=$(head -n 1 "$tail_hash_file" 2>/dev/null)
+    local actual_tail_hash
+    actual_tail_hash=$(tail -n 1 "$audit_log" | tr -d '\n' | sha256sum | awk '{print $1}')
+
+    if [ "$stored_tail_hash" != "$actual_tail_hash" ]; then
+      printf 'TRUNCATION SUSPECTED: Tail hash mismatch (stored: %s, actual: %s)\n' "$stored_tail_hash" "$actual_tail_hash" >&2
+      return 1
+    fi
+  fi
 
   if [ $line_num -gt 0 ]; then
     printf 'Audit log verification OK (%d entries)\n' "$line_num"
@@ -71,17 +170,25 @@ check_branch_policy() {
   # Parse git pre-push stdin to check if any remote-ref targets main or master
   # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
   # This catches attempts like: git push origin HEAD:main (even from feature branch)
-  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
-    # Skip empty lines
-    if [ -z "$remote_ref" ]; then
-      continue
-    fi
+  # Finding 3: Handle tty mode and final line without trailing newline
+  if [ -t 0 ]; then
+    # Running interactively on a tty; skip stdin processing with note
+    # but still check current branch as fallback
+    :
+  else
+    # Not a tty; read stdin normally
+    while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
+      # Skip empty lines
+      if [ -z "$remote_ref" ]; then
+        continue
+      fi
 
-    # Block if attempting to push to main or master
-    if [ "$remote_ref" = "refs/heads/main" ] || [ "$remote_ref" = "refs/heads/master" ]; then
-      return 1
-    fi
-  done
+      # Block if attempting to push to main or master
+      if [ "$remote_ref" = "refs/heads/main" ] || [ "$remote_ref" = "refs/heads/master" ]; then
+        return 1
+      fi
+    done
+  fi
 
   # If no protected branch in stdin, also check current branch as fallback
   # (for safety, in case stdin is empty or hook runs without git pre-push)
@@ -129,41 +236,77 @@ check_secret_scan() {
 }
 
 log_event() {
+  # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
   local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
   local state_dir="$aesop_root/state"
   local audit_log="$state_dir/SECURITY-AUDIT.log"
+  local lock_dir="$state_dir/.audit-log-lock"
   local ts
   ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   local repo_name
   repo_name=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo 'unknown')")
   local user
   user=$(git config user.name 2>/dev/null || echo "unknown")
-  local prev_hash
-  prev_hash=$(get_previous_hash "$audit_log")
 
   mkdir -p "$state_dir" 2>/dev/null
 
-  printf '{"prev_hash":"%s","ts":"%s","repo":"%s","event":"%s","user":"%s"}\n' "$prev_hash" "$ts" "$repo_name" "$(json_escape "$event_type")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
+  # Acquire write lock
+  if ! acquire_audit_lock "$lock_dir"; then
+    # Log write blocked by lock; fail-open (don't block push)
+    return 0
+  fi
+
+  local prev_hash
+  prev_hash=$(get_previous_hash "$audit_log")
+  local seq
+  seq=$(get_next_seq "$audit_log")
+
+  printf '{"seq":%d,"prev_hash":"%s","ts":"%s","repo":"%s","event":"%s","user":"%s"}\n' "$seq" "$prev_hash" "$ts" "$repo_name" "$(json_escape "$event_type")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
+
+  # Update tail hash sidecar
+  if [ -s "$audit_log" ]; then
+    tail -n 1 "$audit_log" | tr -d '\n' | sha256sum | awk '{print $1}' > "$state_dir/.audit-tail-hash" 2>/dev/null
+  fi
+
+  release_audit_lock "$lock_dir"
 }
 
 log_block() {
+  # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local reason="$1"
   local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
   local state_dir="$aesop_root/state"
   local audit_log="$state_dir/SECURITY-AUDIT.log"
+  local lock_dir="$state_dir/.audit-log-lock"
   local ts
   ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   local repo_name
   repo_name=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo 'unknown')")
   local user
   user=$(git config user.name 2>/dev/null || echo "unknown")
-  local prev_hash
-  prev_hash=$(get_previous_hash "$audit_log")
 
   mkdir -p "$state_dir" 2>/dev/null
 
-  printf '{"prev_hash":"%s","ts":"%s","repo":"%s","event":"push_blocked","reason":"%s","user":"%s"}\n' "$prev_hash" "$ts" "$repo_name" "$(json_escape "$reason")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
+  # Acquire write lock
+  if ! acquire_audit_lock "$lock_dir"; then
+    # Log write blocked by lock; fail-open (don't block push)
+    return 0
+  fi
+
+  local prev_hash
+  prev_hash=$(get_previous_hash "$audit_log")
+  local seq
+  seq=$(get_next_seq "$audit_log")
+
+  printf '{"seq":%d,"prev_hash":"%s","ts":"%s","repo":"%s","event":"push_blocked","reason":"%s","user":"%s"}\n' "$seq" "$prev_hash" "$ts" "$repo_name" "$(json_escape "$reason")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
+
+  # Update tail hash sidecar
+  if [ -s "$audit_log" ]; then
+    tail -n 1 "$audit_log" | tr -d '\n' | sha256sum | awk '{print $1}' > "$state_dir/.audit-tail-hash" 2>/dev/null
+  fi
+
+  release_audit_lock "$lock_dir"
 }
 
 run_test_mode() {

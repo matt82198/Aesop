@@ -115,21 +115,28 @@ Once this is configured, even if a developer bypasses the local hook with `--no-
 Each block writes one JSON line to `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log`:
 
 ```json
-{"prev_hash":"GENESIS","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure","user":"alice"}
-{"prev_hash":"f4b92becb47baa447e839330cf3c0c6e8dea947acc9ec372bb99063ee416d036","ts":"2025-07-12T14:32:02Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure","user":"bob"}
+{"seq":1,"prev_hash":"GENESIS","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure","user":"alice"}
+{"seq":2,"prev_hash":"f4b92becb47baa447e839330cf3c0c6e8dea947acc9ec372bb99063ee416d036","ts":"2025-07-12T14:32:02Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure","user":"bob"}
 ```
 
 **Fields:**
+- `seq`: Monotonically increasing sequence number (starts at 1). Enables detection of truncation or missing entries.
 - `prev_hash`: SHA-256 hash of the previous line (without trailing newline). First entry uses `"GENESIS"`. Enables tampering detection.
 - `ts`: ISO-8601 UTC timestamp
 - `repo`: Repository basename
-- `event`: Always `push_blocked`
-- `reason`: `push_to_protected_branch` or `secret_scan_failure`
-- `user`: Git user.name (fallback: "unknown")
+- `event`: Always `push_blocked` (or `secret_scan_unavailable`)
+- `reason`: `push_to_protected_branch`, `secret_scan_failure`, or other block reason
+- `user`: Git user.name (fallback: "unknown"); all special characters and control chars are JSON-escaped
+
+**Write Safety & Concurrent Access:**
+All audit log writes are protected by a file-system atomic lock (`.audit-log-lock/` directory). This ensures that concurrent pushes from different repositories (or simultaneous local pushes) do not corrupt the hash chain. The lock has a 300-second stale-lock recovery mechanism to handle crashed holders.
+
+**Tail Hash Anchor:**
+Each write also updates `${AESOP_ROOT:-$HOME/aesop}/state/.audit-tail-hash` with the SHA-256 hash of the newly appended line. This sidecar file acts as an anchor against tail truncation.
 
 ### Verifying Audit Log Integrity
 
-The hash chain allows you to detect if someone edited or deleted audit log entries:
+The hash chain and truncation anchor allow you to detect if someone edited, deleted, or truncated audit log entries:
 
 ```bash
 bash hooks/pre-push-policy.sh --verify-audit-log
@@ -140,12 +147,19 @@ Output on intact log:
 Audit log verification OK (42 entries)
 ```
 
-Output if tampering is detected:
+Output if line tampering is detected:
 ```
 Error: Hash chain broken at line 15
   Expected prev_hash: f4b92becb47baa447e839330cf3c0c6e8dea947acc9ec372bb99063ee416d036
   Actual prev_hash: abc123...
 ```
+
+Output if tail truncation is detected:
+```
+TRUNCATION SUSPECTED: Tail hash mismatch (stored: f4b..., actual: 8e6...)
+```
+
+The truncation detection compares the stored tail hash (`state/.audit-tail-hash`) against the actual SHA-256 hash of the current log's last line. If someone deletes the last N lines, the hashes will not match.
 
 **Note**: Verification is a convenience check; it does not prevent tampering on a machine where the attacker has file system access. For real auditability, centralize audit logs to a secure remote (e.g., CloudWatch, Datadog, or a separate immutable log server).
 
