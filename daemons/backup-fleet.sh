@@ -10,6 +10,18 @@ HEARTBEAT="$AESOP_ROOT/state/.watchdog-heartbeat"
 LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
 
+# P2 FIX: script-global temp file handles (cycle-status JSON build + per-repo
+# NUL-protocol scratch file), cleaned up unconditionally via trap below so an
+# interrupted cycle (INT/TERM) or unexpected error never leaks mktemp files
+# over the daemon's long-running lifecycle. Initialized empty so `rm -f`
+# under `set -u` is always safe even if the trap fires before mktemp runs.
+temp_json=""
+temp_result=""
+cleanup_temp_files() {
+  rm -f "$temp_json" "$temp_result"
+}
+trap cleanup_temp_files EXIT INT TERM
+
 date +%s > "$HEARTBEAT" 2>/dev/null
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*" | tee -a "$LOG"; }

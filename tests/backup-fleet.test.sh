@@ -330,6 +330,97 @@ test_full_cycle_with_special_chars() {
   fi
 }
 
+# ===== ITEM 4: temp_json / temp_result cleanup trap =====
+
+test_item4_cleanup_trap_declared() {
+  log "TEST ITEM 4a: cleanup trap for temp_json/temp_result is declared script-global"
+
+  # Static check: the trap must be installed at script scope (before the
+  # cycle body runs), covering EXIT, INT, and TERM.
+  if grep -qE '^trap cleanup_temp_files EXIT INT TERM' "$BACKUP_FLEET_SCRIPT"; then
+    pass "ITEM 4a: trap cleanup_temp_files EXIT INT TERM is present"
+  else
+    fail "ITEM 4a: no script-global cleanup trap found for temp_json/temp_result"
+  fi
+
+  if grep -qE '^cleanup_temp_files\(\) \{' "$BACKUP_FLEET_SCRIPT"; then
+    pass "ITEM 4a: cleanup_temp_files() handler is defined"
+  else
+    fail "ITEM 4a: cleanup_temp_files() handler is missing"
+  fi
+}
+
+test_item4_cleanup_on_interrupt() {
+  log "TEST ITEM 4b: temp files are removed when the process receives SIGINT"
+
+  setup_fixture
+
+  local paths_file="$TEST_DIR/int-paths.txt"
+
+  # Source only the preamble (global temp vars + trap), then create temp
+  # files exactly like the real cycle does, and self-deliver SIGINT before
+  # the script would have reached its normal explicit rm -f cleanup.
+  bash -c '
+    set -uo pipefail
+    eval "$(sed -n "/^temp_json=\"\"/,/^trap cleanup_temp_files EXIT INT TERM/p" "'"$BACKUP_FLEET_SCRIPT"'")"
+    temp_json=$(mktemp)
+    temp_result=$(mktemp)
+    printf "%s\n%s\n" "$temp_json" "$temp_result" > "'"$paths_file"'"
+    kill -INT $$
+    sleep 0.2
+  ' 2>/dev/null
+
+  if [ -f "$paths_file" ]; then
+    local json_path result_path
+    json_path=$(sed -n '1p' "$paths_file")
+    result_path=$(sed -n '2p' "$paths_file")
+
+    if [ ! -e "$json_path" ] && [ ! -e "$result_path" ]; then
+      pass "ITEM 4b: both temp files removed after SIGINT"
+    else
+      fail "ITEM 4b: temp file leaked after SIGINT (json exists: $([ -e "$json_path" ] && echo yes || echo no), result exists: $([ -e "$result_path" ] && echo yes || echo no))"
+      rm -f "$json_path" "$result_path" 2>/dev/null
+    fi
+  else
+    fail "ITEM 4b: harness did not record temp file paths"
+  fi
+}
+
+test_item4_cleanup_on_abnormal_exit() {
+  log "TEST ITEM 4c: temp files are removed on unexpected mid-cycle exit (before explicit rm -f)"
+
+  setup_fixture
+
+  local paths_file="$TEST_DIR/exit-paths.txt"
+
+  # Simulate a crash between "mktemp for temp_result" and the explicit
+  # "rm -f \$temp_result" that normally follows it in the discovery loop —
+  # the exact leak window the trap exists to close.
+  bash -c '
+    set -uo pipefail
+    eval "$(sed -n "/^temp_json=\"\"/,/^trap cleanup_temp_files EXIT INT TERM/p" "'"$BACKUP_FLEET_SCRIPT"'")"
+    temp_json=$(mktemp)
+    temp_result=$(mktemp)
+    printf "%s\n%s\n" "$temp_json" "$temp_result" > "'"$paths_file"'"
+    exit 1
+  ' 2>/dev/null
+
+  if [ -f "$paths_file" ]; then
+    local json_path result_path
+    json_path=$(sed -n '1p' "$paths_file")
+    result_path=$(sed -n '2p' "$paths_file")
+
+    if [ ! -e "$json_path" ] && [ ! -e "$result_path" ]; then
+      pass "ITEM 4c: both temp files removed after abnormal exit"
+    else
+      fail "ITEM 4c: temp file leaked after abnormal exit (json exists: $([ -e "$json_path" ] && echo yes || echo no), result exists: $([ -e "$result_path" ] && echo yes || echo no))"
+      rm -f "$json_path" "$result_path" 2>/dev/null
+    fi
+  else
+    fail "ITEM 4c: harness did not record temp file paths"
+  fi
+}
+
 # ===== Run all tests =====
 
 echo "=================================================="
@@ -347,6 +438,12 @@ echo ""
 
 log "Running ITEM 3 test (portable date)..."
 test_item3_portable_date
+echo ""
+
+log "Running ITEM 4 tests (temp_json/temp_result cleanup trap)..."
+test_item4_cleanup_trap_declared
+test_item4_cleanup_on_interrupt
+test_item4_cleanup_on_abnormal_exit
 echo ""
 
 log "Running full cycle integration test..."
