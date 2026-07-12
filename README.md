@@ -9,6 +9,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop/beta" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/npm/l/@matt82198/aesop" alt="license"></a>
+  <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 **Aesop** is an open-source orchestration harness for Claude Code, implementing a cost-optimized, self-healing multi-agent dispatch system. One orchestrator model (Opus/Sonnet) directs a fleet of cheap subagents (Haiku) across durable, observable machinery.
