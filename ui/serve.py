@@ -105,10 +105,13 @@ def generate_session_token():
     Token is generated once at startup and persisted to state/.ui-session-token (mode 0600).
     Subsequent imports of this module return the same token (in-memory).
 
+    SECURITY: File is created atomically with restricted permissions using os.open(O_CREAT|O_EXCL)
+    to avoid TOCTOU window where file exists with world-readable permissions.
+
     Returns:
         str: 43-character base64-like random token (256 bits / 3 bytes per char = ~43 chars)
     """
-    # Check if token file exists
+    # Check if token file exists and is readable
     if UI_SESSION_TOKEN_FILE.exists():
         try:
             token = UI_SESSION_TOKEN_FILE.read_text().strip()
@@ -120,18 +123,33 @@ def generate_session_token():
     # Generate new token: 32 random bytes → 43-char base64-like string
     token = secrets.token_urlsafe(32)
 
-    # Persist to file with restricted permissions (0600)
+    # Persist to file with restricted permissions (0600) using atomic creation
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        # Write with restricted permissions on Unix-like systems
-        # Windows ignores mode bits, but we'll set them anyway
-        UI_SESSION_TOKEN_FILE.write_text(token)
-        # Try to chmod on POSIX systems
+
+        # Atomically create file with 0600 permissions using os.open with O_CREAT|O_EXCL.
+        # This ensures the file is never world-readable (no TOCTOU window).
+        # On Windows, mode bits are largely ignored, which is fine.
         try:
-            os.chmod(str(UI_SESSION_TOKEN_FILE), 0o600)
-        except:
-            pass  # Windows or no chmod support
-    except:
+            fd = os.open(
+                str(UI_SESSION_TOKEN_FILE),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600
+            )
+            # Write token via the file descriptor (no separate chmod needed)
+            with os.fdopen(fd, 'w') as f:
+                f.write(token)
+        except FileExistsError:
+            # File already exists (race condition or previous run).
+            # Try to read it and use that token instead.
+            try:
+                token = UI_SESSION_TOKEN_FILE.read_text().strip()
+                if token and len(token) >= 32:
+                    return token
+            except:
+                pass
+            # If we can't read the existing file, fall back to in-memory token
+    except Exception:
         pass  # Fail-open: token exists in memory even if file write fails
 
     return token
@@ -318,7 +336,12 @@ def parse_audit_backlog():
     return result
 
 def get_heartbeat_status():
-    """Read daemon heartbeat age and status."""
+    """Read daemon heartbeat age and status.
+
+    Buckets age to prevent every-tick hash change: age is reported in 3-second buckets
+    (e.g., 0-2s → 0, 3-5s → 3, 6-8s → 6, ...) so the heartbeat snapshot only changes
+    every ~3 seconds, not every 1 second. This preserves the change-hash gate effectiveness.
+    """
     try:
         if not WATCHDOG_HEARTBEAT.exists():
             return {"alive": "UNKNOWN", "age": -1, "threshold": 300}
@@ -337,14 +360,21 @@ def get_heartbeat_status():
                 return {"alive": "unknown", "age": -1, "threshold": 300}
         # Age in seconds: now_seconds - heartbeat_seconds
         age_seconds = int(time()) - timestamp
+        # Bucket age to 3-second intervals to prevent hash churn
+        age_bucketed = (age_seconds // 3) * 3
         alive = "ALIVE" if age_seconds < 300 else "STALE"
-        return {"alive": alive, "age": age_seconds, "threshold": 300}
+        return {"alive": alive, "age": age_bucketed, "threshold": 300}
     except:
         return {"alive": "unknown", "age": -1, "threshold": 300}
 
 
 def get_monitor_heartbeat_status():
-    """Read orchestration monitor heartbeat age and status."""
+    """Read orchestration monitor heartbeat age and status.
+
+    Buckets age to prevent every-tick hash change: age is reported in 3-second buckets
+    (e.g., 0-2s → 0, 3-5s → 3, 6-8s → 6, ...) so the monitor snapshot only changes
+    every ~3 seconds, not every 1 second. This preserves the change-hash gate effectiveness.
+    """
     try:
         # Check both possible paths: state/.monitor-heartbeat and monitor/.monitor-heartbeat
         monitor_hb = MONITOR_HEARTBEAT
@@ -370,8 +400,10 @@ def get_monitor_heartbeat_status():
                 return {"alive": "unknown", "age": -1, "threshold": 3600}
         # Age in seconds: now_seconds - heartbeat_seconds
         age_seconds = int(time()) - timestamp
+        # Bucket age to 3-second intervals to prevent hash churn
+        age_bucketed = (age_seconds // 3) * 3
         alive = "ALIVE" if age_seconds < 3600 else "STALE"
-        return {"alive": alive, "age": age_seconds, "threshold": 3600}
+        return {"alive": alive, "age": age_bucketed, "threshold": 3600}
     except:
         return {"alive": "unknown", "age": -1, "threshold": 3600}
 
@@ -641,9 +673,13 @@ def extract_agent_dispatch_prompt(agent_id):
 # check so they're only re-derived when their underlying input actually changed.
 COLLECTOR_INTERVAL = float(os.getenv("AESOP_UI_COLLECT_INTERVAL", "1.0"))
 SSE_KEEPALIVE_SECONDS = 15
+SSE_MAX_CLIENTS = 100  # Resource cap: reject new connections past this
+SSE_QUEUE_MAXSIZE = 50  # Per-client bounded queue (drops oldest on overflow)
+SSE_WRITE_TIMEOUT = 5.0  # Write timeout in seconds to prevent stalled clients
 
 _sse_lock = threading.Lock()
 _sse_clients = []  # list[queue.Queue]
+_sse_client_count = 0  # Track concurrent connections for cap enforcement
 
 _latest_lock = threading.Lock()
 _latest_snapshots = {"data": None, "backlog": None, "agents": None}  # name -> json str
@@ -691,9 +727,11 @@ def _transcripts_fingerprint():
 
 
 def register_sse_client():
-    """Register a new SSE client queue. Returns the queue to read events from."""
-    q = queue.Queue()
+    """Register a new SSE client queue. Returns the queue to read events from, or None if cap exceeded."""
     with _sse_lock:
+        if len(_sse_clients) >= SSE_MAX_CLIENTS:
+            return None  # Caller will return HTTP 503
+        q = queue.Queue(maxsize=SSE_QUEUE_MAXSIZE)
         _sse_clients.append(q)
     return q
 
@@ -706,12 +744,23 @@ def unregister_sse_client(q):
 
 
 def broadcast_sse(event_name, payload):
-    """Push (event_name, payload) onto every currently-registered client queue."""
+    """Push (event_name, payload) onto every currently-registered client queue.
+
+    If a client queue is full, drop the oldest event to make room (bounded backpressure).
+    This prevents one slow client from blocking the broadcast.
+    """
     with _sse_lock:
         clients = list(_sse_clients)
     for q in clients:
         try:
             q.put_nowait((event_name, payload))
+        except queue.Full:
+            # Queue is full: drop the oldest event and retry
+            try:
+                q.get_nowait()  # Remove oldest
+                q.put_nowait((event_name, payload))  # Add new
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -832,8 +881,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         h1 { font-size: 20px; margin-bottom: 20px; color: #fff; }
         h2 { font-size: 14px; margin-top: 20px; margin-bottom: 10px; color: #8ac; font-weight: bold; }
 
-        .header { display: flex; gap: 20px; margin-bottom: 20px; padding: 12px; background: #1a1a1a; border-radius: 4px; }
-        .header-item { flex: 1; }
+        .header { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; padding: 12px; background: #1a1a1a; border-radius: 4px; }
+        .header-item { flex: 1 1 140px; min-width: 120px; }
         .header-label { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 4px; }
         .header-value { font-size: 14px; color: #fff; font-weight: bold; }
         .status-alive { color: #0a0; }
@@ -842,6 +891,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
         @media (max-width: 1200px) { .grid { grid-template-columns: 1fr; } }
+        /* Responsive header: items pack 2-per-row on narrow viewports instead of overflowing */
+        @media (max-width: 900px) { .header { gap: 12px; } .header-item { flex-basis: calc(50% - 12px); } }
 
         .panel { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; }
         .panel-title { font-size: 12px; color: #8ac; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
@@ -856,7 +907,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .agent-id-badge { color: #8ac; font-weight: bold; }
         .agent-age { color: #666; font-size: 11px; }
         .agent-preview { color: #999; font-size: 11px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .agent-expand-toggle { color: #666; font-size: 11px; transition: transform 0.2s ease; }
+        .agent-expand-toggle { color: #8ac; font-size: 14px; font-weight: bold; transition: transform 0.2s ease, color 0.2s ease; }
+        .agent-row:hover .agent-expand-toggle { color: #fff; }
         .agent-row.expanded .agent-expand-toggle { transform: rotate(90deg); }
 
         .agent-details { display: none; margin-top: 8px; padding: 12px; background: #0f0f0f; border-left: 3px solid #8ac; border-radius: 2px; max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
@@ -871,8 +923,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .item-id { color: #8ac; font-weight: bold; }
         .item-age { color: #999; margin: 0 8px; }
         .item-status { padding: 2px 6px; border-radius: 2px; font-size: 10px; font-weight: bold; }
-        .status-running { background: #0a0; color: #000; }
-        .status-done { background: #666; color: #fff; }
+        .status-running { background: #88f; color: #000; }
+        .status-done { background: #0a0; color: #000; }
 
         .inbox-box { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; margin-bottom: 20px; }
         .inbox-label { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 8px; }
@@ -883,9 +935,20 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .inbox-button:disabled { background: #555; cursor: not-allowed; }
         .inbox-status { font-size: 11px; color: #0a0; margin-top: 4px; display: none; }
 
+        /* Alert box styling: distinct alarm treatment when alerts exist */
         .alerts-box { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; }
+        .alerts-box.has-alerts { border-color: #f44; border-width: 2px; background: #1a0a0a; }
+        .alerts-box.has-high-alerts { border-color: #f44; border-width: 2px; background: #1a0808; }
+        .alerts-box.has-med-alerts { border-color: #f80; border-width: 2px; background: #1a1008; }
         .alert-line { font-size: 11px; padding: 4px 0; color: #f44; font-family: monospace; }
+        .alert-line.severity-high { color: #f44; font-weight: bold; }
+        .alert-line.severity-med { color: #f80; font-weight: bold; }
         .alert-none { color: #666; }
+
+        /* Alert count in header: scales with severity */
+        #alert-count { color: #999; }
+        #alert-count.alarm-high { color: #f44; font-weight: bold; }
+        #alert-count.alarm-med { color: #f80; font-weight: bold; }
 
         .messages-box { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; max-height: 400px; overflow-y: auto; }
         .message { padding: 8px 0; border-bottom: 1px solid #2a2a2a; font-size: 11px; }
@@ -903,7 +966,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .backlog-progress-inflight { background: #88f; }
         .backlog-progress-empty { background: #333; flex: 1; }
         .backlog-stats { font-size: 11px; color: #999; }
-        .backlog-items { font-size: 11px; margin-top: 8px; max-height: 200px; overflow-y: auto; }
+        .backlog-items { font-size: 11px; margin-top: 8px; max-height: 200px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #555 #0a0a0a; }
+        /* Truncation cue: a scrollable (overflowing) tier gets a visible scrollbar + bottom fade so "more below" is obvious */
+        .backlog-items::-webkit-scrollbar { width: 8px; }
+        .backlog-items::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        .backlog-items::-webkit-scrollbar-track { background: #0a0a0a; }
+        .backlog-items.has-overflow { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent); }
         .backlog-item { padding: 4px 0; color: #ccc; display: flex; gap: 8px; align-items: flex-start; }
         .backlog-item-glyph { min-width: 14px; font-size: 12px; }
         .backlog-item-tag { color: #8ac; font-weight: bold; min-width: 60px; }
@@ -948,6 +1016,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 <div class="header-value">
                     <span id="conn-live" style="color: #0a0;">● live</span>
                     <span id="conn-reconnecting" style="color: #f80; display: none;">◌ reconnecting…</span>
+                    <span id="connection-degraded" style="color: #f44; display: none; margin-left: 8px;">⚠ frame error</span>
                 </div>
             </div>
         </div>
@@ -1045,7 +1114,20 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             document.getElementById('conn-reconnecting').style.display = connected ? 'none' : '';
         }
 
+        function setConnectionDegraded(degraded) {
+            document.getElementById('connection-degraded').style.display = degraded ? '' : 'none';
+        }
+
         // ---- header (watchdog / monitor / alert count) --------------------
+        function getAlertSeverity(alerts) {
+            // Scan alert lines for severity keywords (HIGH takes precedence over MED)
+            if (!alerts || !alerts.lines || alerts.lines.length === 0) return 'none';
+            const text = alerts.lines.join(' ').toUpperCase();
+            if (text.includes('HIGH')) return 'high';
+            if (text.includes('MED') || text.includes('MEDIUM')) return 'med';
+            return 'low';
+        }
+
         function patchHeader(data) {
             const watchdog = data.watchdog || {};
             const watchdogAlive = document.getElementById('watchdog-alive');
@@ -1059,7 +1141,15 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             monitorAlive.className = 'status-' + (monitor.alive || 'unknown').toLowerCase();
             document.getElementById('monitor-age').textContent = monitor.age >= 0 ? monitor.age + 's' : '—';
 
-            document.getElementById('alert-count').textContent = (data.alerts && data.alerts.count) || 0;
+            // Alert count: color scales with severity
+            const alertCount = document.getElementById('alert-count');
+            const count = (data.alerts && data.alerts.count) || 0;
+            alertCount.textContent = count;
+            alertCount.className = ''; // Reset classes
+            if (count > 0) {
+                const severity = getAlertSeverity(data.alerts);
+                alertCount.classList.add('alarm-' + severity);
+            }
         }
 
         function patchHeaderRunningCount(agents) {
@@ -1242,10 +1332,37 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         function patchAlerts(alerts) {
             const alertsList = document.getElementById('alerts-list');
+            const alertsBox = document.querySelector('.alerts-box');
+
+            // Defensive: ensure alerts-box exists before styling it
+            if (alertsBox) {
+                // Reset alerts-box styling
+                alertsBox.className = 'alerts-box';
+
+                if (alerts && alerts.lines && alerts.lines.length > 0) {
+                    // Determine highest severity to style the container
+                    const text = alerts.lines.join(' ').toUpperCase();
+                    if (text.includes('HIGH')) {
+                        alertsBox.classList.add('has-high-alerts');
+                    } else if (text.includes('MED') || text.includes('MEDIUM')) {
+                        alertsBox.classList.add('has-med-alerts');
+                    } else {
+                        alertsBox.classList.add('has-alerts');
+                    }
+                }
+            }
+
             if (alerts && alerts.lines && alerts.lines.length > 0) {
-                alertsList.innerHTML = alerts.lines.map(line =>
-                    `<div class="alert-line">${sanitize(line.substring(0, 120))}</div>`
-                ).join('');
+                alertsList.innerHTML = alerts.lines.map(line => {
+                    const upperLine = line.toUpperCase();
+                    let severity = '';
+                    if (upperLine.includes('HIGH')) {
+                        severity = 'severity-high';
+                    } else if (upperLine.includes('MED') || upperLine.includes('MEDIUM')) {
+                        severity = 'severity-med';
+                    }
+                    return `<div class="alert-line ${severity}">${sanitize(line.substring(0, 120))}</div>`;
+                }).join('');
             } else {
                 alertsList.innerHTML = '<div class="alert-none">(no alerts)</div>';
             }
@@ -1368,6 +1485,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     itemEl.querySelector('.backlog-item-tag').textContent = item.tag;
                     itemEl.querySelector('.backlog-item-title').textContent = item.title;
                 });
+
+                // Truncation cue: fade the bottom when this tier's items overflow the 200px box (more below)
+                itemsContainer.classList.toggle('has-overflow', itemsContainer.scrollHeight > itemsContainer.clientHeight + 2);
             });
         }
 
@@ -1375,19 +1495,40 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         const evtSource = new EventSource('/events');
 
         evtSource.addEventListener('data', (e) => {
-            patchDataSection(JSON.parse(e.data));
-            setConnectionStatus(true);
+            try {
+                patchDataSection(JSON.parse(e.data));
+                setConnectionStatus(true);
+                setConnectionDegraded(false);
+            } catch (err) {
+                console.error('Failed to parse data frame:', err);
+                setConnectionDegraded(true);
+            }
         });
         evtSource.addEventListener('backlog', (e) => {
-            patchBacklog(JSON.parse(e.data));
-            setConnectionStatus(true);
+            try {
+                patchBacklog(JSON.parse(e.data));
+                setConnectionStatus(true);
+                setConnectionDegraded(false);
+            } catch (err) {
+                console.error('Failed to parse backlog frame:', err);
+                setConnectionDegraded(true);
+            }
         });
         evtSource.addEventListener('agents', (e) => {
-            patchAgents(JSON.parse(e.data));
-            patchHeaderRunningCount(latestAgents);
-            setConnectionStatus(true);
+            try {
+                patchAgents(JSON.parse(e.data));
+                patchHeaderRunningCount(latestAgents);
+                setConnectionStatus(true);
+                setConnectionDegraded(false);
+            } catch (err) {
+                console.error('Failed to parse agents frame:', err);
+                setConnectionDegraded(true);
+            }
         });
-        evtSource.addEventListener('open', () => setConnectionStatus(true));
+        evtSource.addEventListener('open', () => {
+            setConnectionStatus(true);
+            setConnectionDegraded(false);
+        });
         evtSource.addEventListener('error', () => setConnectionStatus(false));
 
         // Manual refresh fallback (one-shot fetch, reuses the exact same patch
@@ -1542,10 +1683,24 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
     def _write_sse_event(self, event_name, payload):
-        """Write one SSE frame. Caller handles disconnect exceptions."""
+        """Write one SSE frame with timeout. Caller handles disconnect exceptions."""
         msg = f"event: {event_name}\ndata: {payload}\n\n"
-        self.wfile.write(msg.encode("utf-8"))
-        self.wfile.flush()
+        # Set socket timeout to prevent stalled writes from blocking the server
+        try:
+            old_timeout = self.connection.gettimeout()
+            self.connection.settimeout(SSE_WRITE_TIMEOUT)
+        except (AttributeError, OSError):
+            pass
+        try:
+            self.wfile.write(msg.encode("utf-8"))
+            self.wfile.flush()
+        finally:
+            # Restore original timeout
+            try:
+                if 'old_timeout' in locals():
+                    self.connection.settimeout(old_timeout)
+            except (AttributeError, OSError):
+                pass
 
     def serve_events(self):
         """GET /events — Server-Sent Events stream.
@@ -1554,8 +1709,23 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         /submit keeps its token requirement unchanged). Holds the connection open
         for the life of the client; requires ThreadingHTTPServer (see run_server)
         so one SSE client can't block every other request.
+
+        Returns HTTP 503 if concurrent connection cap (SSE_MAX_CLIENTS) is exceeded.
         """
         start_collector_thread()
+
+        q = register_sse_client()
+        if q is None:
+            # Connection cap exceeded; return 503 Service Unavailable
+            try:
+                self.send_response(503)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Retry-After", "30")
+                self.end_headers()
+                self.wfile.write(b"Service overloaded: too many concurrent clients\n")
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+                pass
+            return
 
         try:
             self.send_response(200)
@@ -1565,9 +1735,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("X-Accel-Buffering", "no")
             self.end_headers()
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+            unregister_sse_client(q)
             return
-
-        q = register_sse_client()
         try:
             # Send an immediate full snapshot so first paint isn't empty. If the
             # collector hasn't produced anything yet (first-ever request), compute

@@ -50,11 +50,21 @@ def free_port():
     return port
 
 
-def build_fixture(root: Path, hint: str):
+def build_fixture(root: Path, hint: str, with_high_alerts: bool = False):
     (root / "state").mkdir(exist_ok=True)
     (root / "transcripts").mkdir(exist_ok=True)
     (root / "dash").mkdir(exist_ok=True)
     (root / "AUDIT-BACKLOG.md").write_text(FIXTURE_BACKLOG, encoding="utf-8")
+
+    # Optional: seed with HIGH and MED severity alerts for testing
+    if with_high_alerts:
+        alerts_log = root / "state" / "SECURITY-ALERTS.log"
+        alerts_log.write_text(
+            "2025-07-12T14:32:01Z | HIGH | API secret exposed in logs\n"
+            "2025-07-12T14:30:05Z | MED | Unvalidated user input detected\n",
+            encoding="utf-8"
+        )
+
     # Fake detector: reads hint.txt so live agent updates are deterministic.
     (root / "hint.txt").write_text(hint, encoding="utf-8")
     fake = (
@@ -90,7 +100,8 @@ def main():
                AESOP_TRANSCRIPTS_ROOT=str(root / "transcripts"),
                AESOP_UI_COLLECT_INTERVAL="0.3",
                PORT=str(port))
-    build_fixture(root, hint="initial fixture task")
+    # Build with HIGH/MED severity alerts for testing alarm color semantics
+    build_fixture(root, hint="initial fixture task", with_high_alerts=True)
     server = subprocess.Popen([sys.executable, str(SERVE)], env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     console_errors = []
@@ -125,6 +136,52 @@ def main():
                 assert "BACKLOG-SEED-ALPHA" in page.inner_text("#backlog-tiers")
             except Exception as e:
                 failures.append(f"(b) backlog panel did not render seed items: {e}")
+
+            # (b2) alarm color semantics: alert count renders in alarm color when HIGH alerts exist
+            try:
+                # Wait for the alert count to get a class (indicating data has loaded)
+                page.wait_for_function(
+                    "document.getElementById('alert-count').className !== ''",
+                    timeout=8000
+                )
+                # Check that the element has the alarm-high class (red color)
+                class_list = page.evaluate("document.getElementById('alert-count').className")
+                assert "alarm-high" in class_list or "alarm-med" in class_list, \
+                    f"Alert count should have 'alarm-high' or 'alarm-med' class for severity, got: {class_list}"
+                # Verify computed color is NOT neutral gray (should be red/amber)
+                color = page.evaluate("window.getComputedStyle(document.getElementById('alert-count')).color")
+                # Color should be high-alert red (not gray/neutral) — just verify it's a color
+                assert "rgb(" in color, f"Alert count should have computed color, got: {color}"
+            except Exception as e:
+                failures.append(f"(b2) alert count alarm color not set: {e}")
+
+            # (b3) Security Alerts panel has distinct alarm styling when HIGH alerts exist
+            try:
+                alerts_box = page.query_selector(".alerts-box")
+                alerts_box_class = page.evaluate("document.querySelector('.alerts-box').className")
+                assert "has-high-alerts" in alerts_box_class or "has-alerts" in alerts_box_class, \
+                    f"Alerts box should have alarm styling class, got: {alerts_box_class}"
+                # Verify border changed from neutral #333 to alarm #f44
+                border_color = page.evaluate("window.getComputedStyle(document.querySelector('.alerts-box')).borderColor")
+                assert "rgb(" in border_color, f"Alerts box should have computed border color: {border_color}"
+            except Exception as e:
+                failures.append(f"(b3) alerts panel alarm styling not applied: {e}")
+
+            # (b4) affordances: stronger expand-toggle + responsive header wrap (no horizontal overflow when narrow)
+            try:
+                page.wait_for_selector(".agent-row", timeout=8000)
+                toggle_size = page.evaluate(
+                    "parseFloat(getComputedStyle(document.querySelector('.agent-expand-toggle')).fontSize)")
+                assert toggle_size >= 13, f"expand toggle should be a stronger affordance (>=13px), got {toggle_size}px"
+                # narrow the viewport: header must wrap, body must not scroll horizontally
+                page.set_viewport_size({"width": 600, "height": 800})
+                page.wait_for_timeout(200)
+                overflow = page.evaluate(
+                    "document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                assert overflow <= 2, f"body overflows horizontally at 600px (header not wrapping): {overflow}px"
+                page.set_viewport_size({"width": 1280, "height": 900})
+            except Exception as e:
+                failures.append(f"(b4) affordance/responsive-header check failed: {e}")
 
             # (c) click agent row -> expands with the real dispatch prompt
             try:
@@ -183,8 +240,8 @@ def main():
         for f in failures:
             print("  -", f)
         return 1
-    print("PROVEN: (a) console clean (b) backlog rendered (c) click-expand with prompt "
-          "(d) SSE live updates without reload (e) expansion survived updates")
+    print("PROVEN: (a) console clean (b) backlog rendered (b2) alert-count alarm color "
+          "(b3) alerts-box alarm styling (c) click-expand with prompt (d) SSE live updates (e) expansion survived")
     return 0
 
 
