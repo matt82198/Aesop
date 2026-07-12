@@ -12,6 +12,22 @@ json_escape() {
   s="${s//$'\t'/\\t}"
   printf '%s' "$s"
 }
+compute_sha256() {
+  # P1-Bug2 fix: Single helper for sha256sum with fallback to shasum
+  # Reads from stdin, outputs hex hash
+  local hash_bin
+  if command -v sha256sum >/dev/null 2>&1; then
+    hash_bin="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    hash_bin="shasum -a 256"
+  else
+    printf 'ERROR: sha256sum or shasum not found in PATH
+' >&2
+    return 1
+  fi
+  $hash_bin | awk '{print $1}'
+}
+
 
 acquire_audit_lock() {
   # Finding 1: Mkdir-based atomic lock for audit log write safety
@@ -97,16 +113,31 @@ get_next_seq() {
 }
 
 verify_audit_log() {
+  # P1-Bug1 fix: Acquire write lock while reading/verifying sidecar
+  # Prevents false truncation positive during concurrent appends
   # Finding 2: Include truncation detection via tail hash sidecar and seq field
   local audit_log="$1"
   if [ ! -f "$audit_log" ]; then
-    printf 'Error: Audit log not found at %s\n' "$audit_log" >&2
+    printf 'Error: Audit log not found at %s
+' "$audit_log" >&2
     return 1
   fi
 
   if [ ! -s "$audit_log" ]; then
-    printf 'Audit log is empty or does not exist\n'
+    printf 'Audit log is empty or does not exist
+'
     return 0
+  fi
+
+  local state_dir
+  state_dir=$(dirname "$audit_log")
+  local lock_dir="$state_dir/.audit-log-lock"
+  local tail_hash_file="$state_dir/.audit-tail-hash"
+
+  # P1-Bug1: Acquire lock before reading sidecar to prevent race
+  if ! acquire_audit_lock "$lock_dir"; then
+    printf 'Warning: Could not acquire lock for verification; skipping sidecar check
+' >&2
   fi
 
   local line_num=0
@@ -114,9 +145,6 @@ verify_audit_log() {
   local expected_hash=""
   local actual_prev_hash=""
   local prev_seq=0
-  local state_dir
-  state_dir=$(dirname "$audit_log")
-  local tail_hash_file="$state_dir/.audit-tail-hash"
 
   while IFS= read -r line; do
     line_num=$((line_num + 1))
@@ -124,20 +152,26 @@ verify_audit_log() {
     if [ $line_num -eq 1 ]; then
       expected_hash="GENESIS"
     else
-      expected_hash=$(printf '%s' "$prev_line" | sha256sum | awk '{print $1}')
+      expected_hash=$(printf '%s' "$prev_line" | compute_sha256)
     fi
 
     actual_prev_hash=$(printf '%s' "$line" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('prev_hash', 'MISSING'))" 2>/dev/null)
 
     if [ "$actual_prev_hash" = "MISSING" ]; then
-      printf 'Error: Line %d missing prev_hash field\n' "$line_num" >&2
+      release_audit_lock "$lock_dir"
+      printf 'Error: Line %d missing prev_hash field
+' "$line_num" >&2
       return 1
     fi
 
     if [ "$actual_prev_hash" != "$expected_hash" ]; then
-      printf 'Error: Hash chain broken at line %d\n' "$line_num" >&2
-      printf '  Expected prev_hash: %s\n' "$expected_hash" >&2
-      printf '  Actual prev_hash: %s\n' "$actual_prev_hash" >&2
+      release_audit_lock "$lock_dir"
+      printf 'Error: Hash chain broken at line %d
+' "$line_num" >&2
+      printf '  Expected prev_hash: %s
+' "$expected_hash" >&2
+      printf '  Actual prev_hash: %s
+' "$actual_prev_hash" >&2
       return 1
     fi
 
@@ -145,7 +179,9 @@ verify_audit_log() {
     local current_seq
     current_seq=$(printf '%s' "$line" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('seq', 0))" 2>/dev/null || echo 0)
     if [ "$current_seq" -le "$prev_seq" ] && [ $line_num -gt 1 ]; then
-      printf 'Error: Sequence number not monotonic at line %d (prev: %d, current: %d)\n' "$line_num" "$prev_seq" "$current_seq" >&2
+      release_audit_lock "$lock_dir"
+      printf 'Error: Sequence number not monotonic at line %d (prev: %d, current: %d)
+' "$line_num" "$prev_seq" "$current_seq" >&2
       return 1
     fi
     prev_seq=$current_seq
@@ -153,21 +189,27 @@ verify_audit_log() {
     prev_line="$line"
   done < "$audit_log"
 
-  # Check truncation via tail hash anchor
+  # Check truncation via tail hash anchor (within lock)
   if [ -f "$tail_hash_file" ]; then
     local stored_tail_hash
     stored_tail_hash=$(head -n 1 "$tail_hash_file" 2>/dev/null)
     local actual_tail_hash
-    actual_tail_hash=$(tail -n 1 "$audit_log" | tr -d '\n' | sha256sum | awk '{print $1}')
+    actual_tail_hash=$(tail -n 1 "$audit_log" | tr -d '
+' | compute_sha256)
 
     if [ "$stored_tail_hash" != "$actual_tail_hash" ]; then
-      printf 'TRUNCATION SUSPECTED: Tail hash mismatch (stored: %s, actual: %s)\n' "$stored_tail_hash" "$actual_tail_hash" >&2
+      release_audit_lock "$lock_dir"
+      printf 'TRUNCATION SUSPECTED: Tail hash mismatch (stored: %s, actual: %s)
+' "$stored_tail_hash" "$actual_tail_hash" >&2
       return 1
     fi
   fi
 
+  release_audit_lock "$lock_dir"
+
   if [ $line_num -gt 0 ]; then
-    printf 'Audit log verification OK (%d entries)\n' "$line_num"
+    printf 'Audit log verification OK (%d entries)
+' "$line_num"
   fi
   return 0
 }
