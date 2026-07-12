@@ -113,15 +113,50 @@ bash $AESOP_ROOT/daemons/run-watchdog.sh --once
 
 Expected output: logs to `state/FLEET-BACKUP.log` showing which repos it discovered and their states (CLEAN, SNAPSHOTTED, PUSHED, or BLOCKED).
 
-### Step 7: Discover & Clone Fleet Repos
+### Step 7: Clone Fleet Repos Using Reconstitute
 
-The watchdog scans for existing repos but does NOT clone missing ones automatically. Manually restore your fleet repos based on what you remember or what appears in backups:
+The aesop harness includes a bootstrap tool to clone and fetch all your fleet repos automatically. This is the recommended approach for reconstituting a full fleet:
+
+#### Option A: Using aesop.config.json (Recommended)
+
+If your `aesop.config.json` includes a `repos` array with `url` and `path` fields, run:
+
+```bash
+bash $AESOP_ROOT/tools/reconstitute.sh
+```
+
+This will clone any missing repos and fetch existing ones, printing a summary of cloned, fetched, and failed repos.
+
+#### Option B: Using a repos file
+
+Create a text file with one repo per line in the format `<url> <target-dir>` or `<url>⇥<target-dir>` (tab-delimited):
+
+```
+https://github.com/user/project1.git ~/project1
+https://github.com/user/project2.git ~/project2
+```
+
+Then run:
+
+```bash
+bash $AESOP_ROOT/tools/reconstitute.sh --repos-file repos.txt
+```
+
+#### Dry-run mode (preview without executing)
+
+```bash
+bash $AESOP_ROOT/tools/reconstitute.sh --dry-run
+```
+
+#### Manual fallback
+
+If you prefer to clone repos manually or need fine-grained control, you can still clone individually:
 
 ```bash
 # For each fleet repo, clone from its remote
 git clone <repo-url> <local-path>
 
-# Example: if your config lists repos at ~/project1, ~/project2, etc.
+# Example: if repos are at ~/project1, ~/project2, etc.
 cd ~/project1 && git fetch -q origin
 cd ~/project2 && git fetch -q origin
 ```
@@ -176,41 +211,6 @@ bash $AESOP_ROOT/daemons/run-watchdog.sh &
 Or, if using your own process manager (systemd, supervisor, etc.), start it according to your setup.
 
 The watchdog will now run every 150 seconds, backing up any new changes and pushing them to origin.
-
-### Automated Bootstrap (Alternative to Manual Clone)
-
-Instead of manually cloning each repo in Step 7, you can use the reconstitute script to automate cloning and fetching:
-
-**Option A: Using aesop.config.json (recommended)**
-
-If your `aesop.config.json` includes a `repos` array, the script reads it automatically:
-
-```bash
-bash $AESOP_ROOT/tools/reconstitute.sh
-```
-
-**Option B: Using a repos file**
-
-Create a text file with one repo per line in the format `<url> <target-dir>`:
-
-```
-https://github.com/user/project1.git ~/project1
-https://github.com/user/project2.git ~/project2
-```
-
-Then run:
-
-```bash
-bash $AESOP_ROOT/tools/reconstitute.sh --repos-file repos.txt
-```
-
-**Dry-run mode** (preview actions without executing):
-
-```bash
-bash $AESOP_ROOT/tools/reconstitute.sh --dry-run
-```
-
-The script clones missing repos and fetches existing ones, printing a summary of cloned, fetched, and failed repos. Exit code 1 if any fail.
 
 ---
 
@@ -284,15 +284,13 @@ git clone <brain-remote> ~/.claude
 
 # 4. Create config (edit paths to match the new machine)
 cp aesop.config.example.json aesop.config.json
-# Edit aesop.config.json with your local paths and repo list
+# Edit aesop.config.json with your local paths and repo list (including repos[].url)
 
 # 5. Create state directory
 mkdir -p ~/aesop/state
 
-# 6. Clone fleet repos (manually or via your own discovery script)
-git clone <repo1-remote> ~/project1
-git clone <repo2-remote> ~/project2
-# ... repeat for each repo
+# 6. Clone fleet repos using reconstitute
+bash $AESOP_ROOT/tools/reconstitute.sh
 
 # 7. Run watchdog once
 export AESOP_ROOT=$HOME/aesop
@@ -331,10 +329,10 @@ For very large repos (>1GB) or slow networks, add 2–3 minutes per repo.
 
 ### What This Playbook Does NOT Do
 
-1. **Automatic repo discovery on clone**
+1. **Automatic repo discovery on clone (Solved by reconstitute.sh)**
    - The watchdog discovers repos when it runs, but only repos that already exist on disk.
-   - You must manually clone your fleet repos from their remotes.
-   - Future enhancement: a helper script in `bin/` could parse `aesop.config.json` and clone all repos automatically.
+   - Use `bash $AESOP_ROOT/tools/reconstitute.sh` to clone all repos from `aesop.config.json` automatically.
+   - Reconstitute supports `--dry-run` for preview and `--repos-file` for custom repo lists.
 
 2. **Recover transient state/ directory**
    - Heartbeat files (`.watchdog-heartbeat`), logs (`FLEET-BACKUP.log`), and JSON status (`.watchdog-repos.json`) are git-ignored.
@@ -379,8 +377,8 @@ For very large repos (>1GB) or slow networks, add 2–3 minutes per repo.
 | Phase | Action | Time |
 |-------|--------|------|
 | Clone | `git clone <aesop>` + `git clone <brain>` | ~1 min |
-| Config | Create `aesop.config.json` | ~2 min |
-| Repos | `git clone` all fleet repos | ~2–5 min |
+| Config | Create `aesop.config.json` + `mkdir state/` | ~2 min |
+| Repos | `bash tools/reconstitute.sh` (clone + fetch) | ~2–5 min |
 | Verify | `bash daemons/run-watchdog.sh --once` | ~1 min |
 | Recover | `git cherry-pick` from `backup/wip-*` branches | ~1–2 min |
 | Restart | `bash daemons/run-watchdog.sh &` | immediate |
