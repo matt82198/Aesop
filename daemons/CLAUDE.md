@@ -22,10 +22,14 @@
 
 ## Invariants & Gotchas
 
-1. **Single-instance guard**: Heartbeat check prevents duplicate daemons. Delete .watchdog-heartbeat to force restart.
-2. **CRLF-safe, no line continuations**: Use POSIX-safe heredocs; never add `\` for line wrap.
-3. **Secret-scan gate**: `scan_tracked_files()` calls `$AESOP_ROOT/tools/secret_scan.py` on staged/modified files; non-0 exit blocks push, marks repo BLOCKED.
-4. **Append-only logs**: FLEET-BACKUP.log only grows; rotate via tools/rotate_logs.py.
-5. **Path dedup via realpath**: Avoids processing symlinked repos or dot-dir aliases twice.
+1. **Single-instance guard (atomic lock)**: run-watchdog.sh uses atomic mkdir-based lockfile (`.watchdog-lock/`) to prevent concurrent daemons. The lock mechanism:
+   - Atomic acquire: `mkdir $LOCK_DIR` is guaranteed atomic on POSIX systems (returns 0 only to first caller).
+   - Stale-lock recovery: Crashed holder won't wedge daemon forever; lock older than 300s is reclaimed atomically.
+   - Guards both daemon mode and `--once` mode (no bypass).
+2. **Testing override**: Set `AESOP_WATCHDOG_CYCLE_CMD` env var to replace backup-fleet.sh invocation (allows tests to use mock cycle without running real backup).
+3. **CRLF-safe, no line continuations**: Use POSIX-safe heredocs; never add `\` for line wrap.
+4. **Secret-scan gate**: `scan_tracked_files()` calls `$AESOP_ROOT/tools/secret_scan.py` on staged/modified files; non-0 exit blocks push, marks repo BLOCKED.
+5. **Append-only logs**: FLEET-BACKUP.log only grows; rotate via tools/rotate_logs.py.
+6. **Path dedup via realpath**: Avoids processing symlinked repos or dot-dir aliases twice.
 
 See ../CLAUDE.md for project domain map, cardinal rules, and secret-scan principles.
