@@ -143,8 +143,14 @@ test('re-scaffold with different pre-push hook warns and preserves it', () => {
 
   const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
 
-  // Replace hook with custom one
+  // Replace hook with custom one. The first scaffold installs a *symlink*
+  // to the real hooks/pre-push-policy.sh on Unix (see file header comment),
+  // so writeFileSync() must not be used directly on hookPath: that follows
+  // the symlink and would truncate/overwrite the repo's real hook script.
+  // Remove the existing entry (symlink or file) first, then drop in a
+  // plain custom file, mirroring how a user would actually replace a hook.
   const customHook = '#!/bin/bash\necho "custom hook"\n';
+  fs.rmSync(hookPath, { force: true });
   fs.writeFileSync(hookPath, customHook);
 
   // Second scaffold should warn and preserve
@@ -174,8 +180,12 @@ test('--force flag replaces existing different pre-push hook', () => {
 
   const hookPath = path.join(targetDir, '.git', 'hooks', 'pre-push');
 
-  // Replace with custom hook
+  // Replace with custom hook. As above, the installed hookPath is a
+  // symlink to the real hooks/pre-push-policy.sh on Unix; remove it before
+  // writing so this doesn't clobber the repo's real hook script through
+  // the symlink.
   const customHook = '#!/bin/bash\necho "custom hook"\n';
+  fs.rmSync(hookPath, { force: true });
   fs.writeFileSync(hookPath, customHook);
 
   // Second scaffold with --force should replace
