@@ -34,7 +34,9 @@ const MEMORY_TEMPLATE = path.join(
 function runCli(targetDir, args = []) {
   const res = spawnSync(process.execPath, [CLI, targetDir, ...args], {
     encoding: 'utf8',
-    cwd: path.dirname(targetDir)
+    cwd: path.dirname(targetDir),
+    timeout: 30000,
+    killSignal: 'SIGKILL'
   });
   return res;
 }
@@ -43,7 +45,9 @@ function runCliInDir(cwd, args = []) {
   // Invoke CLI without a positional targetDir; uses default
   const res = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
-    cwd: cwd
+    cwd: cwd,
+    timeout: 30000,
+    killSignal: 'SIGKILL'
   });
   return res;
 }
@@ -54,7 +58,7 @@ function createTestDir() {
 
 function gitCmd(cwd, cmd) {
   const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8' });
+  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
 }
 
 test('CLAUDE-TEMPLATE.md has no "[Your " style bare placeholders', () => {
