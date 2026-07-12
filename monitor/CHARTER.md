@@ -27,18 +27,18 @@ Each cycle, `collect-signals.mjs` runs these checks and emits `BRIEF.md` + `SIGN
    default 500 lines / 40 KB). If a log exceeds threshold, emit rotation signal (AUTO tier can
    invoke rotate_logs.py if available); append rotation summary to BRIEF.md.
 
-5. **Junk-script sprawl detection** — scan temp/scratch roots for throwaway `.py`/.mjs`/`.js` files
+5. **Junk-script sprawl detection** *(extended, opt-in via `monitor.extended_signals`)* — scan temp/scratch roots for throwaway `.py`/.mjs`/`.js` files
    older than 24 hours, not in a live session directory (avoid false-positives during active work).
    Count total, estimate quarantinable, list oldest. AUTO tier quarantines confirmed junk into
    `monitor/quarantine/` with manifest.
 
-6. **Stray scripts in repo roots** — scan recent commits (7d) to detect one-off `.py`/`.mjs`/`.sql`
+6. **Stray scripts in repo roots** *(extended, opt-in via `monitor.extended_signals`)* — scan recent commits (7d) to detect one-off `.py`/`.mjs`/`.sql`
    scripts committed directly to repo root (not under proper src/scripts paths). Flag for cleanup.
 
 7. **Security alert review loop** — tail SECURITY-ALERTS.log for new HIGH/MED entries (skip suppressed);
    each new alert noted in BRIEF.md. Monitor agent does semantic review (REAL vs FP) each cycle.
 
-8. **Respawn watch (Rule 6 retry cap)** — parse agent spawn records; normalize descriptions to
+8. **Respawn watch (Rule 6 retry cap)** *(extended, opt-in via `monitor.extended_signals`)* — parse agent spawn records; normalize descriptions to
    prompt-signatures (first ~40 chars, lowercased); count occurrences in recent window (last 50 rows).
    Flag any signature appearing >3 times as probable hung-agent loop → rule 6 cap breached.
    Limitation: heuristic may have false positives for intentional similar-task fan-outs.
@@ -46,8 +46,22 @@ Each cycle, `collect-signals.mjs` runs these checks and emits `BRIEF.md` + `SIGN
 9. **Cost cadence tracking** — every 3rd cycle, harvest agent spawn ledger and append cost tick
    to COST-LOG.md (cycle count, timestamp, model distribution). Flags non-haiku specializations.
 
-10. **Unreviewed agent prompts** — run fleet-prompt-extractor.py (if available) to collect NEW
+10. **Unreviewed agent prompts** *(extended, opt-in via `monitor.extended_signals`)* — run fleet-prompt-extractor.py (if available) to collect NEW
     spawns since last review; emit count in SIGNALS.json + note in BRIEF.md.
+
+## Extended signals (opt-in)
+
+Checks 5, 6, 8, and 10 are marked as "extended" — they are disabled by default but can be
+enabled via configuration:
+
+- **Config key:** `monitor.extended_signals` (boolean, default: `false`) in aesop.config.json
+- **Env override:** `AESOP_EXTENDED_SIGNALS` (string `'true'` or `'1'` to enable)
+- **Precedence:** env var > config file > default (false)
+
+When disabled, extended checks emit `{"skipped": true}` in SIGNALS.json and BRIEF.md notes them
+as "extended (off)". AUTO junk-quarantine action only runs when the junk check is enabled.
+PROPOSE-tier signals for extended checks (respawn-watch-breach, stray-repo-scripts) are only
+emitted when extended_signals is ON.
 
 ## Action tiers
 
@@ -56,7 +70,7 @@ Each cycle, `collect-signals.mjs` runs these checks and emits `BRIEF.md` + `SIGN
   - Log rotation (invoke rotate_logs.py if available; fail-open if not).
   - Persist heartbeat write (`.monitor-heartbeat` update after cycle).
   - Quarantine confirmed-junk scripts: move old temp `.py`/`.mjs` (not live session) into
-    `monitor/quarantine/` with manifest — never delete outright.
+    `monitor/quarantine/` with manifest — never delete outright (only when extended_signals is ON).
 
 - **PROPOSE (write to `PROPOSALS.md`, do NOT apply — needs user approval):**
   - Changes to cardinal rules or agent configuration.

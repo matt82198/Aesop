@@ -146,6 +146,7 @@ test('healthy signals: clean fixture does not create PROPOSALS.md', async (t) =>
   const fixture = createFixture();
   try {
     // Run with empty fixture (no alerts, no stray scripts, no respawn watch, no stale memory)
+    // Extended signals are OFF by default, so they'll be skipped
     runCollector(fixture.root);
 
     // PROPOSALS.md should NOT be created for a healthy fixture
@@ -162,8 +163,10 @@ test('healthy signals: clean fixture does not create PROPOSALS.md', async (t) =>
     // Verify the signals indicate healthy state
     const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
     assert.strictEqual(signals.alerts.highMedCount, 0, 'Should have no HIGH/MED alerts');
-    assert.strictEqual(signals.strayRepo.length, 0, 'Should have no stray repo scripts');
-    assert.strictEqual(signals.respawnWatch.length, 0, 'Should have no respawn watch breaches');
+    // When extended signals are OFF, strayRepo and respawnWatch are { skipped: true }
+    // When enabled, they would be arrays; for this test with defaults they're skipped
+    assert.strictEqual(signals.strayRepo.skipped, true, 'Stray repo check should be skipped when extended_signals OFF');
+    assert.strictEqual(signals.respawnWatch.skipped, true, 'Respawn watch check should be skipped when extended_signals OFF');
   } finally {
     fixture.cleanup();
   }
@@ -201,12 +204,12 @@ test('config precedence: TEMP_ROOT from config file honored when env var unset',
   try {
     fs.mkdirSync(configTempRoot, { recursive: true });
 
-    // Create aesop.config.json with custom TEMP_ROOT
+    // Create aesop.config.json with custom TEMP_ROOT and extended_signals: true
     const configPath = path.join(fixture.root, 'aesop.config.json');
     fs.writeFileSync(configPath, JSON.stringify({
       temp_root: configTempRoot,
       repos: [],
-      monitor: { log_max_lines: 500, log_max_kb: 40 }
+      monitor: { log_max_lines: 500, log_max_kb: 40, extended_signals: true }
     }), 'utf8');
 
     // Create an old junk script in the config-specified temp directory
@@ -261,6 +264,163 @@ test('gap documentation: PROPOSALS.md fixture injection limitations', (t) => {
   // This constraint is acceptable for current tests because we control
   // AESOP_ROOT and can create the expected directory structure.
   assert.ok(true, 'Gap documented in test comments');
+});
+
+// === Extended signals flag (checks 5, 6, 8, 10) ===
+test('extended signals OFF (default): checks 5/6/8/10 emit skipped and dirs not walked', async (t) => {
+  const fixture = createFixture();
+  const tempDir = path.join(os.tmpdir(), 'aesop-ext-off-' + Math.random().toString(36).slice(2, 9));
+
+  try {
+    // Create an old junk script that WOULD be detected if check 5 ran
+    fs.mkdirSync(tempDir, { recursive: true });
+    const junkPath = path.join(tempDir, 'would_be_detected.py');
+    const oldTime = Date.now() - (25 * 60 * 60 * 1000); // 25 hours ago
+    fs.writeFileSync(junkPath, 'print("junk")\n', 'utf8');
+    fs.utimesSync(junkPath, oldTime / 1000, oldTime / 1000);
+
+    // Run collector with extended_signals OFF (default; env not set)
+    const env = {
+      ...process.env,
+      AESOP_ROOT: fixture.root,
+      BRAIN_ROOT: path.join(fixture.root, '..', '.claude'),
+      SCRIPTS_ROOT: path.join(fixture.root, '..', 'scripts'),
+      TEMP_ROOT: tempDir,
+    };
+    delete env.AESOP_EXTENDED_SIGNALS; // Ensure OFF
+
+    const result = spawnSync('node', [collectorPath], {
+      env,
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+
+    assert.strictEqual(result.status, 0, 'Collector should succeed with extended signals OFF');
+
+    // Verify SIGNALS.json contains skipped markers for checks 5, 6, 8, 10
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+
+    assert.strictEqual(signals.junk.skipped, true, 'Check 5 (junk) should have skipped marker');
+    assert.strictEqual(signals.strayRepo.skipped, true, 'Check 6 (strayRepo) should have skipped marker');
+    assert.strictEqual(signals.respawnWatch.skipped, true, 'Check 8 (respawnWatch) should have skipped marker');
+    assert.strictEqual(signals.unreviewedPrompts.skipped, true, 'Check 10 (unreviewedPrompts) should have skipped marker');
+
+    // Verify junk script in temp dir was NOT detected (temp dir not walked)
+    // When skipped, total property should not exist (or be undefined)
+    assert.ok(!signals.junk.total, 'Junk detection should not have total when skipped');
+
+    // Verify BRIEF.md lists extended signals as "extended (off)" in one line
+    const briefPath = path.join(fixture.monitorDir, 'BRIEF.md');
+    const brief = fs.readFileSync(briefPath, 'utf8');
+    assert.ok(brief.includes('extended (off)'), 'BRIEF.md should indicate extended signals are off');
+    // Verify no individual sections for junk/stray/respawn/prompts
+    assert.ok(!brief.includes('## Junk-script sprawl'), 'BRIEF.md should not have individual junk section when extended OFF');
+    assert.ok(!brief.includes('## Stray repo scripts'), 'BRIEF.md should not have individual stray section when extended OFF');
+  } finally {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (e) {}
+    fixture.cleanup();
+  }
+});
+
+test('extended signals ON: checks 5/6/8/10 run normally and detect issues', async (t) => {
+  const fixture = createFixture();
+  const tempDir = path.join(os.tmpdir(), 'aesop-ext-on-' + Math.random().toString(36).slice(2, 9));
+
+  try {
+    // Create an old junk script that SHOULD be detected when check 5 runs
+    fs.mkdirSync(tempDir, { recursive: true });
+    const junkPath = path.join(tempDir, 'should_be_detected.py');
+    const oldTime = Date.now() - (25 * 60 * 60 * 1000); // 25 hours ago
+    fs.writeFileSync(junkPath, 'print("junk")\n', 'utf8');
+    fs.utimesSync(junkPath, oldTime / 1000, oldTime / 1000);
+
+    // Run collector with extended_signals ON
+    const env = {
+      ...process.env,
+      AESOP_ROOT: fixture.root,
+      BRAIN_ROOT: path.join(fixture.root, '..', '.claude'),
+      SCRIPTS_ROOT: path.join(fixture.root, '..', 'scripts'),
+      TEMP_ROOT: tempDir,
+      AESOP_EXTENDED_SIGNALS: 'true',
+    };
+
+    const result = spawnSync('node', [collectorPath], {
+      env,
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+
+    assert.strictEqual(result.status, 0, 'Collector should succeed with extended signals ON');
+
+    // Verify SIGNALS.json contains actual data for checks 5, 6, 8, 10 (not skipped)
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+
+    assert.ok(!signals.junk.skipped, 'Check 5 (junk) should NOT have skipped marker when enabled');
+    assert.ok(signals.junk.total > 0, 'Check 5 should detect junk script when enabled');
+
+    // Verify BRIEF.md includes individual sections for extended checks
+    const briefPath = path.join(fixture.monitorDir, 'BRIEF.md');
+    const brief = fs.readFileSync(briefPath, 'utf8');
+    assert.ok(brief.includes('## Junk-script sprawl'), 'BRIEF.md should have junk section when extended ON');
+  } finally {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (e) {}
+    fixture.cleanup();
+  }
+});
+
+test('extended signals: config file honor AESOP_EXTENDED_SIGNALS from aesop.config.json', async (t) => {
+  const fixture = createFixture();
+
+  try {
+    // Create aesop.config.json with extended_signals: true
+    const configPath = path.join(fixture.root, 'aesop.config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      monitor: {
+        extended_signals: true,
+        log_max_lines: 500,
+        log_max_kb: 40
+      },
+      repos: [],
+    }), 'utf8');
+
+    // Run without env override; should use config value
+    const env = {
+      ...process.env,
+      AESOP_ROOT: fixture.root,
+      BRAIN_ROOT: path.join(fixture.root, '..', '.claude'),
+      SCRIPTS_ROOT: path.join(fixture.root, '..', 'scripts'),
+    };
+    delete env.AESOP_EXTENDED_SIGNALS;
+
+    const result = spawnSync('node', [collectorPath], {
+      env,
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+
+    assert.strictEqual(result.status, 0, 'Collector should respect config file extended_signals');
+
+    // Verify checks 5/6/8/10 are NOT skipped (enabled via config)
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+
+    // At least one of the extended checks should be present (not skipped)
+    const hasNonSkipped =
+      !signals.junk.skipped ||
+      !signals.strayRepo.skipped ||
+      !signals.respawnWatch.skipped ||
+      !signals.unreviewedPrompts.skipped;
+
+    assert.ok(hasNonSkipped, 'At least one extended check should run when config sets extended_signals: true');
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 // === Item 3: Heartbeat check at startup ===
@@ -387,8 +547,8 @@ test('AUTO action: junk quarantine moves old temp scripts to monitor/quarantine/
     fs.writeFileSync(oldJunkPath, '#!/usr/bin/env python3\nprint("junk")\n', 'utf8');
     fs.utimesSync(oldJunkPath, oldTime / 1000, oldTime / 1000);
 
-    // Run collector with this TEMP_ROOT
-    const result = runCollector(fixture.root, { TEMP_ROOT: tempDir, AESOP_MONITOR_FORCE: '1' });
+    // Run collector with this TEMP_ROOT and extended_signals enabled
+    const result = runCollector(fixture.root, { TEMP_ROOT: tempDir, AESOP_MONITOR_FORCE: '1', AESOP_EXTENDED_SIGNALS: 'true' });
     assert.ok(result.stdout, 'Collector should run');
 
     // Check that junk was detected and possibly quarantined

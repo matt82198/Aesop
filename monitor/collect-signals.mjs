@@ -47,9 +47,11 @@ const STATE_DIR = process.env.AESOP_STATE_ROOT ||
 
 const MON = path.join(AESOP_ROOT, 'monitor');
 
-// Config-driven thresholds
+// Config-driven thresholds and feature flags
 let repos = [];
 let logThresholds = { maxLines: 500, maxKb: 40 };
+let extendedSignals = false;
+
 if (config.repos && Array.isArray(config.repos)) {
   repos = config.repos.map(r => r.path);
 }
@@ -59,6 +61,15 @@ if (config.monitor && config.monitor.log_max_lines) {
 if (config.monitor && config.monitor.log_max_kb) {
   logThresholds.maxKb = config.monitor.log_max_kb;
 }
+
+// Precedence: env > config > default
+// AESOP_EXTENDED_SIGNALS env var takes precedence
+if (process.env.AESOP_EXTENDED_SIGNALS !== undefined) {
+  extendedSignals = process.env.AESOP_EXTENDED_SIGNALS === 'true' || process.env.AESOP_EXTENDED_SIGNALS === '1';
+} else if (config.monitor && config.monitor.extended_signals !== undefined) {
+  extendedSignals = config.monitor.extended_signals;
+}
+// else default is false (already set above)
 
 const now = Date.now();
 const HOUR = 3600e3;
@@ -412,9 +423,9 @@ function performAutoLogRotation(logFiles, actionsLogPath) {
 
   // Fallback: look in the actual aesop source directory (for tests/CI environments)
   if (!fs.existsSync(rotateLogsPy)) {
-    // Try to find the real aesop tools directory by looking for the real monitor/CLAUDE.md
-    const realMonitorClaude = path.join(__dirname, 'CLAUDE.md');
-    if (fs.existsSync(realMonitorClaude)) {
+    // Try to find the real aesop tools directory by looking for the real monitor/CHARTER.md
+    const realMonitorCharter = path.join(__dirname, 'CHARTER.md');
+    if (fs.existsSync(realMonitorCharter)) {
       rotateLogsPy = path.join(__dirname, '..', 'tools', 'rotate_logs.py');
     }
   }
@@ -571,12 +582,16 @@ const staleLoops = checkHeartbeats();
 const gitState = checkGitState();
 const memory = checkMemoryFreshness();
 const logFiles = checkLogFiles();
-const junk = detectJunkScripts();
-const strayRepo = detectStrayRepoScripts();
+
+// Extended signal checks (5, 6, 8, 10) — skipped if extended_signals is OFF
+const junk = extendedSignals ? detectJunkScripts() : { skipped: true };
+const strayRepo = extendedSignals ? detectStrayRepoScripts() : { skipped: true };
+
 const alerts = checkSecurityAlerts();
-const respawnWatch = detectRespawnWatch();
+
+const respawnWatch = extendedSignals ? detectRespawnWatch() : { skipped: true };
 const { cycleCount, costTick } = trackCostCadence();
-const unreviewedPrompts = checkUnreviewedPrompts();
+const unreviewedPrompts = extendedSignals ? checkUnreviewedPrompts() : { skipped: true };
 
 // === Perform AUTO Actions ===
 // (Executed before emitting signals, so outputs reflect actions taken)
@@ -595,10 +610,10 @@ try {
 // AUTO: Log rotation
 performAutoLogRotation(logFiles, actionsLogPath);
 
-// AUTO: Junk quarantine
+// AUTO: Junk quarantine (only run if junk check was not skipped)
 const quarantineDir = path.join(MON, 'quarantine');
 const manifestPath = path.join(quarantineDir, 'MANIFEST.tsv');
-if (junk._scripts && junk.quarantinable > 0) {
+if (!junk.skipped && junk._scripts && junk.quarantinable > 0) {
   performAutoJunkQuarantine(junk._scripts, quarantineDir, manifestPath);
 }
 
@@ -662,39 +677,49 @@ if (needsRotation.length === 0) {
 }
 brief.push('');
 
-brief.push('## Junk-script sprawl (temp/scratch)');
-brief.push(`- ${junk.total} total scripts, ${(junk.bytes / 1024).toFixed(0)}kb`);
-brief.push(`  Quarantinable (>24h, not live): ${junk.quarantinable}`);
-if (junk.oldest.length > 0) {
-  brief.push('  Oldest:');
-  for (const o of junk.oldest) {
-    brief.push(`    ${o}`);
+// Extended signals section (if disabled, just note they're off; if enabled, show details)
+if (extendedSignals) {
+  brief.push('## Junk-script sprawl (temp/scratch)');
+  brief.push(`- ${junk.total} total scripts, ${(junk.bytes / 1024).toFixed(0)}kb`);
+  brief.push(`  Quarantinable (>24h, not live): ${junk.quarantinable}`);
+  if (junk.oldest.length > 0) {
+    brief.push('  Oldest:');
+    for (const o of junk.oldest) {
+      brief.push(`    ${o}`);
+    }
   }
-}
-if (strayRepo.length > 0) {
+  if (strayRepo.length > 0) {
+    brief.push('');
+    brief.push('## Stray repo scripts (7d)');
+    for (const s of strayRepo) {
+      brief.push(`- ${s}`);
+    }
+  }
   brief.push('');
-  brief.push('## Stray repo scripts (7d)');
-  for (const s of strayRepo) {
-    brief.push(`- ${s}`);
-  }
+} else {
+  brief.push('## Extended signal checks');
+  brief.push('Checks 5 (junk-script sprawl), 6 (stray-repo scripts), 8 (respawn-watch), 10 (unreviewed-prompts) are **extended (off)** — enable via `monitor.extended_signals: true` in aesop.config.json or `AESOP_EXTENDED_SIGNALS=true`.');
+  brief.push('');
 }
-brief.push('');
 
 brief.push('## Security');
 brief.push(`- Alert log: ${alerts.count} entries, ${alerts.highMedCount} HIGH/MED`);
 brief.push('');
 
-brief.push('## Respawn watch (Rule 6 retry cap)');
-if (respawnWatch.length === 0) {
-  brief.push('✓ No retry-cap breaches (all signatures ≤3 occurrences).');
-} else {
-  brief.push(`⚠ **${respawnWatch.length} signature(s) exceeded 3-attempt limit:**`);
-  for (const rw of respawnWatch) {
-    brief.push(`  - ${rw.warning}`);
+// Respawn watch (check 8 — extended)
+if (extendedSignals) {
+  brief.push('## Respawn watch (Rule 6 retry cap)');
+  if (respawnWatch.length === 0) {
+    brief.push('✓ No retry-cap breaches (all signatures ≤3 occurrences).');
+  } else {
+    brief.push(`⚠ **${respawnWatch.length} signature(s) exceeded 3-attempt limit:**`);
+    for (const rw of respawnWatch) {
+      brief.push(`  - ${rw.warning}`);
+    }
+    brief.push('  (Note: distinguish legitimate fan-outs from identical retries; manual review recommended.)');
   }
-  brief.push('  (Note: distinguish legitimate fan-outs from identical retries; manual review recommended.)');
+  brief.push('');
 }
-brief.push('');
 
 brief.push('## Cost tracking');
 brief.push(`- Cycle: ${cycleCount}${costTick ? ' — tick recorded' : ''}`);
@@ -703,30 +728,38 @@ if (costTick) {
 }
 brief.push('');
 
-brief.push('## Unreviewed prompts');
-brief.push(`- ${unreviewedPrompts} new prompt(s) awaiting semantic review`);
-brief.push('');
+// Unreviewed prompts (check 10 — extended)
+if (extendedSignals) {
+  brief.push('## Unreviewed prompts');
+  brief.push(`- ${unreviewedPrompts} new prompt(s) awaiting semantic review`);
+  brief.push('');
+}
 
 brief.push('_Refinement points → act per CHARTER.md (AUTO safe, PROPOSE rule changes). Goal is fixed._');
 
 // === Emit PROPOSE-tier proposals ===
 // Only emit for signals that warrant user review per CHARTER.md action tiers
-if (respawnWatch.length > 0) {
-  emitProposal(
-    'respawn-watch-breach',
-    `Rule 6 retry cap breached: ${respawnWatch.length} agent signature(s) appeared >3 times in recent spawn history. This indicates either an intentional parallel fan-out or a hung-agent loop.`,
-    `Review FLEET-LEDGER.md to distinguish legitimate concurrent spawns from identical retries. If retries are unintentional, investigate root cause and add guardrails to prevent re-dispatch. Consider updating monitoring thresholds or retry strategy.`
-  );
+
+// Proposals for extended checks (only if extended_signals is ON)
+if (extendedSignals) {
+  if (respawnWatch.length > 0) {
+    emitProposal(
+      'respawn-watch-breach',
+      `Rule 6 retry cap breached: ${respawnWatch.length} agent signature(s) appeared >3 times in recent spawn history. This indicates either an intentional parallel fan-out or a hung-agent loop.`,
+      `Review FLEET-LEDGER.md to distinguish legitimate concurrent spawns from identical retries. If retries are unintentional, investigate root cause and add guardrails to prevent re-dispatch. Consider updating monitoring thresholds or retry strategy.`
+    );
+  }
+
+  if (strayRepo.length > 0) {
+    emitProposal(
+      'stray-repo-scripts',
+      `${strayRepo.length} script file(s) committed to repo root in past 7 days: ${strayRepo.join(', ')}. Scripts should live in dedicated src/ or scripts/ paths, not repo root.`,
+      `Move stray scripts to proper paths per project discipline. Update CONTRIBUTING.md if repo structure is ambiguous. Add pre-commit hook or CI check to enforce.`
+    );
+  }
 }
 
-if (strayRepo.length > 0) {
-  emitProposal(
-    'stray-repo-scripts',
-    `${strayRepo.length} script file(s) committed to repo root in past 7 days: ${strayRepo.join(', ')}. Scripts should live in dedicated src/ or scripts/ paths, not repo root.`,
-    `Move stray scripts to proper paths per project discipline. Update CONTRIBUTING.md if repo structure is ambiguous. Add pre-commit hook or CI check to enforce.`
-  );
-}
-
+// Core proposals (always emitted)
 if (alerts.highMedCount > 0) {
   emitProposal(
     'security-alerts-high-med',

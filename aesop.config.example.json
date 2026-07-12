@@ -30,6 +30,7 @@
   ],
   "monitor": {
     "log_max_lines": 500,
-    "log_max_kb": 40
+    "log_max_kb": 40,
+    "extended_signals": false
   }
 }
