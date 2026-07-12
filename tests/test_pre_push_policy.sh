@@ -12,9 +12,11 @@ TEST_ROOT="$TMPDIR/pre_push_test_$$"
 trap "rm -rf '$TEST_ROOT'" EXIT
 mkdir -p "$TEST_ROOT"
 
-# Import hook functions by sourcing only function definitions, not main()
-# This avoids executing main() which would try to read from stdin
-eval "$(sed '/^main() {/,/^}/d; /^main "\$@"/d' "$HOOK_SCRIPT")"
+# Import hook functions by sourcing the hook script directly.
+# The hook guards its own "main "$@"" call with a BASH_SOURCE check so
+# sourcing it here only defines functions and never executes main()
+# or reads from stdin.
+source "$HOOK_SCRIPT"
 
 test_passed=0
 test_failed=0
