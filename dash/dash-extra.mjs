@@ -124,13 +124,26 @@ function parseAgentJsonl(filePath) {
           metadata.lastActivity = obj.timestamp;
         }
 
-        // Accumulate tokens from assistant messages
+        // (token accumulation is a separate FULL-file pass below — sampling
+        //  only 100 lines under-counts tokens badly on long transcripts)
+      } catch {
+        // Silently skip malformed JSON lines
+        continue;
+      }
+    }
+
+    // Token total: scan EVERY line (usage records are spread throughout the
+    // transcript, not just the sampled head/tail). Cheap substring pre-filter
+    // keeps this fast on huge files by JSON-parsing only candidate lines.
+    for (const line of lines) {
+      if (!line.includes('"usage"')) continue;
+      try {
+        const obj = JSON.parse(line);
         if (obj.type === 'assistant' && obj.usage) {
           const { input_tokens = 0, output_tokens = 0 } = obj.usage;
           metadata.tokensUsed += input_tokens + output_tokens;
         }
       } catch {
-        // Silently skip malformed JSON lines
         continue;
       }
     }
@@ -193,8 +206,13 @@ files = files
     return { f, mtime };
   })
   .filter(x => now - x.mtime < 12 * 60 * 1000)
-  .sort((a, b) => b.mtime - a.mtime)
-  .slice(0, 8);
+  .sort((a, b) => b.mtime - a.mtime);
+
+// True active total. The 8 below is a TUI terminal-space limit ONLY — not the
+// real count. The web (--json) emits ALL active agents; the TUI shows 8 + "N more".
+const totalActive = files.length;
+const runningCount = files.filter(x => now - x.mtime < 120 * 1000).length;
+const TUI_ROW_CAP = 8;
 
 // Extract description/hint from first ~60KB of agent transcript
 function label(filePath) {
@@ -218,14 +236,13 @@ function label(filePath) {
 // TUI output: render heading
 out.push(`${c.B}  FLEET AGENTS${c.X} ${c.D}(green=running · severity-colored if flagged)${c.X}`);
 
-if (files.length === 0) {
+if (totalActive === 0) {
   out.push(`    ${c.D}(no active fleet agents in last 12 min)${c.X}`);
 }
 
-let runningCount = 0;
-
-// Render each agent
-for (const { f, mtime } of files) {
+// Render each agent (TUI caps rows to TUI_ROW_CAP for terminal space; the counts
+// above are the true totals across all active agents)
+for (const { f, mtime } of files.slice(0, TUI_ROW_CAP)) {
   const basename = path.basename(f);
   const ageSeconds = Math.round((now - mtime) / 1000);
 
@@ -234,8 +251,6 @@ for (const { f, mtime } of files) {
 
   let statusColor = ageSeconds < 120 ? c.G : c.D;
   let statusText = ageSeconds < 120 ? 'running' : 'idle';
-
-  if (ageSeconds < 120) runningCount++;
 
   // Recolor based on alert severity
   if (alertsForAgent.some(l => l.includes('SUSPICIOUS'))) {
@@ -265,8 +280,12 @@ for (const { f, mtime } of files) {
   );
 }
 
-if (files.length > 0) {
-  out.push(`    ${c.D}${runningCount} running, ${files.length - runningCount} idle (last 12 min)${c.X}`);
+if (totalActive > TUI_ROW_CAP) {
+  out.push(`    ${c.D}… +${totalActive - TUI_ROW_CAP} more active (showing ${TUI_ROW_CAP} of ${totalActive})${c.X}`);
+}
+
+if (totalActive > 0) {
+  out.push(`    ${c.D}${runningCount} running, ${totalActive - runningCount} idle (last 12 min)${c.X}`);
 }
 
 // Output

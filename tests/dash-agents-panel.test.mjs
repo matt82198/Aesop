@@ -302,8 +302,32 @@ test('cap JSONL read size: only read first 50 + last 50 lines for large files', 
     const agent = agents.find(a => a.id.includes('large001'));
     assert.ok(agent, 'agent should be found');
     assert.ok(agent.promptFull, 'prompt should be extracted from first line');
-    // Tokens should be reasonable (not accumulating all 500 messages if we're capping reads)
-    assert.ok(agent.tokensUsed > 0, 'tokens should be accumulated');
+    // Tokens MUST be the EXACT full-file total, not the sampled first-50+last-50
+    // subset (that sampling under-counted long transcripts by >60%).
+    // 500 assistant msgs x (10 + 5) + 1 final (50 + 25) = 7575.
+    assert.strictEqual(agent.tokensUsed, 7575,
+      'tokensUsed must sum ALL assistant usage across the full file, not a sampled subset');
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('BUG4: --json emits ALL active agents (no hard 8-cap) so the web count is the true total', () => {
+  const fixture = makeFixture();
+  try {
+    const N = 12; // more than the old .slice(0, 8) cap
+    for (let i = 0; i < N; i++) {
+      const p = path.join(fixture.transcriptsRoot, `agent-cap${String(i).padStart(3, '0')}.jsonl`);
+      fs.writeFileSync(p, JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: `task ${i}` },
+        timestamp: new Date().toISOString()
+      }) + '\n');
+    }
+    const agents = runScript(fixture);
+    // Old code sliced to 8 -> web header showed "8 active" for 12 real agents.
+    assert.strictEqual(agents.length, N,
+      `--json must emit all ${N} active agents (was capped at 8), got ${agents.length}`);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
