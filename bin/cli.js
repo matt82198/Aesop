@@ -51,13 +51,21 @@ After scaffolding with --name, cd into the directory and:
   process.exit(0);
 }
 
-// Extract targetDir (first non-flag argument)
-const allFlagNames = ['--name', '--domains', '--repos', '--force'];
-const targetDir = args.filter(arg =>
+// Extract targetDir (first non-flag argument, excluding flag values)
+// Build set of indices consumed as flag values (tokens after --name/--domains/--repos)
+const consumedIndices = new Set();
+const flagsWithValues = ['--name', '--domains', '--repos'];
+for (let i = 0; i < args.length; i++) {
+  if (flagsWithValues.includes(args[i]) && i + 1 < args.length) {
+    consumedIndices.add(i + 1);
+  }
+}
+// targetDir = first non-flag, non-consumed argument, else default to 'aesop-fleet'
+const targetDir = args.find((arg, idx) =>
   !arg.startsWith('--') &&
   !arg.startsWith('-') &&
-  !allFlagNames.some((flag, idx, arr) => idx > 0 && args[idx - 1] === flag && arg === args[args.indexOf(flag) + 1])
-)[0] || 'aesop-fleet';
+  !consumedIndices.has(idx)
+) || 'aesop-fleet';
 
 // Parse onboarding flags
 const projectName = getFlag('--name');
@@ -246,6 +254,18 @@ function installPrePushHook(targetDir, templateRoot) {
     fs.mkdirSync(gitHooksDir, { recursive: true });
   }
 
+  // SECURITY: Check if gitHooksDir is a symlink (refuse to install through symlinked dir)
+  try {
+    const hooksLstat = fs.lstatSync(gitHooksDir);
+    if (hooksLstat.isSymbolicLink()) {
+      console.warn('⚠ Warning: .git/hooks directory is a symlink (security risk)');
+      console.warn('  Skipping hook installation. Please remove the symlink and re-run scaffold.');
+      return;
+    }
+  } catch (e) {
+    // lstat failed; proceed (may be a permission issue)
+  }
+
   const hookSource = path.join(templateRoot, 'hooks', 'pre-push-policy.sh');
   const hookDest = path.join(gitHooksDir, 'pre-push');
 
@@ -258,6 +278,18 @@ function installPrePushHook(targetDir, templateRoot) {
 
   // Check if hook already exists
   if (fs.existsSync(hookDest)) {
+    // SECURITY: Check if existing hookDest is a symlink (refuse to follow it)
+    try {
+      const destLstat = fs.lstatSync(hookDest);
+      if (destLstat.isSymbolicLink()) {
+        console.warn('⚠ Warning: Existing .git/hooks/pre-push is a symlink (security risk)');
+        console.warn('  Skipping hook installation. Please remove the symlink and re-run scaffold.');
+        return;
+      }
+    } catch (e) {
+      // lstat failed; proceed
+    }
+
     const existingContent = fs.readFileSync(hookDest, 'utf8');
 
     // If content matches, it's idempotent, do nothing
