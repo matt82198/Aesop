@@ -22,17 +22,13 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `wave-5-landing` (2026-07-12, current)
-Audit #1 (post-clear five-lens re-audit) produced 9 item-branches + 2 cross-repo ports —
-see AUDIT-BACKLOG.md for live statuses. Merged so far: PRs #17–#24. In flight:
-fix/backup-fleet-nul-protocol, fix/monitor-proposals-races, fix/audit-log-hardening,
-fix/reconstitute-target-validation, fix/ci-run-all-suites, feat/dash-agents-panel,
-plus the two ports (~/scripts scanner skip-fix; conductor3 lock-ownership re-port —
-conductor3 branch fix/watchdog-atomic-lock MUST NOT merge without it).
-INCIDENT (resolved): 3 concurrent conductor3 watchdog daemons raced backup cycles and
-twice reverted uncommitted aesop working-tree files (~13:30–13:50); instances killed,
-single daemon restarted, atomic-lock port on the conductor3 branch. Forensics:
-conductor3 FLEET-BACKUP.log:554-568.
+## Phase: `wave-6-p0-ci-landed` (2026-07-12, current)
+Wave-6 P0 security fixes all merged to main (PRs #36–#41); CI-repair wave (PRs #42–#46) fixed
+5 pre-existing Linux-only defects exposed by enabling the test gate. Main push-CI now fully
+green (all 8 test/scan steps). Root cause documented: bash -n-only CI never executed any suite
+for the repo's life. See AUDIT-BACKLOG.md for complete P0/CI-repair status + follow-ups.
+
+Previous wave (audit #1) merged PRs #17–#35; all three phases of wave 5 now closed.
 
 ## Upcoming phases
 1. **`wave-5-close`** — land + merge the 6 remaining branches and 2 ports; full
@@ -62,7 +58,7 @@ conductor3 FLEET-BACKUP.log:554-568.
   dispatched.
 
 ## NEXT STEPS
-1. Merge remaining wave-5 PRs as they go green; flip backlog boxes per merge.
-2. Wave-5 final-catch on merged main; then launch audit #2.
-3. Keep the web dash (:8770) restarted onto merged main after UI-touching merges.
+1. Wave-6 P1 tier (9 items, per standing refinement loop) on green main.
+2. Wave-6 P2/P3 tiers and user-decision items.
+3. Re-audit (audit #3) vs five pillars post-P0–P3 landing.
 4. Update this file at each phase boundary; collapse finished phases into history.
