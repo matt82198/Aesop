@@ -34,7 +34,17 @@ disjoint ownership, TDD-first). Proactive: never idle while agents run. On sessi
 death: resume from this file — waves in flight are listed under Phase.
 
 ## Phase
-`wave-3-p0-inflight` (2026-07-12, post-/power resume) — all 8 P0 items + reconstitute
+`backlog-cleared` (2026-07-12) — ENTIRE AUDIT-BACKLOG.md is ✅: 8 P0, all P1, all P2,
+and both ⏸ items (user approved: domain-CLAUDE.md collapse into root — lossless, marker
+reader repointed to CHARTER.md; monitor.extended_signals flag, default off). Live gate
+~/scripts/secret_scan.py hardened too (claude-scripts 314cb25). /power default dashboard
+switched to web dash :8770 (brain 60d4c2b); backlog panel on the dash (/api/backlog).
+Final-catch green: 60 npm / all py / 11 hook / 16 reconstitute / 15 backup-fleet.
+NEXT: re-audit wave vs five pillars per standing order (2 consecutive clean audits ends
+the loop); then merge PR #16 pending user; after merge, re-sync installed hook
+~/.claude/hooks/force-haiku-subagents.mjs from repo source.
+
+Prior phase `wave-3-p0-inflight` (2026-07-12, post-/power resume) — all 8 P0 items + reconstitute
 --test P2 flipped 🔵 in AUDIT-BACKLOG.md and dispatched as 5 TDD-first Haiku implementers
 with disjoint file ownership: (A) pre-push-policy.sh+secret_scan.py [pragma + wrong-branch],
 (B) backup-fleet.sh [untracked-scan + unquoted-array], (C) reconstitute.sh+config.example
