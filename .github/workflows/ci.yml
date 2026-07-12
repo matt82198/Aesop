@@ -25,7 +25,7 @@ jobs:
       - name: Node syntax check
         run: |
           git ls-files '*.mjs' | while read file; do
-            bash -n "$file" || exit 1
+            node --check "$file" || exit 1
           done
 
       - name: Shell syntax check
