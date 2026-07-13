@@ -5,6 +5,25 @@ All notable changes to Aesop are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Work-item Tracker**: 4-lane kanban dashboard (proposed | ranked | in-progress | done) with full CRUD API and SSE updates, priority chips (P0-P3), expandable item details, and archive support.
+- **Orchestrator Status Panel**: Real-time activity, phase, and age display for orchestrators with stale detection (>30m).
+- **ASCII Banner**: Animated audit-phase indicator (tortoise + magnifying glass) in dashboard.
+- **UI Module Refactoring**: Split monolithic `serve.py` into focused modules (`config.py`, `csrf.py`, `render.py`, `handler.py`, `collectors.py`, `agents.py`, `sse.py`) with templates in `ui/templates/`.
+
+### Improved
+- **Security Hardening**: CSRF protection on `/api/tracker create`, XSS whitelist for tracker `pr_link` (http/https only, blocks `javascript:`), fail-closed lock acquisition with PID liveness verification.
+- **Stability**: Fixed SSE exception handling, timezone-aware datetime collection, stale lock timestamp spoofing prevention.
+- **Lock Robustness**: Verify owner PID liveness before breaking stale locks; exponential backoff on acquisition.
+
+### Fixed
+- Tracker render lanes when empty; CSRF token handling on add-item form.
+- Orchestrator status encoding (cp1252 byte handling).
+- SSE undefined exception binding in broadcast cleanup.
+- Collector timezone awareness and import hygiene.
+
 ## [0.1.0-beta.3] - 2026-07-12
 
 ### Added

@@ -157,7 +157,9 @@ python $AESOP_ROOT/ui/serve.py
 
 Opens `http://localhost:8770` with:
 - Real-time daemon heartbeats and liveness
-- Active subagent tracking
+- **Work-item Tracker**: 4-lane kanban board (proposed | ranked | in-progress | done) for orchestration tasks
+- **Orchestrator Status**: Activity, phase, and age display for active orchestrators
+- Active subagent tracking with expandable agent details
 - Security alerts panel
 - Recent events log
 - Inbox for orchestrator communication
