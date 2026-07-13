@@ -106,6 +106,24 @@ class TestPragmaNotSoftensFatalSecrets(unittest.TestCase):
         finally:
             os.unlink(temp_path)
 
+    def test_gitignore_scanned_but_git_dir_skipped(self):
+        """.gitignore must be SCANNED; only '.git' as a path COMPONENT is skipped.
+
+        Regression: should_skip_file() used `'.git' in str(path)`, a substring
+        match that also skipped '.gitignore' (and any '.git*' file), so secrets
+        pasted into .gitignore went undetected.
+        """
+        from secret_scan import should_skip_file
+        # .gitignore (and other .git-prefixed files) must NOT be skipped
+        self.assertFalse(should_skip_file(Path("repo/.gitignore")),
+                         ".gitignore must be scanned, not skipped")
+        self.assertFalse(should_skip_file(Path(".gitignore")))
+        self.assertFalse(should_skip_file(Path("repo/.gitattributes")))
+        # actual .git directory contents must still be skipped
+        self.assertTrue(should_skip_file(Path("repo/.git/config")),
+                        ".git/ contents must still be skipped")
+        self.assertTrue(should_skip_file(Path("repo/.git/hooks/pre-push")))
+
     def test_github_token_with_pragma_is_fatal(self):
         """GitHub token with pragma should still be FATAL (exit 1)."""
         # Dummy GitHub-style token (prefix + filler), assembled at runtime

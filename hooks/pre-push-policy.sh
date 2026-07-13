@@ -314,7 +314,7 @@ log_event() {
 
   # Update tail hash sidecar
   if [ -s "$audit_log" ]; then
-    tail -n 1 "$audit_log" | tr -d '\n' | sha256sum | awk '{print $1}' > "$state_dir/.audit-tail-hash" 2>/dev/null
+    tail -n 1 "$audit_log" | tr -d '\n' | compute_sha256 > "$state_dir/.audit-tail-hash" 2>/dev/null
   fi
 
   release_audit_lock "$lock_dir"
@@ -351,7 +351,7 @@ log_block() {
 
   # Update tail hash sidecar
   if [ -s "$audit_log" ]; then
-    tail -n 1 "$audit_log" | tr -d '\n' | sha256sum | awk '{print $1}' > "$state_dir/.audit-tail-hash" 2>/dev/null
+    tail -n 1 "$audit_log" | tr -d '\n' | compute_sha256 > "$state_dir/.audit-tail-hash" 2>/dev/null
   fi
 
   release_audit_lock "$lock_dir"
@@ -635,7 +635,7 @@ run_test_mode() {
       exit 1
     fi
 
-    line1_hash=$(printf '%s' "$line1" | tr -d '\n' | sha256sum | awk '{print $1}')
+    line1_hash=$(printf '%s' "$line1" | tr -d '\n' | compute_sha256)
     line2_prev=$(printf '%s' "$line2" | python3 -c "import sys, json; print(json.load(sys.stdin).get('prev_hash', ''))")
 
     if [ "$line1_hash" != "$line2_prev" ]; then
