@@ -133,5 +133,5 @@ Override with `AESOP_MONITOR_FORCE=true` or `AESOP_MONITOR_FORCE=1` for manual r
   - **Both emitProposal and moveProposal (accept/reject) acquire the PROPOSALS.md.lock before read-check-append/write**.
   - Lock contains pid+timestamp for staleness detection (>60s stale locks are reclaimed).
   - Lock is acquired, held during read-modify-write, released after write completes.
-  - If lock acquisition fails after retries, a warning is emitted to stderr and operations proceed fail-open (relying on filesystem atomicity).
+  - **Fail-closed (P0 wave-8 fix)**: If lock acquisition fails after timeout (default 30s, configurable via AESOP_LOCK_TIMEOUT_MS env var or config), the operation throws an error instead of proceeding. In emitProposal (monitor context), lock failures skip proposal emission for that cycle and retry next cycle. In proposals.mjs CLI (accept/reject), lock failures exit with error code 1 (caller should retry).
 - Quarantine manifest is append-only; never edit entries, only add new ones.

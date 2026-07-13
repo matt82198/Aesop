@@ -9,109 +9,15 @@
  *
  * Default file: monitor/PROPOSALS.md
  * Log file (auto): same directory as PROPOSALS.md, named PROPOSALS-LOG.md
+ *
+ * Lock behavior (P0 wave-8 fix): fail-closed with exponential backoff + stale lock breaking.
+ * On lock timeout (default 30s), throws error instead of proceeding unlocked.
+ * Stale locks (>10min) are detected and broken with warning.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-
-// === Locking utilities (atomic via mkdir on all platforms) ===
-// Use atomic mkdir to create a lock directory; this is atomic across all platforms.
-function acquireLock(proposalsFile) {
-  const lockDir = proposalsFile + '.lock';
-  const lockMarkerFile = path.join(lockDir, 'pid-timestamp.txt');
-  const maxAttempts = 50;
-  let attempt = 0;
-  const STALE_LOCK_THRESHOLD = 60e3; // 60 seconds
-
-  while (attempt < maxAttempts) {
-    try {
-      fs.mkdirSync(lockDir, { exclusive: true });
-      // Lock acquired; write pid+timestamp for staleness detection
-      const lockMarker = `${process.pid}\n${Math.floor(Date.now() / 1000)}\n`;
-      try {
-        fs.writeFileSync(lockMarkerFile, lockMarker, 'utf8');
-      } catch {
-        // Marker write failed, but lock is held; continue
-      }
-      return lockDir;
-    } catch (e) {
-      if (e.code === 'EEXIST') {
-        // Lock exists; check if it's stale
-        try {
-          const markerPath = path.join(lockDir, 'pid-timestamp.txt');
-          const markerContent = fs.readFileSync(markerPath, 'utf8').trim();
-          const lines = markerContent.split('\n');
-          if (lines.length >= 2) {
-            const lockEpoch = parseInt(lines[1], 10);
-            const lockAge = Date.now() - lockEpoch * 1000;
-            if (lockAge > STALE_LOCK_THRESHOLD) {
-              // Stale lock detected; reclaim it
-              try {
-                fs.rmSync(lockDir, { recursive: true, force: true });
-                attempt++; // Retry acquisition after cleanup
-                if (attempt < maxAttempts) {
-                  const start = Date.now();
-                  while (Date.now() - start < 10) {
-                    // Busy-wait briefly
-                  }
-                }
-                continue;
-              } catch {
-                // Cleanup failed; will continue retrying or fail-open
-              }
-            }
-          }
-        } catch {
-          // Could not read marker; assume lock is active
-        }
-        // Lock is held; wait and retry
-        attempt++;
-        if (attempt < maxAttempts) {
-          // Busy-wait for ~10ms per attempt
-          const start = Date.now();
-          while (Date.now() - start < 10) {
-            // tight loop to yield CPU
-          }
-        }
-      } else {
-        throw e;
-      }
-    }
-  }
-
-  // Failed to acquire lock after retries; warn and proceed without lock (fail-open)
-  console.error(`Warning: Could not acquire ${path.basename(proposalsFile)}.lock after ${maxAttempts * 10}ms; proceeding unlocked`);
-  return null;
-}
-
-function releaseLock(lockDir) {
-  if (lockDir) {
-    try {
-      // P0 fix: verify ownership before deletion
-      // Only delete if the pid in the marker matches the current process
-      const markerFile = path.join(lockDir, 'pid-timestamp.txt');
-      let shouldDelete = false;
-      try {
-        const markerContent = fs.readFileSync(markerFile, 'utf8').trim();
-        const lines = markerContent.split('\n');
-        if (lines.length >= 1) {
-          const lockPid = lines[0];
-          if (lockPid === String(process.pid)) {
-            shouldDelete = true;
-          }
-        }
-      } catch {
-        // If we can't read the marker, don't delete (fail-safe)
-      }
-
-      if (shouldDelete) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
-      }
-    } catch {
-      // Ignore cleanup errors
-    }
-  }
-}
+import { acquireLock, releaseLock } from './lock.mjs';
 
 // === Arg parsing ===
 const args = process.argv.slice(2);
@@ -221,10 +127,18 @@ function listProposals() {
 
 /**
  * Move proposal from PROPOSALS.md to PROPOSALS-LOG.md (with atomic locking for multi-writer safety)
+ * P0 wave-8 fix: fail-closed lock acquisition with exponential backoff.
+ * On timeout, throws error (does not fall through to unlocked write).
  */
 function moveProposal(status) {
-  // Acquire lock before any read/write operations
-  const lockDir = acquireLock(proposalsFile);
+  // Acquire lock with fail-closed behavior (throws on timeout)
+  let lockDir;
+  try {
+    lockDir = acquireLock(proposalsFile);
+  } catch (e) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
 
   try {
     // ATOMIC READ: re-read to ensure we have latest content (guard against concurrent appends)
