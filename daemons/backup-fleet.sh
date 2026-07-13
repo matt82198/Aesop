@@ -221,8 +221,9 @@ $real_dir"
     temp_result=$(mktemp)
     process_repo "$dir" > "$temp_result"
     # Read first field (state) and second field (name) using NUL delimiter
-    state=$(sed 's/\x0.*//' "$temp_result")
-    name=$(sed 's/^[^\x0]*\x0//' "$temp_result")
+    # Portable solution: use awk with RS="\0" instead of GNU sed \x0 (BSD/macOS compatible)
+    state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
+    name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
     rm -f "$temp_result"
     [ -z "$state" ] && continue
     if [ "$first" = 1 ]; then

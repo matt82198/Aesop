@@ -421,6 +421,60 @@ test_item4_cleanup_on_abnormal_exit() {
   fi
 }
 
+# ===== ITEM 5: Portable NUL Parsing (P2 fix - no GNU sed) =====
+
+test_item5_portable_nul_parsing() {
+  log "TEST ITEM 5: Portable NUL parsing using awk (P2 fix - BSD/macOS compatible)"
+
+  # Create test data with NUL delimiter
+  local test_data_file=$(mktemp)
+  printf 'CLEAN\0fixture-repo\n' > "$test_data_file"
+
+  # Test 1: Parse using awk with RS="\0" (portable across sed implementations)
+  local state=""
+  local name=""
+  state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$test_data_file")
+  name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$test_data_file" | tr -d '\n')
+
+  if [ "$state" = "CLEAN" ]; then
+    pass "ITEM 5: State correctly parsed using portable awk (got: '$state')"
+  else
+    fail "ITEM 5: State parse failed using portable awk (expected 'CLEAN', got: '$state')"
+  fi
+
+  if [ "$name" = "fixture-repo" ]; then
+    pass "ITEM 5: Name correctly parsed using portable awk (got: '$name')"
+  else
+    fail "ITEM 5: Name parse failed using portable awk (expected 'fixture-repo', got: '$name')"
+  fi
+
+  # Test 2: Verify it works with various state values
+  for test_state in CLEAN PUSHED SNAPSHOTTED BLOCKED; do
+    printf '%s\0test-repo\n' "$test_state" > "$test_data_file"
+    state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$test_data_file")
+    name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$test_data_file" | tr -d '\n')
+
+    if [ "$state" = "$test_state" ] && [ "$name" = "test-repo" ]; then
+      pass "ITEM 5: Portable parsing works for state=$test_state"
+    else
+      fail "ITEM 5: Portable parsing failed for state=$test_state (got state='$state', name='$name')"
+    fi
+  done
+
+  # Test 3: Verify it works with special characters in repo name (no GNU sed needed)
+  printf 'CLEAN\0repo|with|pipe\n' > "$test_data_file"
+  state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$test_data_file")
+  name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$test_data_file" | tr -d '\n')
+
+  if [ "$name" = "repo|with|pipe" ]; then
+    pass "ITEM 5: Special characters preserved in portable parsing"
+  else
+    fail "ITEM 5: Special characters corrupted in portable parsing (got: '$name')"
+  fi
+
+  rm -f "$test_data_file"
+}
+
 # ===== Run all tests =====
 
 echo "=================================================="
@@ -444,6 +498,10 @@ log "Running ITEM 4 tests (temp_json/temp_result cleanup trap)..."
 test_item4_cleanup_trap_declared
 test_item4_cleanup_on_interrupt
 test_item4_cleanup_on_abnormal_exit
+echo ""
+
+log "Running ITEM 5 test (portable NUL parsing - P2 fix)..."
+test_item5_portable_nul_parsing
 echo ""
 
 log "Running full cycle integration test..."

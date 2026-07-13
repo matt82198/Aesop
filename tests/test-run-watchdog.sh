@@ -335,4 +335,63 @@ fi
 rm -f "$OUT_SPACES"
 
 echo ""
+echo "=== Test 5: Exit status capture and error logging (P1 fix) ==="
+# Clean state
+rm -rf "${TEST_STATE_DIR}"
+mkdir -p "${TEST_STATE_DIR}"
+echo "0" > "${CYCLE_COUNTER}"
+
+# Create a mock cycle that fails with exit code 42
+FAIL_MOCK="${TMP_DIR}/fail-mock.sh"
+cat > "${FAIL_MOCK}" << 'EOFFAIL'
+#!/bin/bash
+echo "[mock-cycle] This is output line 1"
+echo "[mock-cycle] This is output line 2 (last line)"
+exit 42
+EOFFAIL
+chmod +x "${FAIL_MOCK}"
+
+OUT_FAIL=$(mktemp)
+set +e
+AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_WATCHDOG_CYCLE_CMD="${FAIL_MOCK}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_FAIL" 2>&1
+EXIT_FAIL=$?
+set -e
+
+echo "Mock cycle that fails with exit 42:"
+cat "$OUT_FAIL"
+echo ""
+
+# Check that error was logged to FLEET-BACKUP.log with the exit code
+LOG_FILE="${AESOP_ROOT}/state/FLEET-BACKUP.log"
+if grep -q "ERROR: cycle #1 failed with exit code 42" "$LOG_FILE" 2>/dev/null; then
+  echo "PASS: Exit status 42 was logged to FLEET-BACKUP.log"
+else
+  echo "FAIL: Exit status not logged correctly to FLEET-BACKUP.log"
+  echo "Log contents:"
+  cat "$LOG_FILE" || echo "(log file missing)"
+  exit 1
+fi
+
+# Check that the output shows [ERROR: exit 42] indicator
+if grep -q "ERROR: exit 42" "$OUT_FAIL" 2>/dev/null; then
+  echo "PASS: Exit status 42 displayed in output"
+else
+  echo "FAIL: Exit status not displayed in output"
+  exit 1
+fi
+
+# Check that the last 2 lines of the failed command output are still shown
+if grep -q "This is output line 1" "$OUT_FAIL" 2>/dev/null; then
+  echo "PASS: Failed command output still displayed"
+else
+  echo "FAIL: Failed command output not displayed"
+  exit 1
+fi
+
+rm -f "$OUT_FAIL" "$FAIL_MOCK"
+echo "PASS: Exit status capture and error logging (P1 fix)"
+
+echo ""
 echo "=== All tests passed ==="
