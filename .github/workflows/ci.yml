@@ -41,6 +41,11 @@ jobs:
       - name: Run shell test suites
         run: npm run test:sh
 
+      - name: Tool import/compile/UTF-8 smoke gate
+        run: |
+          python -m compileall -q tools/
+          python -m unittest tests.test_tools_importable -v
+
       - name: Run Python tests
         run: npm run test:py
 
