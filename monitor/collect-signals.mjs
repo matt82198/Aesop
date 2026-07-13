@@ -380,11 +380,27 @@ function detectRespawnWatch() {
 function trackCostCadence() {
   const prevStateFile = path.join(MON, '.signal-state.json');
   let prevState = {};
-  try {
-    prevState = JSON.parse(fs.readFileSync(prevStateFile, 'utf8'));
-  } catch {
-    // no prev state
+
+  // Check file existence first; don't silently fail on parse errors
+  if (fs.existsSync(prevStateFile)) {
+    try {
+      prevState = JSON.parse(fs.readFileSync(prevStateFile, 'utf8'));
+    } catch (e) {
+      // Parse failure: log warning and preserve a .corrupt copy for evidence
+      console.error(`Warning: Failed to parse .signal-state.json: ${e.message}`);
+      try {
+        const corruptPath = prevStateFile + '.corrupt';
+        const content = fs.readFileSync(prevStateFile, 'utf8');
+        fs.writeFileSync(corruptPath, content, 'utf8');
+        console.error(`Corrupt state preserved to ${corruptPath}`);
+      } catch (copyErr) {
+        console.error(`Failed to preserve corrupt state: ${copyErr.message}`);
+      }
+      // Reset to empty state and continue (graceful recovery)
+      prevState = {};
+    }
   }
+
   const cycleCount = (prevState.cycleCount || 0) + 1;
   let costTick = null;
   if (cycleCount % 3 === 0) {

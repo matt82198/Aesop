@@ -664,3 +664,40 @@ test('P2 fix: summary line contains no undefined with default config (extended_s
   }
 });
 
+// === P2 Bug: Corrupted .signal-state.json handling ===
+test('P2 fix: corrupted .signal-state.json logs warning and gracefully resets', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Create a corrupted .signal-state.json (truncated/invalid JSON)
+    const stateFile = path.join(fixture.monitorDir, '.signal-state.json');
+    fs.writeFileSync(stateFile, '{"cycleCount": 5, "ts":', 'utf8');
+
+    // Run collector; should NOT crash but log warning to stderr
+    const result = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+
+    // Verify that warning was logged to stderr about parse failure
+    assert.ok(result.stderr.includes('Failed to parse .signal-state.json'), 'Should log parse error to stderr');
+
+    // Verify that a .corrupt copy was created as evidence
+    const corruptPath = stateFile + '.corrupt';
+    assert.ok(fs.existsSync(corruptPath), 'Corrupt state should be preserved to .signal-state.json.corrupt');
+
+    // Verify the corrupt file contains the original truncated content
+    const corruptContent = fs.readFileSync(corruptPath, 'utf8');
+    assert.strictEqual(corruptContent, '{"cycleCount": 5, "ts":', 'Corrupt copy should contain original content');
+
+    // Verify that collector continued and emitted fresh state with cycleCount = 1 (reset)
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    assert.ok(fs.existsSync(signalsPath), 'SIGNALS.json should exist even after parse failure');
+
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.strictEqual(signals.cycleCount, 1, 'Cycle count should reset to 1 after parse failure');
+
+    // Verify that new state file was written with valid JSON
+    const newState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    assert.strictEqual(newState.cycleCount, 1, 'New state should have cycleCount = 1');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
