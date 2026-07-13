@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Work-item Tracker**: 4-lane kanban dashboard (proposed | ranked | in-progress | done) with full CRUD API and SSE updates, priority chips (P0-P3), expandable item details, and archive support.
 - **Orchestrator Status Panel**: Real-time activity, phase, and age display for orchestrators with stale detection (>30m).
 - **ASCII Banner**: Animated audit-phase indicator (tortoise + magnifying glass) in dashboard.
-- **UI Module Refactoring**: Split monolithic `serve.py` into focused modules (`config.py`, `csrf.py`, `render.py`, `handlers.py`, `collectors.py`, `agents.py`, `sse.py`) with templates in `ui/templates/`.
+- **UI Module Refactoring**: Split monolithic `serve.py` into focused modules (`config.py`, `csrf.py`, `render.py`, `handler.py`, `collectors.py`, `agents.py`, `sse.py`) with templates in `ui/templates/`.
 
 ### Improved
 - **Security Hardening**: CSRF protection on `/api/tracker create`, XSS whitelist for tracker `pr_link` (http/https only, blocks `javascript:`), fail-closed lock acquisition with PID liveness verification.
