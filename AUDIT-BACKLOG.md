@@ -232,6 +232,25 @@ now fully green (all 8 test/scan steps).
 
 ---
 
+# Wave 7 — audit #3 (four-lens: security+correctness, architecture, frontend/UX, honest)
+
+Audit #3 ran post-wave-6: NOT clean (2 quick-wins fixed in PR #64, rest deferred to wave 7). Four-lens findings deduplicated and ranked below (all ⬜ unstarted). Branch-per-item model; TDD-first acceptance gate.
+
+## P1
+
+- ⬜ **[js] proposals.mjs + collect-signals.mjs acquireLock is FAIL-OPEN → silent data loss under load.** After maxAttempts (50×~10ms ≈ 500ms) the lock gives up and proceeds UNLOCKED (`tools/proposals.mjs:82-84`, and the same acquireLock in `monitor/collect-signals.mjs`). Under real concurrent writes (monitor + UI emitting proposals, or slow I/O), an append can interleave with an accept/reject rebuild and be lost. This is ALSO the root of the intermittently-flaky `tests/proposals.test.mjs` concurrent-race test. **DECISION NEEDED:** fail-closed (log + abort the op, retry next cycle) vs a single-writer queue serializing emit/accept/reject. Recommendation: fail-closed for the integrity-critical PROPOSALS.md/audit writes. [lenses: honest#1, security]. ACC: lock timeout no longer proceeds unlocked; a concurrent emit+accept test shows zero data loss deterministically (not timing-tuned).
+
+## P2
+
+- ⬜ **[ui] Accessibility: status/severity are color-only + rows not keyboard-operable (WCAG 1.4.1, 2.1.1).** Agent status emoji and alert severity (header count, alerts box, alert lines) carry meaning by color alone with no text/ARIA label; `.agent-row` has a click handler but no `tabindex`/`role="button"`/`aria-expanded`/keydown. `ui/serve.py` (agent-status render, alert count/box/line render, agent-row). [frontend#1-5]. ACC: text/ARIA labels for status+severity; rows focusable + Enter/Space operable.
+- ⬜ **[ui] Color semantics incomplete: agent "running" still GREEN, not blue.** PR #55 set green=done / blue=running / red-amber=alarm, but the agents panel still shows running as green (`ui/serve.py` agent-status + `dash/dash-extra.mjs` running color `c.G`). [frontend#6]. ACC: running renders blue across serve.py + dash-extra; verify_dash asserts it.
+- ⬜ **[py] serve.py has 12+ bare `except:` handlers masking bugs.** e.g. `generate_session_token` config load silently swallows errors (`ui/serve.py:68` and ~11 more). [honest#3]. ACC: typed excepts + at least a debug log; no silent config-load failures.
+- ⬜ **[arch] ThreadingHTTPServer spawns a thread per request — unbounded.** The SSE fix caps SSE *clients* but a flood of ordinary requests still creates unbounded threads → memory exhaustion (`ui/serve.py`). [honest#4]. ACC: bounded worker pool or a total-connection limit.
+- ⬜ **[docs] tools/CLAUDE.md documents only 3 of 8 tools.** Missing rotate_logs.py, reconstitute.sh, proposals.mjs, verify_dash.py, verify_submit_encoding.py (or move the proof tools to tests/ docs). [architecture]. ACC: every shipped tool has a domain-map/contract entry; domain-map-drift test still green.
+- ⬜ **[bash] acquire_audit_lock leaks the lock if the pid-file write fails.** On disk-full, mkdir succeeds but `echo $$ > pid` fails, leaving a lock with no pid; release's ownership check then never frees it → 10s hangs cascade (`hooks/pre-push-policy.sh:42`). [security#3]. ACC: verify the pid write / write pid before returning success.
+
+---
+
 ## Landing log
 - 2026-07-12: five-lens re-audit (audit #1) → 9 item-branches + 2 ports, all ✅ merged (PRs
   #17–#35). Honest lens CLEAN.
@@ -244,3 +263,4 @@ now fully green (all 8 test/scan steps).
   Root cause: bash -n-only CI never ran any suite for repo's life. All 8 test/scan steps now green.
 - Audit cadence: audit #2 found real work → loop continues. Loop ends after 2 consecutive clean
   audits; the next audit after wave 6 lands is audit #3.
+- 2026-07-12: **Four-lens re-audit (audit #3)** — security+correctness, architecture, frontend/UX, honest. NOT clean → 7 items (1 P1, 6 P2); 2 quick-wins fixed in PR #64 (already merged); rest deferred to wave 7 backlog. Loop continues.
