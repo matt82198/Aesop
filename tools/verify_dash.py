@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -403,6 +404,68 @@ def main():
             except Exception as e:
                 failures.append(f"(h) /submit did not write a valid UTF-8 inbox file: {e}")
 
+            # (i) tracker panel renders with lanes (proposed, ranked, in-progress, done)
+            try:
+                page.wait_for_selector("#tracker-lanes", timeout=8000)
+                # Verify lane headers exist
+                page.wait_for_function(
+                    "document.querySelector('[data-lane=\"proposed\"]') !== null",
+                    timeout=5000)
+                lanes = page.evaluate(
+                    "Array.from(document.querySelectorAll('[data-lane]')).map(el => el.dataset.lane)")
+                expected_lanes = ['proposed', 'ranked', 'in-progress', 'done']
+                for lane in expected_lanes:
+                    assert lane in lanes, f"Lane '{lane}' not found in tracker"
+            except Exception as e:
+                failures.append(f"(i) tracker panel did not render lanes: {e}")
+
+            # (j) POST tracker item via form → appears in proposed lane via SSE (no reload)
+            try:
+                page.fill("#tracker-title", "Tracker Test Item")
+                page.select_option("#tracker-priority", "P1")
+                page.fill("#tracker-notes", "Test notes for tracker item")
+                page.click("#tracker-add-btn")
+                # Wait for item to appear in proposed lane via SSE (no page reload)
+                page.wait_for_function(
+                    "document.querySelector('[data-lane=\"proposed\"]')?.innerText.includes('Tracker Test Item')",
+                    timeout=8000)
+                # Verify priority chip rendered
+                page.wait_for_function(
+                    "document.querySelector('.priority-p1') !== null",
+                    timeout=5000)
+            except Exception as e:
+                failures.append(f"(j) tracker add-item form did not create/SSE item: {e}")
+
+            # (k) orchestrator status shows "no active session" when file absent
+            try:
+                orch_status = page.inner_text("#orchestrator-status")
+                assert "no active session" in orch_status or orch_status == "—", \
+                    f"Expected 'no active session' when status file absent, got: '{orch_status}'"
+            except Exception as e:
+                failures.append(f"(k) orchestrator status did not show 'no active session': {e}")
+
+            # (l) write orchestrator-status.json with phase=audit → ASCII banner appears
+            try:
+                status_data = {
+                    "id": "main",
+                    "role": "orchestrator",
+                    "activity": "running audit",
+                    "phase": "audit",
+                    "updated_at": datetime.utcnow().isoformat() + "Z"
+                }
+                status_file = root / "state" / "orchestrator-status.json"
+                status_file.write_text(json.dumps(status_data, indent=2), encoding="utf-8")
+                # Wait for banner to appear via SSE
+                page.wait_for_function(
+                    "document.getElementById('audit-banner').style.display === 'block'",
+                    timeout=8000)
+                # Verify ASCII art is present
+                banner_text = page.inner_text("#audit-banner")
+                assert "AUDIT" in banner_text and "tortoise" in banner_text.lower() or "(-" in banner_text, \
+                    f"Audit banner missing expected content: {banner_text}"
+            except Exception as e:
+                failures.append(f"(l) orchestrator status audit banner did not appear: {e}")
+
             # (a) console clean across the whole run
             time.sleep(1.0)
             real_errors = [e for e in console_errors if "favicon" not in e.lower()]
@@ -424,7 +487,8 @@ def main():
             print("  -", f)
         return 1
     print("PROVEN: (a) console clean (b) backlog rendered (b2) alert-count alarm color "
-          "(b3) alerts-box alarm styling (c) click-expand with prompt (d) SSE live updates (e) expansion survived")
+          "(b3) alerts-box alarm styling (c) click-expand with prompt (d) SSE live updates (e) expansion survived "
+          "(i) tracker lanes rendered (j) tracker add-item SSE (k) orchestrator status (l) audit banner ASCII")
     return 0
 
 
