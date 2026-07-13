@@ -760,7 +760,8 @@ def broadcast_sse(event_name, payload):
                 q.get_nowait()  # Remove oldest
                 q.put_nowait((event_name, payload))  # Add new
             except Exception:
-                pass
+                import sys
+                print(f"[collector_loop] Exception: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         except Exception:
             pass
 
@@ -803,8 +804,9 @@ def collector_loop(stop_event):
                 last_agents_fingerprint = fingerprint
                 cached_agents_snapshot = get_fleet_agents()
             _maybe_emit("agents", cached_agents_snapshot, last_hashes)
-        except Exception:
-            pass
+        except Exception as e:
+            import sys
+            print(f"[collector_loop] Exception: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         stop_event.wait(COLLECTOR_INTERVAL)
 
 
@@ -975,7 +977,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .backlog-item { padding: 4px 0; color: #ccc; display: flex; gap: 8px; align-items: flex-start; }
         .backlog-item-glyph { min-width: 14px; font-size: 12px; }
         .backlog-item-tag { color: #8ac; font-weight: bold; min-width: 60px; }
-        .backlog-item-title { color: #999; flex: 1; word-break: break-word; }
+        .backlog-item-title { color: #bbbbbb; flex: 1; word-break: break-word; }
         .backlog-item.done { padding: 2px 0; opacity: 0.55; }
         .backlog-item.done .backlog-item-title { opacity: 0.55; font-size: 10px; }
 
@@ -1282,7 +1284,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             if (latestAgents.length === 0) {
                 if (!container.querySelector('.empty-state')) {
-                    container.innerHTML = '<div class="empty-state" style="color: #666; font-size: 12px;">💤 No active agents — fleet is idle</div>';
+                    container.innerHTML = '<div class="empty-state" style="color: #aaaaaa; font-size: 12px;">💤 No active agents — fleet is idle</div>';
                 }
                 return;
             }
@@ -1364,7 +1366,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 ).join('');
             } else {
                 eventsList.textContent = '(no recent events)';
-                eventsList.style.color = '#666';
+                eventsList.style.color = '#aaaaaa';
             }
         }
 
@@ -1415,7 +1417,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 ).join('');
             } else {
                 messagesList.textContent = '(no messages)';
-                messagesList.style.color = '#666';
+                messagesList.style.color = '#aaaaaa';
             }
         }
 
@@ -1474,7 +1476,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             if (tiers.length === 0) {
                 if (!container.querySelector('.empty-state')) {
-                    container.innerHTML = '<div class="empty-state" style="color: #666; font-size: 12px;">📋 No audit backlog found</div>';
+                    container.innerHTML = '<div class="empty-state" style="color: #aaaaaa; font-size: 12px;">📋 No audit backlog found</div>';
                 }
                 return;
             }
@@ -1718,7 +1720,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            print(f"[serve_agent] Uncaught exception: {e}", file=sys.stderr)
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def _write_sse_event(self, event_name, payload):
         """Write one SSE frame with timeout. Caller handles disconnect exceptions."""
@@ -1823,8 +1826,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             content_length = int(self.headers.get('Content-Length', 0))
-            if content_length > 10000:  # 10KB limit
-                self.send_error(413)
+            if content_length <= 0 or content_length > 10000:  # 10KB limit, must be positive
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "error": "Invalid Content-Length (must be 1-10000 bytes)"
+                }).encode('utf-8'))
                 return
 
             body = self.rfile.read(content_length).decode('utf-8', errors='ignore')
@@ -1838,7 +1846,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             # Append to inbox
             inbox_content = f"- [{datetime.now().isoformat()}] {text}\n"
-            if not INBOX_FILE.exists():
+            # Security: reject symlinks (TOCTOU defense)
+            if INBOX_FILE.exists():
+                if os.path.islink(str(INBOX_FILE)):
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "error": "Inbox file is a symlink (rejected for security)"
+                    }).encode('utf-8'))
+                    return
+            else:
                 INBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
                 # Must match the encoding (utf-8) AND newline convention (LF) of the
                 # append below — text-mode write_text() with no encoding= falls back
