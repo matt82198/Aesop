@@ -22,13 +22,13 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `wave-6-p0-ci-landed` (2026-07-12, current)
-Wave-6 P0 security fixes all merged to main (PRs #36–#41); CI-repair wave (PRs #42–#46) fixed
-5 pre-existing Linux-only defects exposed by enabling the test gate. Main push-CI now fully
-green (all 8 test/scan steps). Root cause documented: bash -n-only CI never executed any suite
-for the repo's life. See AUDIT-BACKLOG.md for complete P0/CI-repair status + follow-ups.
+## Phase: `audit-3-complete / wave-7-backlog-seeded` (2026-07-12, current)
+Four-lens re-audit (audit #3) completed post-wave-6: NOT clean → 7 items (1 P1, 6 P2).
+2 quick-wins fixed in PR #64 already merged to main; remaining 7 items seeded in wave-7
+backlog below. Loop continues. See AUDIT-BACKLOG.md Wave 7 for full ranked backlog.
 
-Previous wave (audit #1) merged PRs #17–#35; all three phases of wave 5 now closed.
+Previous: Wave-6 P0 security fixes all merged (PRs #36–#41); CI-repair wave (PRs #42–#46) fixed
+5 Linux-only defects. Main push-CI fully green (all 8 test/scan steps).
 
 ## Upcoming phases
 1. **`wave-5-close`** — land + merge the 6 remaining branches and 2 ports; full
@@ -58,7 +58,9 @@ Previous wave (audit #1) merged PRs #17–#35; all three phases of wave 5 now cl
   dispatched.
 
 ## NEXT STEPS
-1. Wave-6 P1 tier (9 items, per standing refinement loop) on green main.
-2. Wave-6 P2/P3 tiers and user-decision items.
-3. Re-audit (audit #3) vs five pillars post-P0–P3 landing.
-4. Update this file at each phase boundary; collapse finished phases into history.
+1. Wave-7 items below (see AUDIT-BACKLOG.md Wave 7); branch-per-item, TDD-first.
+2. Start with the fail-open lock (P1 item 1): needs a **fail-closed-vs-queue decision**
+   (recommendation: fail-closed for integrity-critical PROPOSALS.md/audit writes).
+3. Wave-7 P2 tier dispatch (6 items: accessibility, color semantics, bare excepts, 
+   ThreadingHTTPServer unbounded, docs/CLAUDE.md drift, lock pid-write atomicity).
+4. Post-P2 landing: re-audit (audit #4) vs five pillars. (2 consecutive cleans end loop.)
