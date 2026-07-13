@@ -359,6 +359,27 @@ def main():
             except Exception as e:
                 failures.append(f"(g) promptCache not evicting removed agents: {e}")
 
+            # (h) /submit writes the inbox file as valid UTF-8, even on first write
+            #     (regression for PR #36: an encoding-less header write corrupted the file)
+            try:
+                marker = "SUBMIT-ENC-MARKER café ✓ orchestrator"
+                page.fill("#inbox-input", marker)
+                page.click("#inbox-button")
+                inbox_file = root / "state" / "ui-inbox.md"
+                deadline = time.time() + 6
+                ok = False
+                while time.time() < deadline:
+                    if inbox_file.exists():
+                        # Must decode as UTF-8 without raising UnicodeDecodeError.
+                        text = inbox_file.read_text(encoding="utf-8")
+                        if marker in text:
+                            ok = True
+                            break
+                    time.sleep(0.2)
+                assert ok, f"submitted UTF-8 marker not found in {inbox_file}"
+            except Exception as e:
+                failures.append(f"(h) /submit did not write a valid UTF-8 inbox file: {e}")
+
             # (a) console clean across the whole run
             time.sleep(1.0)
             real_errors = [e for e in console_errors if "favicon" not in e.lower()]
