@@ -81,8 +81,7 @@ def broadcast_sse(event_name, payload):
             try:
                 q.get_nowait()  # Remove oldest
                 q.put_nowait((event_name, payload))  # Add new
-            except Exception:
-                import sys
+            except Exception as e:
                 print(f"[collector_loop] Exception: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         except Exception:
             pass
@@ -155,7 +154,6 @@ def collector_loop(stop_event):
             except Exception as e:
                 print(f"[collector] Inbox drain error: {e}", file=sys.stderr, flush=True)
         except Exception as e:
-            import sys
             print(f"[collector_loop] Exception: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         stop_event.wait(config.COLLECTOR_INTERVAL)
 
