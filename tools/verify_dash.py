@@ -436,6 +436,65 @@ def main():
             except Exception as e:
                 failures.append(f"(j) tracker add-item form did not create/SSE item: {e}")
 
+            # (m) tracker item pr_link XSS: javascript: URLs must never reach a DOM href
+            # (wave-10 P0 — render-side defense-in-depth for buildTrackerItem)
+            try:
+                render = page.evaluate(
+                    """
+                    (() => {
+                        const el = buildTrackerItem({
+                            id: 'xss-test-item',
+                            title: 'XSS Probe',
+                            priority: 'P1',
+                            lane: 'proposed',
+                            pr_link: 'javascript:alert(1)'
+                        });
+                        const a = el.querySelector('a');
+                        return {
+                            html: el.innerHTML,
+                            anchorHref: a ? a.getAttribute('href') : null,
+                            anchorPresent: a !== null
+                        };
+                    })()
+                    """
+                )
+                # The raw pr_link text may still be SHOWN (escaped, inert) to the user
+                # for visibility — that's fine. What must never happen is the scheme
+                # landing inside an href="..." attribute, which is what makes it
+                # click-to-execute.
+                assert 'href="javascript' not in render["html"].lower(), \
+                    f"(m) javascript: scheme leaked into a rendered href attribute: {render['html']}"
+                # No <a> should be emitted for a rejected scheme (label falls back to
+                # a plain, non-clickable span), and no href value may resolve to
+                # anything other than the empty/neutralized string.
+                assert not (render["anchorPresent"] and render["anchorHref"]
+                            and "javascript:" in render["anchorHref"].lower()), \
+                    f"(m) tracker item rendered an executable javascript: href: {render['anchorHref']}"
+                assert not render["anchorPresent"], \
+                    f"(m) expected pr_link with unsafe scheme to render inert (no <a>), got href={render['anchorHref']}"
+
+                # Sanity check: a legitimate https:// pr_link must still render as a
+                # real, clickable link so the fix doesn't break valid PR links.
+                safe_render = page.evaluate(
+                    """
+                    (() => {
+                        const el = buildTrackerItem({
+                            id: 'safe-link-item',
+                            title: 'Safe Link',
+                            priority: 'P1',
+                            lane: 'proposed',
+                            pr_link: 'https://github.com/example/repo/pull/1'
+                        });
+                        const a = el.querySelector('a');
+                        return { anchorHref: a ? a.getAttribute('href') : null };
+                    })()
+                    """
+                )
+                assert safe_render["anchorHref"] == "https://github.com/example/repo/pull/1", \
+                    f"(m) valid https pr_link should still render a real href, got: {safe_render['anchorHref']}"
+            except Exception as e:
+                failures.append(f"(m) tracker pr_link XSS probe failed: {e}")
+
             # (k) orchestrator status shows "no active session" when file absent
             try:
                 orch_status = page.inner_text("#orchestrator-status")
@@ -488,7 +547,8 @@ def main():
         return 1
     print("PROVEN: (a) console clean (b) backlog rendered (b2) alert-count alarm color "
           "(b3) alerts-box alarm styling (c) click-expand with prompt (d) SSE live updates (e) expansion survived "
-          "(i) tracker lanes rendered (j) tracker add-item SSE (k) orchestrator status (l) audit banner ASCII")
+          "(i) tracker lanes rendered (j) tracker add-item SSE (k) orchestrator status (l) audit banner ASCII "
+          "(m) tracker pr_link javascript: XSS neutralized, https pr_link still clickable")
     return 0
 
 
