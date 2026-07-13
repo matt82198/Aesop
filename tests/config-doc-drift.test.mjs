@@ -58,6 +58,48 @@ function getByPath(obj, path) {
   return current;
 }
 
+// Helper: check if a string value looks like prose (invalid config example)
+function isProseLike(value) {
+  if (typeof value !== 'string') return false;
+  // Check for prose markers: parentheses, " or ", " env var", commas in descriptions
+  const proseMarkers = [
+    /\s+or\s+/i,        // "or override"
+    /\s+env\s+var/i,    // "env var"
+    /\(.*\)/,           // Contains parentheses with text
+    /;\s*default:/i,    // Semicolon separating instructions
+    /optional[;,]/i,    // "optional;" or "optional,"
+  ];
+  return proseMarkers.some(marker => marker.test(value));
+}
+
+// Helper: validate a config value based on key context
+function isValidConfigValue(keyPath, value) {
+  // Collections (arrays/objects) are always valid
+  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) {
+    return true;
+  }
+  // Booleans are always valid
+  if (typeof value === 'boolean') {
+    return true;
+  }
+  // Numbers are always valid
+  if (typeof value === 'number') {
+    return true;
+  }
+  // Strings: must be non-empty and not prose-like
+  if (typeof value === 'string') {
+    if (!value.trim()) {
+      return false; // Empty string
+    }
+    if (isProseLike(value)) {
+      return false; // Looks like prose description, not config value
+    }
+    return true;
+  }
+  // null/undefined are not valid
+  return false;
+}
+
 test('config/doc drift: all documented keys exist in aesop.config.example.json', () => {
   const examplePath = path.join(PROJECT_ROOT, 'aesop.config.example.json');
   assert.ok(fs.existsSync(examplePath), `aesop.config.example.json must exist at ${examplePath}`);
@@ -72,19 +114,24 @@ test('config/doc drift: all documented keys exist in aesop.config.example.json',
   const failures = [];
   for (const { file, keyPath } of REQUIRED_KEYS) {
     const value = getByPath(example, keyPath);
-    // We check that the path exists in the config (value is not undefined).
-    // For collections like 'repos', the example can be empty (e.g., [])
-    // but the key must be present.
+    // Check 1: path must exist (value is not undefined)
     if (value === undefined) {
-      failures.push(`  ${keyPath} (read by ${file})`);
+      failures.push(`  ${keyPath} (read by ${file}) — missing key`);
+      continue;
+    }
+    // Check 2: value must be a valid config example (not prose, not empty string)
+    if (!isValidConfigValue(keyPath, value)) {
+      failures.push(
+        `  ${keyPath} (read by ${file}) — invalid value: "${value}" (must be non-empty, non-prose)`
+      );
     }
   }
 
   if (failures.length > 0) {
     throw new Error(
-      `Config keys missing from aesop.config.example.json:\n${failures.join('\n')}\n` +
-      `These keys are read by live code or documented as overridable. ` +
-      `Add them to aesop.config.example.json with example/default values.`
+      `Config validation failed in aesop.config.example.json:\n${failures.join('\n')}\n` +
+      `Config values must be valid examples (non-empty, not prose descriptions). ` +
+      `Use _paths section to document override options.`
     );
   }
 });

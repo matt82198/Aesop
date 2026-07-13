@@ -4,7 +4,6 @@ state/
 monitor/BRIEF.md
 monitor/SIGNALS.json
 *.log
-*heartbeat*
 .fleet-repos.json
 .signal-state.json
 .fleet-ledger-harvest.json
