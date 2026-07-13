@@ -35,8 +35,55 @@ Finds terminal (prefer Git Bash → Windows Terminal wt.exe), spawns script deta
 
 Exit: 0=success, 1=error. Output: exactly one line (`spawned (pid N)` or `already running (pid N)` or ERROR).
 
+## heartbeat.py — Single-instance loop liveness registry
+
+Fleet-wide heartbeat tracking for monitoring loop freshness. Write heartbeat "beat" to registry, check all beats for staleness.
+
+- `heartbeat.py beat <name> [status] [--state-dir DIR] [--brain]` — write epoch to state/.heartbeats/<name> (or ~/.claude/.heartbeats with --brain)
+- `heartbeat.py check [--max-age SEC] [--state-dir DIR]` — check all beats, exit 0 if all alive
+
+## buildlog.py — Uniform BUILDLOG entry appender
+
+Ensures consistent BUILDLOG.md formatting across orchestrated work: timestamp + message + optional git HEAD ref.
+
+- `buildlog.py "<message>" [--state-dir DIR] [--head] [--repo-path PATH]` — append entry to state/BUILDLOG.md
+
+## ensure_state.py — Scaffold checkpointing directories
+
+Creates STATE.md and BUILDLOG.md templates in state directory if missing.
+
+- `ensure_state.py --state-dir DIR` — scaffold templates
+
+## fleet_ledger.py — Outcome audit trail for dispatched agents
+
+Append-only ledger of agent runs, resource use, and verdicts. Supports harvest (scan temp tasks) and rotate (archive old lines).
+
+- `fleet_ledger.py append <ts> <agent_type> <model> <dur_sec> <tokens_in> <tokens_out> [verdict]`
+- `fleet_ledger.py harvest` — scan session tasks and append missing outcomes
+- `fleet_ledger.py rotate` — archive old lines when ledger exceeds ~200 lines
+
+## scanner_selftest.py — Regression harness for secret_scan.py
+
+Validates scanner against TP/FP test vectors. Ensures self-scan is clean (no pragma reliance).
+
+- `python scanner_selftest.py [--temp-dir DIR]` — run full test suite, exit 0 only if all pass
+
+## prepublish_scan.py — Pre-publish gate (history + staged)
+
+Runs full git history and staged-changes scans before public release. Both must pass.
+
+- `prepublish_scan.py [--repo PATH]` — scan full history + staged changes, exit 0 only if CLEAR-TO-PUBLISH
+
+## eod_sweep.py — End-of-day repository safety check
+
+Scans listed repos for: dirty working tree, unpushed commits, untracked files. Optional auto-push on safe repos.
+
+- `eod_sweep.py [--repos PATHS] [--readonly-repos PATHS] [--fix-push]` — check repo health, optionally push
+
 ## Invariants
 
 - **Dependency-light**: Python tools must work on base Python 3 (no pip installs).
 - **CRLF-safe shell**: no line continuations in .sh scripts; Git Bash + Linux compatible.
 - **Never print secrets**: mask as pattern name + masked value only.
+- **Config-driven paths**: heartbeat/ledger/logs use AESOP_STATE_ROOT env var (default ./state) or CLI args; no hardcoded personal paths.
+- **Fragment-assembled secrets in tests**: scanner_selftest.py concatenates dummy secrets at runtime so pattern text never appears contiguously (self-scan invariant).
