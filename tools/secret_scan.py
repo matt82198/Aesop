@@ -102,8 +102,9 @@ def is_binary_file(filepath):
 
 def should_skip_file(filepath):
     """Check if file should be skipped entirely (.git/, __pycache__, .pyc, .pyo)."""
-    # Skip .git directories
-    if ".git" in filepath.parts or ".git" in str(filepath):
+    # Skip .git directories — match a path COMPONENT, not a substring
+    # (".git" in str(path) also matched ".gitignore" and skipped scanning it).
+    if ".git" in filepath.parts:
         return True
 
     # Skip __pycache__ directories
