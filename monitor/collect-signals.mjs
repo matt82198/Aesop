@@ -147,7 +147,13 @@ const walk = (dir, test, out = [], depth = 0) => {
 function checkHeartbeats() {
   const staleLoops = [];
   const beatsDir = path.join(MON, '.heartbeats');
-  const thresholds = { watchdog: 300e3, monitor: 3600e3, default: 1800e3 };
+  // Load thresholds from config or use defaults (in seconds; convert to milliseconds)
+  const hbThresholds = (config.monitor && config.monitor.heartbeat_thresholds) || {};
+  const thresholds = {
+    watchdog: (hbThresholds.watchdog !== undefined ? hbThresholds.watchdog : 300) * 1000,
+    monitor: (hbThresholds.monitor !== undefined ? hbThresholds.monitor : 3600) * 1000,
+    default: (hbThresholds.default !== undefined ? hbThresholds.default : 1800) * 1000,
+  };
   let beatFiles = [];
   try {
     beatFiles = fs.readdirSync(beatsDir).map(f => path.join(beatsDir, f));

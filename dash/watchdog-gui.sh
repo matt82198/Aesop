@@ -21,6 +21,7 @@ SLOG="$AESOP_ROOT/state/SECURITY-ALERTS.log"
 HB="$AESOP_ROOT/state/.watchdog-heartbeat"
 REPOS_FILE="$AESOP_ROOT/state/.watchdog-repos.json"
 HB_DIR="$AESOP_ROOT/state/.heartbeats"
+CONFIG_FILE="$AESOP_ROOT/aesop.config.json"
 
 SPINNER=0
 FIRST_FRAME=1
@@ -29,14 +30,30 @@ FIRST_FRAME=1
 trap 'printf "\033[?25h"; exit 0' INT TERM
 printf '\033[?25l'
 
+# Load heartbeat thresholds from config; fallback to built-in defaults
+load_hb_thresholds() {
+  if [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
+    HB_THRESHOLD_MONITOR=$(jq -r '.monitor.heartbeat_thresholds.monitor // 3600' "$CONFIG_FILE" 2>/dev/null || echo 3600)
+    HB_THRESHOLD_WATCHDOG=$(jq -r '.monitor.heartbeat_thresholds.watchdog // 300' "$CONFIG_FILE" 2>/dev/null || echo 300)
+    HB_THRESHOLD_DEFAULT=$(jq -r '.monitor.heartbeat_thresholds.default // 1800' "$CONFIG_FILE" 2>/dev/null || echo 1800)
+  else
+    HB_THRESHOLD_MONITOR=3600
+    HB_THRESHOLD_WATCHDOG=300
+    HB_THRESHOLD_DEFAULT=1800
+  fi
+}
+
 get_hb_threshold() {
   local name="$1"
   case "$name" in
-    *monitor*) echo 3600;;
-    *watchdog*) echo 300;;
-    *) echo 1800;;
+    *monitor*) echo "$HB_THRESHOLD_MONITOR";;
+    *watchdog*) echo "$HB_THRESHOLD_WATCHDOG";;
+    *) echo "$HB_THRESHOLD_DEFAULT";;
   esac
 }
+
+# Load thresholds at startup
+load_hb_thresholds
 
 render_frame() {
   local FRAME=""
