@@ -35,6 +35,30 @@ Finds terminal (prefer Git Bash → Windows Terminal wt.exe), spawns script deta
 
 Exit: 0=success, 1=error. Output: exactly one line (`spawned (pid N)` or `already running (pid N)` or ERROR).
 
+## power_selftest.py — Health check harness for /power bootstrap
+
+Validates hooks (settings.json), brain (git status), heartbeats (state/ beat files), decisions/inbox counts, and secret scanner.
+
+- `python power_selftest.py` — run all checks and print summary line + bullets for non-OK items
+
+Configuration via `aesop.config.json` or env vars: `BRAIN_ROOT`, `AESOP_STATE_ROOT`, `SCRIPTS_ROOT`.
+Gracefully degrades when targets don't exist (reports `n/a` instead of crashing).
+
+Exit: 0=OK/DEGRADED, 1=FAIL. Output: `POWER-SELFTEST: OK|DEGRADED|FAIL — <checks>` + optional bullets.
+
+## inbox_drain.py — Drain UI inbox submissions
+
+Tracks processed dashboard submissions (work items queued while no session was running).
+
+- `python inbox_drain.py pending` — list unprocessed inbox items
+- `python inbox_drain.py mark <ISO-ts>` — mark one item processed
+- `python inbox_drain.py mark-all` — mark all pending items processed
+
+Configuration via `aesop.config.json` or env vars: `AESOP_INBOX_PATH`, `AESOP_INBOX_SEEN_PATH`, `AESOP_STATE_ROOT`.
+Gracefully handles missing inbox/seen files (no crash).
+
+Exit: 0 always. Output: `pending` lists items one per line; `mark`/`mark-all` prints summary to stderr.
+
 ## Invariants
 
 - **Dependency-light**: Python tools must work on base Python 3 (no pip installs).
