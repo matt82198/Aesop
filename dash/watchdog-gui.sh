@@ -34,7 +34,7 @@ get_hb_threshold() {
   case "$name" in
     *monitor*) echo 3600;;
     *watchdog*) echo 300;;
-    *) echo 300;;
+    *) echo 1800;;
   esac
 }
 
@@ -122,8 +122,8 @@ while true; do
     WD="${R}STALE${X}"
   fi
 
-  HI=$(grep -v '^RESOLVED-FP' "$SLOG" 2>/dev/null | grep -c ' HIGH '); HI=${HI:-0}
-  ME=$(grep -v '^RESOLVED-FP' "$SLOG" 2>/dev/null | grep -c ' MED '); ME=${ME:-0}
+  set -- $(awk '/^RESOLVED-FP/ { next } / HIGH / { hi++ } / MED / { me++ } END { print hi+0 " " me+0 }' "$SLOG" 2>/dev/null || echo '0 0')
+  HI="$1"; ME="$2"
 
   if [ "$FIRST_FRAME" -eq 1 ]; then
     printf '\033[2J'
