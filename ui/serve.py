@@ -48,158 +48,26 @@ from datetime import datetime
 from pathlib import Path
 from time import time
 
-
 # ==============================================================================
-# Configuration & Paths
-# ==============================================================================
-
-PORT = int(os.getenv("PORT", "8770"))
-
-# Determine AESOP_ROOT: env > default
-AESOP_ROOT = Path(os.getenv("AESOP_ROOT", Path.home() / "aesop"))
-
-# Try to load config file for additional settings
-CONFIG_FILE = AESOP_ROOT / "aesop.config.json"
-config = {}
-if CONFIG_FILE.exists():
-    try:
-        with open(CONFIG_FILE) as f:
-            config = json.load(f)
-    except:
-        pass
-
-# Derive paths with precedence: env var > config file > built-in default
-# STATE_DIR: env AESOP_STATE_ROOT > config state_root > AESOP_ROOT/state
-STATE_DIR = Path(
-    os.getenv(
-        "AESOP_STATE_ROOT",
-        config.get("state_root", str(AESOP_ROOT / "state"))
-    )
-)
-
-# TRANSCRIPTS_ROOT: env AESOP_TRANSCRIPTS_ROOT > config transcripts_root > ~/.claude/projects
-TRANSCRIPTS_ROOT = Path(
-    os.getenv(
-        "AESOP_TRANSCRIPTS_ROOT",
-        config.get("transcripts_root", "~/.claude/projects")
-    )
-).expanduser()
-
-WATCHDOG_HEARTBEAT = STATE_DIR / ".watchdog-heartbeat"
-MONITOR_HEARTBEAT = STATE_DIR / ".monitor-heartbeat"
-REPOS_JSON = STATE_DIR / ".watchdog-repos.json"
-BACKUP_LOG = STATE_DIR / "FLEET-BACKUP.log"
-ALERTS_LOG = STATE_DIR / "SECURITY-ALERTS.log"
-INBOX_FILE = STATE_DIR / "ui-inbox.md"
-AUDIT_BACKLOG_FILE = AESOP_ROOT / "AUDIT-BACKLOG.md"
-UI_SESSION_TOKEN_FILE = STATE_DIR / ".ui-session-token"
-
-
-# ==============================================================================
-# CSRF Token Generation & Validation
+# Sibling module imports (config, csrf)
 # ==============================================================================
 
-def generate_session_token():
-    """Generate or load the per-session CSRF token.
+# Sys.path shim: add ui/ directory to path so sibling imports work
+# (both when run as 'python ui/serve.py' and when imported via importlib)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-    Token is generated once at startup and persisted to state/.ui-session-token (mode 0600).
-    Subsequent imports of this module return the same token (in-memory).
+# Import and initialize config
+import config
+config.reload()
 
-    SECURITY: File is created atomically with restricted permissions using os.open(O_CREAT|O_EXCL)
-    to avoid TOCTOU window where file exists with world-readable permissions.
+# Import and initialize CSRF protection
+import csrf
+csrf.init()
 
-    Returns:
-        str: 43-character base64-like random token (256 bits / 3 bytes per char = ~43 chars)
-    """
-    # Check if token file exists and is readable
-    if UI_SESSION_TOKEN_FILE.exists():
-        try:
-            token = UI_SESSION_TOKEN_FILE.read_text().strip()
-            if token and len(token) >= 32:
-                return token
-        except:
-            pass
-
-    # Generate new token: 32 random bytes → 43-char base64-like string
-    token = secrets.token_urlsafe(32)
-
-    # Persist to file with restricted permissions (0600) using atomic creation
-    try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Atomically create file with 0600 permissions using os.open with O_CREAT|O_EXCL.
-        # This ensures the file is never world-readable (no TOCTOU window).
-        # On Windows, mode bits are largely ignored, which is fine.
-        try:
-            fd = os.open(
-                str(UI_SESSION_TOKEN_FILE),
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                0o600
-            )
-            # Write token via the file descriptor (no separate chmod needed)
-            with os.fdopen(fd, 'w') as f:
-                f.write(token)
-        except FileExistsError:
-            # File already exists (race condition or previous run).
-            # Try to read it and use that token instead.
-            try:
-                token = UI_SESSION_TOKEN_FILE.read_text().strip()
-                if token and len(token) >= 32:
-                    return token
-            except:
-                pass
-            # If we can't read the existing file, fall back to in-memory token
-    except Exception:
-        pass  # Fail-open: token exists in memory even if file write fails
-
-    return token
-
-
-# Generate and cache session token at module load time
-SESSION_TOKEN = generate_session_token()
-
-
-def validate_csrf_request(headers):
-    """Validate CSRF protections on /submit POST request.
-
-    Performs two checks:
-    1. Origin/Referer validation: if Origin or Referer header is present, must be local
-       (http://127.0.0.1:<port>, http://localhost:<port>)
-    2. X-Aesop-Token validation: must match SESSION_TOKEN
-
-    Args:
-        headers: dict-like object with HTTP headers (case-insensitive)
-
-    Returns:
-        tuple: (is_valid: bool, reason: str or None)
-        - (True, None) if CSRF checks pass
-        - (False, reason) if either check fails
-    """
-    # Check 1: Origin/Referer header validation
-    origin = headers.get("Origin", "").strip()
-    referer = headers.get("Referer", "").strip()
-
-    # If Origin or Referer is present, validate it's local
-    if origin or referer:
-        check_value = origin or referer
-        # Check if it's a local origin: http://127.0.0.1:<PORT> or http://localhost:<PORT>
-        is_local = (
-            check_value.startswith("http://127.0.0.1:") or
-            check_value.startswith("http://localhost:") or
-            check_value.startswith("http://[::1]:")  # IPv6 localhost
-        )
-        if not is_local:
-            return (False, "Foreign Origin/Referer rejected")
-
-    # Check 2: X-Aesop-Token validation
-    token = headers.get("X-Aesop-Token", "").strip()
-    if not token:
-        return (False, "Missing X-Aesop-Token header")
-
-    if token != SESSION_TOKEN:
-        return (False, "Invalid X-Aesop-Token")
-
-    return (True, None)
+# Re-export all config and csrf symbols for backward compatibility
+# (tests and other code access these via serve.X)
+from config import *
+from csrf import *
 
 
 # ==============================================================================
@@ -558,8 +426,7 @@ def get_alerts():
 # ==============================================================================
 # Tracker Data Layer (state/tracker.json) — wave-8 CRUD API
 # ==============================================================================
-
-TRACKER_FILE = STATE_DIR / "tracker.json"
+# (TRACKER_FILE is imported from config)
 
 
 def load_tracker():
