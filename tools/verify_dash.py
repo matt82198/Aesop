@@ -23,7 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -451,7 +451,7 @@ def main():
                     "role": "orchestrator",
                     "activity": "running audit",
                     "phase": "audit",
-                    "updated_at": datetime.utcnow().isoformat() + "Z"
+                    "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 }
                 status_file = root / "state" / "orchestrator-status.json"
                 status_file.write_text(json.dumps(status_data, indent=2), encoding="utf-8")
@@ -461,7 +461,7 @@ def main():
                     timeout=8000)
                 # Verify ASCII art is present
                 banner_text = page.inner_text("#audit-banner")
-                assert "AUDIT" in banner_text and "tortoise" in banner_text.lower() or "(-" in banner_text, \
+                assert "AUDIT CYCLE RUNNING" in banner_text and "scanning" in banner_text, \
                     f"Audit banner missing expected content: {banner_text}"
             except Exception as e:
                 failures.append(f"(l) orchestrator status audit banner did not appear: {e}")
