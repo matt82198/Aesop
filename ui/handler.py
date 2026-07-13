@@ -35,6 +35,37 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         """Suppress default logging."""
         pass
 
+    def _drain_body(self):
+        """Read and discard the request body, if any, before an early error
+        response closes the connection.
+
+        Windows-specific gotcha: BaseHTTPRequestHandler defaults to HTTP/1.0,
+        which closes the socket after each response. If the client already
+        sent a body (e.g. a POST to a CSRF-gated endpoint) and the handler
+        never reads it, there are still unread bytes sitting in the socket's
+        kernel receive buffer at close() time. Windows' TCP stack responds to
+        that by sending an abortive RST instead of a graceful FIN, which the
+        client observes as ConnectionAbortedError ([WinError 10053]) even
+        though the server's response bytes were already written — this is
+        the root cause of the intermittent Windows test failures in
+        tests/test_tracker_csrf.py. Always drain the body before an
+        early-return error response so the close is graceful.
+
+        Bounded to the same 10000-byte limit these endpoints enforce as a
+        valid body size, so a spoofed/huge Content-Length on a
+        CSRF-rejected request can't be used to make the server read an
+        unbounded amount of attacker-controlled data (DoS).
+        """
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+        except (TypeError, ValueError):
+            content_length = 0
+        if content_length > 0:
+            try:
+                self.rfile.read(min(content_length, 10000))
+            except OSError:
+                pass
+
     def do_GET(self):
         """Handle GET requests."""
         if self.path == "/":
@@ -117,6 +148,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         try:
             is_valid, reason = validate_csrf_request(self.headers)
             if not is_valid:
+                self._drain_body()
                 self.send_response(403)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -155,6 +187,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         try:
             is_valid, reason = validate_csrf_request(self.headers)
             if not is_valid:
+                self._drain_body()
                 self.send_response(403)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -380,6 +413,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             # CSRF validation: Check Origin/Referer + X-Aesop-Token
             is_valid, reason = validate_csrf_request(self.headers)
             if not is_valid:
+                self._drain_body()
                 self.send_response(403)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
