@@ -113,6 +113,7 @@ python ui/serve.py
 
 ```
 aesop/
+  skills/           # Orchestration skills (/power priming skill)
   daemons/          # Watchdog daemon + backup scripts
   dash/             # TUI dashboard (watchdog-gui.sh)
   monitor/          # Orchestration monitor (collect-signals.mjs, CHARTER.md)
