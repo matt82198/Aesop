@@ -41,7 +41,7 @@ Some files must have exactly one writer to prevent race conditions and data loss
 
 ## Inbox pattern for coordination
 
-Loops that need to request memory updates or signal decisions use an append-only inbox. The orchestrator reviews inbox entries on every `/power` cycle.
+Loops that need to request memory updates or signal decisions use an append-only inbox. The orchestrator reviews inbox entries on every `/power` cycle. See [skills/power/SKILL.md](../skills/power/SKILL.md) for orchestrator priming details.
 
 ### Inbox format
 

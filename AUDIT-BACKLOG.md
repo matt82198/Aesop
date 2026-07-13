@@ -251,6 +251,54 @@ Audit #3 ran post-wave-6: NOT clean (2 quick-wins fixed in PR #64, rest deferred
 
 ---
 
+---
+
+# Wave 8 — refinement sprint (in planning)
+
+Prioritized backlog for the refinement loop post-wave-7. Branch-per-item; TDD-first acceptance gate.
+
+## P0 — blocking / top-tier fixes
+
+- ⬜ **[needs-decision] proposals.mjs acquireLock fail-closed vs. single-writer queue** — Monitor emit/accept/reject coordination; must not proceed unlocked after timeout. Decision: fail-closed (log + abort, retry next cycle) or enqueue for ordered processing. (monitor/collect-signals.mjs:536 + tools/proposals.mjs:19)
+- ⬜ **[test] verify_dash.py browser proof wired into CI** — Verify_dash browser tests run in CI; /submit UTF-8 encoding + malformed SSE; local skip→fail gate. Plus verify_submit_encoding.py proof.
+- ✅ **[docs] /power adoption quickstart in README** — PR #67 ships skills/power/SKILL.md; README section on priming orchestrator, skill setup, /power invocation (this PR).
+- ⬜ **[ui] dashboard a11y contrast + keyboard nav** — WCAG 1.4.1 color contrast, 2.1.1 keyboard operability for agent rows, status/severity text labels + ARIA (in flight fix/wave8-ui-serve).
+
+## USER-FLAGGED FEATURES
+
+- ⬜ **backlog tracker on dashboard** — Live backlog rendering from state/tracker.json; /api/tracker endpoint; multi-lane UI; agent inbox integration.
+- ⬜ **orchestrator main-thread status panel** — Real-time orchestrator heartbeat + next steps; state/orchestrator-status.json + SSE feed.
+
+## P1 — hardening / correctness
+
+- ⬜ **[ui] /submit content-length DoS guard** — Bounded request size before body parse (in flight).
+- ⬜ **[bash] run-watchdog.sh cycle exit-code visibility** — Daemon cycle success/failure reporting (in flight).
+- ⬜ **[py] serve.py collector silent-except hardening** — Typed exception handlers; no swallowed errors (in flight).
+- ⬜ **[docs] tests/CLAUDE.md + tools/CLAUDE.md regeneration** — tests half this PR (22 files, 3 suites); tools half after PR #68 merge.
+- ⬜ **[config] example-config transcripts_root fix** — Root path resolution corrected (in flight).
+- ⬜ **[tests] 9 new tool tests from PRs #67/#68** — power_selftest.py, inbox_drain.py, + updated tools coverage after PRs merge.
+
+## P2 — polish / UX / test-debt
+
+- ⬜ **[sec] ui-inbox symlink TOCTOU** — File creation atomicity for inbox (in flight).
+- ⬜ **[error] /agent error-message leak** — Path/stack info in agent error responses (in flight).
+- ⬜ **[bash] backup-fleet.sh sed portability** — GNU vs. BSD sed (in flight).
+- ⬜ **[arch] collect-signals corrupted-state handling** — Graceful recovery from truncated JSON (in flight).
+- ⬜ **[git] .gitignore heartbeat narrowing** — Scope heartbeat exclusions to ~/.claude/loops (in flight).
+- ⬜ **[tools] heartbeat-staleness logic consolidation** — Move stale-check logic to tools/heartbeat.py after PR #68.
+- ⬜ **[ui] monitor STALE threshold mismatch in GUI** — Align STALE timing across serve.py and dash-gui (in flight).
+- ⬜ **[ui] UI polish bundle** — Done-item styling, connection badge, auto-scroll, truncation, aria-live (fold into tracker rework).
+- ⬜ **[arch] serve.py monolith split** — Extract ui/static/{dashboard.html,js,css}; serve.py backend only (deferred decision).
+
+## P3 — deferred / strategic
+
+- ⬜ **[py] rotate_logs keep_count guard** — Verify keep_count logic (in flight).
+- ⬜ **[dash] GUI double-grep optimization** — Reduce grep calls in watchdog-gui.sh.
+- ⬜ **[test] test naming convention unification** — Standardize test file naming across suites.
+- ⬜ **[fleet] prune 35 merged agent worktrees** — Clean up old .claude/worktrees/.
+
+---
+
 ## Landing log
 - 2026-07-12: five-lens re-audit (audit #1) → 9 item-branches + 2 ports, all ✅ merged (PRs
   #17–#35). Honest lens CLEAN.
@@ -264,3 +312,5 @@ Audit #3 ran post-wave-6: NOT clean (2 quick-wins fixed in PR #64, rest deferred
 - Audit cadence: audit #2 found real work → loop continues. Loop ends after 2 consecutive clean
   audits; the next audit after wave 6 lands is audit #3.
 - 2026-07-12: **Four-lens re-audit (audit #3)** — security+correctness, architecture, frontend/UX, honest. NOT clean → 7 items (1 P1, 6 P2); 2 quick-wins fixed in PR #64 (already merged); rest deferred to wave 7 backlog. Loop continues.
+- 2026-07-13: **Wave-7 work in progress** — Multiple PR branches active; /power adoption docs (PR #67), tools regen + tests/CLAUDE.md docs (this PR), and P0–P3 fixes landing incrementally.
+- 2026-07-13: **Wave-8 backlog planned** — P0 blocking decisions (acquireLock, CI wiring, a11y) + user-flagged features (backlog tracker, orchestrator status panel) + P1–P3 refinements. Ready for prioritization after wave-7 lands.

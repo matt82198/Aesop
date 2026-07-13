@@ -43,7 +43,7 @@ Aesop ships behavior as versioned, portable, diffable filesystem artifacts in gi
 
 ## Install & Quick Start
 
-**Note:** Aesop is currently in beta. Install the prerelease version.
+**Note:** Aesop is currently in beta. Install the prerelease version with the `@beta` npm tag to get the latest development release (0.1.0-beta.1+).
 
 ### Option 1: One command (fastest)
 
@@ -99,9 +99,13 @@ cd ~/aesop
 cp aesop.config.example.json aesop.config.json
 # Edit aesop.config.json with your paths and repos
 
-# Start the daemon
+# Start the daemon (Bash)
 export AESOP_ROOT=$HOME/aesop
 bash $AESOP_ROOT/daemons/run-watchdog.sh --once
+
+# Or on Windows (PowerShell):
+$env:AESOP_ROOT = "$HOME\aesop"
+bash $env:AESOP_ROOT/daemons/run-watchdog.sh --once
 
 # Launch the dashboard
 python ui/serve.py
@@ -183,6 +187,32 @@ Note: The TUI is maintained for backward compatibility but is not actively devel
 # then acts on AUTO-tier findings or stages PROPOSE-tier changes.
 ```
 
+### Prime your orchestrator (/power)
+
+If you're using **Claude Code**, the `/power` skill primes your orchestrator's filesystem brain in one call. It loads all operating rules, dispatch models, memory, and project state from disk and produces a compact health brief.
+
+**Setup** (required once):
+```bash
+# Copy the /power skill into your Claude Code skills directory
+cp -r skills/power/ ~/.claude/skills/power/
+```
+
+**Usage** (every session):
+```bash
+# In Claude Code, invoke:
+/power
+
+# This loads:
+# - ~/.claude/CLAUDE.md (cardinal rules, domain map)
+# - ~/.claude/MEMORY.md + ~/.claude/memory/* (team facts)
+# - Aesop machinery state (heartbeats, proposals, durable checkpoints)
+# - Project-specific CLAUDE.md (this repo's domain map)
+
+# Output: brief health report with system status and next steps
+```
+
+The `/power` skill is self-contained and gracefully degrades when targets are absent. See [skills/power/SKILL.md](./skills/power/SKILL.md) for full details.
+
 ## Cardinal Rules (abridged)
 
 Read `docs/CARDINAL-RULES.md` for the full text. Core principles:
@@ -222,19 +252,22 @@ Edit `aesop.config.json`:
 
 ### 2. Initialize your brain (Claude Code team memory)
 
-The team brain is your private copy of `CLAUDE.md` and `MEMORY.md` that lives in `~/.claude/`:
+The team brain is your private copy of `CLAUDE.md` and `MEMORY.md` that lives in `~/.claude/`. Copy the templates and customize for your team:
 
 ```bash
 # Create the memory directory
 mkdir -p ~/.claude/memory
 
-# Copy templates and customize
-cp CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md    # Edit domains and team info
-cp docs/MEMORY-TEMPLATE.md ~/.claude/MEMORY.md  # Add your team facts
+# Copy and customize the template files
+cp CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md
+cp docs/MEMORY-TEMPLATE.md ~/.claude/MEMORY.md
+
+# Edit both files with your team info
+# ~/.claude/CLAUDE.md: Add your domains, cardinal rules, and setup steps
+# ~/.claude/MEMORY.md: Add team facts (one per file in ~/.claude/memory/)
 ```
 
-Edit `~/.claude/CLAUDE.md` to reflect your project domains, team principles, and setup steps.
-Edit `~/.claude/MEMORY.md` to add your own facts (one file per fact in `~/.claude/memory/`).
+After copying, edit `~/.claude/CLAUDE.md` to reflect your project domains, team principles, and setup steps. Edit `~/.claude/MEMORY.md` to index your team's persistent knowledge and facts.
 
 ### 3. Create required directories
 
@@ -392,6 +425,8 @@ See `docs/` for detailed guides:
 - `DISPATCH-MODEL.md` — cost analysis and parallel orchestration patterns.
 - `STATE-MACHINE.md` — how STATE.md and BUILDLOG.md survive wipes.
 - `MONITOR-GOVERNANCE.md` — monitor AUTO/PROPOSE tiers and approval flow.
+
+See [CHANGELOG.md](./CHANGELOG.md) for release notes and version history.
 
 ## License
 
