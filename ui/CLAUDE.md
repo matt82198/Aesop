@@ -2,9 +2,17 @@
 
 **Purpose**: Stdlib-only local observability dashboard. Serves a dark-theme HTML dashboard on a configurable port (realtime via Server-Sent Events), enabling real-time fleet monitoring without external dependencies.
 
-## Files
+## Files (wave-9 split: serve.py monolith decomposed into focused modules)
 
-- **serve.py** — HTTP server (ThreadingHTTPServer, stdlib only). Hosts HTML dashboard; /events endpoint streams realtime SSE updates. Includes CSRF token generation/validation, session persistence, and background collector thread.
+- **serve.py** — Thin (~65-line) entry point + composition layer. Wires the sibling modules, calls `config.reload()` / `csrf.init()` / `sse.reset_state()`, and re-exports their symbols so `serve.X` keeps resolving for the test suite (which loads serve.py by path) and for `python ui/serve.py`.
+- **config.py** — Path / env / `aesop.config.json` resolution. `reload()` recomputes all path globals from the current environment. **Load-bearing rule: every other module reads `config.X` at call time (`import config`), never `from config import <path>` — a frozen import would go stale after reload() (breaks test-fixture isolation).**
+- **csrf.py** — Session-token generation (atomic O_EXCL 0600) + `validate_csrf_request()`; `init()` sets `SESSION_TOKEN`.
+- **collectors.py** — Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD, and SSE section snapshots (incl. `read`-style tracker/orchestrator-status snapshots + inbox drain).
+- **agents.py** — Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`) and path-traversal-safe agent-id handling (`_AGENT_ID_FORBIDDEN`).
+- **sse.py** — SSE client registry, bounded broadcast, hash-gated `_maybe_emit`, and the background `collector_loop`. `reset_state()` restores per-import collector isolation (the `sse` module is cached across test re-imports).
+- **render.py** — Renders `templates/dashboard.html`, substituting the CSRF token via a unique sentinel (no `.format`/% — the CSS/JS is full of `{}`/`%`).
+- **handler.py** — `DashboardHandler` (HTTP routing + all GET/POST endpoints incl. /api/tracker) and `run_server()`. Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
+- **templates/dashboard.html** — The dashboard HTML/CSS/JS (extracted from the serve.py string), incl. tracker panel + orchestrator-status panel + audit-cycle ASCII banner.
 - **README.md** — User guide and configuration reference.
 
 ## Configuration & Path Precedence
