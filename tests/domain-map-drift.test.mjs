@@ -107,3 +107,39 @@ test('domain-map drift: all code directories have domain-map entries', () => {
     );
   }
 });
+
+test('tools FILES drift: all tools/*.{py,mjs,sh} files documented in tools/CLAUDE.md', () => {
+  const toolsClaudeMdPath = path.join(PROJECT_ROOT, 'tools', 'CLAUDE.md');
+  assert.ok(fs.existsSync(toolsClaudeMdPath), `tools/CLAUDE.md must exist at ${toolsClaudeMdPath}`);
+
+  const toolsClaudeMdContent = fs.readFileSync(toolsClaudeMdPath, 'utf8');
+
+  // Extract backtick-quoted filenames: `filename.ext`
+  const filesRegex = /`([a-zA-Z0-9_-]+\.(py|mjs|sh))`/g;
+  const documentedFiles = new Set();
+
+  let match;
+  while ((match = filesRegex.exec(toolsClaudeMdContent)) !== null) {
+    documentedFiles.add(match[1]);
+  }
+
+  // Find all .py, .mjs, .sh files in tools/
+  const toolsDir = path.join(PROJECT_ROOT, 'tools');
+  const entries = fs.readdirSync(toolsDir, { withFileTypes: true });
+
+  const failures = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!/\.(py|mjs|sh)$/.test(entry.name)) continue;
+    if (!documentedFiles.has(entry.name)) {
+      failures.push(`  tools/${entry.name}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `tools/*.{py,mjs,sh} files missing from tools/CLAUDE.md FILES section:\n${failures.join('\n')}\n` +
+      `Add these to the "## FILES" section in tools/CLAUDE.md with a one-line purpose.`
+    );
+  }
+});

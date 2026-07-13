@@ -2,6 +2,38 @@
 
 Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Never print secrets — report by pattern name/location only.
 
+## FILES
+
+**Locking & atomicity**:
+- `lock.mjs` — Fail-closed atomic lock acquisition (exponential backoff + stale-lock detection) for PROPOSALS.md and related single-writer operations
+
+**Secret scanning & compliance**:
+- `secret_scan.py` — Pre-push secret/credential detection gate; scans staged, history, or paths by regex + filename patterns
+- `scanner_selftest.py` — Regression harness for secret_scan.py; validates TP/FP vectors and self-scan cleanliness
+- `prepublish_scan.py` — Pre-publish gate running full git history + staged-changes scans; exit 0 only if CLEAR-TO-PUBLISH
+
+**Browser-level verification (CI gates)**:
+- `verify_dash.py` — Browser proof for realtime SSE dashboard; validates console errors, backlog rendering, live SSE updates (use `--allow-skip` in browserless environments)
+- `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap; validates encoding on Windows and real CSRF flow (use `--allow-skip` in browserless environments)
+
+**Orchestration infrastructure**:
+- `proposals.mjs` — Proposal lifecycle manager (list/accept/reject); uses fail-closed locking for atomic state updates
+- `power_selftest.py` — Health check harness for /power bootstrap; validates hooks, brain, heartbeats, decisions, and scanner
+- `buildlog.py` — Uniform BUILDLOG.md appender; ensures consistent timestamp + message + git HEAD ref formatting
+- `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates in state directory if missing
+- `fleet_ledger.py` — Append-only ledger of agent runs, resource use, and verdicts; supports harvest (scan tasks) and rotate (archive)
+- `heartbeat.py` — Single-instance loop liveness registry; write beats to state/.heartbeats/<name>, check staleness across fleet
+- `inbox_drain.py` — Drain UI inbox submissions; tracks processed dashboard work items (queue while no session running)
+
+**Repository operations**:
+- `reconstitute.sh` — Clone or fetch repos from config (tab/space-delimited); validates clone targets against fleet-root (physical paths, security)
+- `eod_sweep.py` — End-of-day safety check; scans repos for dirty trees, unpushed commits, untracked files; optional auto-push
+
+**Utilities**:
+- `agent-forensics.sh` — Incident forensics / behavior reconstruction; read-only git plumbing to snapshot or diff behavior-controlling files
+- `launch_tui.py` — Spawn bash TUI script in detached terminal; finds terminal (Git Bash → Windows Terminal), idempotent via pidfile
+- `rotate_logs.py` — Log rotation utility; archives oldest lines when file exceeds size/line thresholds; ensures no data loss
+
 ## secret_scan.py — Pre-push secret/credential detection gate
 
 Scans staged/history/paths for secrets by regex pattern and credential filenames; blocks pushes on findings.
@@ -111,3 +143,5 @@ Scans listed repos for: dirty working tree, unpushed commits, untracked files. O
 - **Never print secrets**: mask as pattern name + masked value only.
 - **Config-driven paths**: heartbeat/ledger/logs use AESOP_STATE_ROOT env var (default ./state) or CLI args; no hardcoded personal paths.
 - **Fragment-assembled secrets in tests**: scanner_selftest.py concatenates dummy secrets at runtime so pattern text never appears contiguously (self-scan invariant).
+- **verify_*.py are mandatory CI gates**: verify_dash.py and verify_submit_encoding.py are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run both).
+- **lock.mjs is the ONLY lock implementation**: never reimplement locking in proposals.mjs or elsewhere; all proposals/state updates must use fail-closed lock.mjs with exponential backoff + stale-lock breaking.
