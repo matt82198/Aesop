@@ -336,6 +336,24 @@
             return div.innerHTML;
         }
 
+        // URL-scheme allowlist: only http:/https: URLs may ever be placed into an
+        // href attribute. Anything else (javascript:, data:, vbscript:, etc.) is
+        // neutralized to an empty string so the resulting link is inert. This is
+        // defense-in-depth alongside the HTML-escaping done by sanitize() — escaping
+        // alone does not stop a javascript: or data: URI from executing on click.
+        function sanitizeURL(url) {
+            if (!url) return '';
+            try {
+                const parsed = new URL(url, location.href);
+                if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+                    return url;
+                }
+            } catch (e) {
+                // Unparseable URL: treat as unsafe.
+            }
+            return '';
+        }
+
         // CSS.escape wrapper (with a conservative fallback) so item/tier keys
         // containing brackets, quotes, etc. can't break attribute selectors.
         function cssEscape(s) {
@@ -772,6 +790,10 @@
         function buildTrackerItem(item) {
             const priorityClass = `priority-${item.priority || 'P3'}`.toLowerCase();
             const tagsHtml = (item.tags || []).map(t => `<span class="tag">${sanitize(t)}</span>`).join('');
+            // Only http:/https: pr_link values become a clickable href; anything else
+            // (javascript:, data:, etc.) is neutralized — the label text is still shown
+            // (escaped) but with no href, so the link is inert and non-executable.
+            const safePrLink = item.pr_link ? sanitizeURL(item.pr_link) : '';
             const itemEl = document.createElement('div');
             itemEl.className = 'tracker-item';
             itemEl.dataset.itemId = item.id;
@@ -783,7 +805,7 @@
                 <div class="tracker-item-tags">${tagsHtml}</div>
                 <div class="tracker-item-details" style="display: none;">
                     ${item.notes ? `<div class="detail-row"><span class="detail-label">Notes:</span> <span class="detail-value">${sanitize(item.notes)}</span></div>` : ''}
-                    ${item.pr_link ? `<div class="detail-row"><span class="detail-label">PR:</span> <a href="${sanitize(item.pr_link)}" target="_blank" style="color: #8ac;">${sanitize(item.pr_link.substring(0, 50))}</a></div>` : ''}
+                    ${item.pr_link ? `<div class="detail-row"><span class="detail-label">PR:</span> ${safePrLink ? `<a href="${sanitize(safePrLink)}" target="_blank" rel="noopener noreferrer" style="color: #8ac;">${sanitize(item.pr_link.substring(0, 50))}</a>` : `<span class="detail-value">${sanitize(item.pr_link.substring(0, 50))}</span>`}</div>` : ''}
                     ${item.created_at ? `<div class="detail-row"><span class="detail-label">Created:</span> <span class="detail-value">${sanitize(item.created_at)}</span></div>` : ''}
                     ${item.completed_at ? `<div class="detail-row"><span class="detail-label">Completed:</span> <span class="detail-value">${sanitize(item.completed_at)}</span></div>` : ''}
                 </div>
