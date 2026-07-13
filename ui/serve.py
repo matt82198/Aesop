@@ -724,178 +724,6 @@ def delete_tracker_item(item_id):
     return item
 
 
-
-
-# ==============================================================================
-# Tracker Data Layer (state/tracker.json) — wave-8 CRUD API  
-# ==============================================================================
-
-TRACKER_FILE = STATE_DIR / "tracker.json"
-
-
-def load_tracker():
-    """Load tracker.json, return empty tracker if missing or corrupt."""
-    if not TRACKER_FILE.exists():
-        return {"version": 1, "items": []}
-
-    try:
-        data = json.loads(TRACKER_FILE.read_text(encoding='utf-8'))
-        if not isinstance(data, dict) or "version" not in data:
-            raise ValueError("Invalid tracker schema")
-        return data
-    except Exception as e:
-        print(f"[tracker] Corrupt tracker.json: {e}", file=sys.stderr)
-        corrupt_path = TRACKER_FILE.with_suffix('.json.corrupt')
-        try:
-            if TRACKER_FILE.exists():
-                TRACKER_FILE.rename(corrupt_path)
-        except:
-            pass
-        return {"version": 1, "items": []}
-
-
-def save_tracker(tracker):
-    """Save tracker atomically using temp file + os.replace."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    temp_file = TRACKER_FILE.with_suffix('.json.tmp')
-    try:
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(tracker, f, indent=2)
-        os.replace(str(temp_file), str(TRACKER_FILE))
-    except Exception as e:
-        print(f"[tracker] Error saving tracker: {e}", file=sys.stderr)
-        try:
-            temp_file.unlink()
-        except:
-            pass
-        raise
-
-
-def migrate_tracker_from_backlog():
-    """One-time idempotent migration: AUDIT-BACKLOG.md -> tracker.json."""
-    if TRACKER_FILE.exists():
-        return load_tracker()
-
-    backlog_data = parse_audit_backlog()
-    if not backlog_data.get("tiers"):
-        return {"version": 1, "items": []}
-
-    items = []
-    for tier_data in backlog_data["tiers"]:
-        priority = tier_data["tier"]
-
-        for backlog_item in tier_data.get("items", []):
-            status_glyph = backlog_item["status"]
-
-            if status_glyph == "✅":
-                status, lane = "done", "done"
-                tags = []
-            elif status_glyph == "🔵":
-                status, lane = "in-progress", "in-progress"
-                tags = []
-            elif status_glyph == "⏸":
-                status, lane = "todo", "proposed"
-                tags = ["needs-decision"]
-            else:
-                status, lane = "todo", "ranked"
-                tags = []
-
-            title = backlog_item.get("title", "")
-            tag_prefix = backlog_item.get("tag", "")
-            if tag_prefix:
-                tag_value = tag_prefix.strip("[]")
-                if tag_value and tag_value not in tags:
-                    tags.insert(0, tag_value)
-
-            item = {
-                "id": secrets.token_hex(6),
-                "title": title,
-                "priority": priority,
-                "status": status,
-                "lane": lane,
-                "source": "audit-backlog-migration",
-                "tags": tags,
-                "notes": None,
-                "pr_link": None,
-                "created_at": datetime.utcnow().isoformat() + "Z",
-                "completed_at": None
-            }
-            items.append(item)
-
-    tracker = {"version": 1, "items": items}
-    save_tracker(tracker)
-    return tracker
-
-
-def get_tracker_items(status=None, priority=None):
-    """Retrieve tracker items with optional filters."""
-    tracker = load_tracker()
-    items = tracker.get("items", [])
-
-    if status:
-        items = [i for i in items if i.get("status") == status]
-    if priority:
-        items = [i for i in items if i.get("priority") == priority]
-
-    return items
-
-
-def create_tracker_item(data):
-    """Create a new tracker item."""
-    tracker = load_tracker()
-
-    item = {
-        "id": secrets.token_hex(6),
-        "title": data.get("title", ""),
-        "priority": data.get("priority", "P1"),
-        "status": data.get("status", "todo"),
-        "lane": data.get("lane", "proposed"),
-        "source": data.get("source", "manual"),
-        "tags": data.get("tags", []) if isinstance(data.get("tags"), list) else [],
-        "notes": data.get("notes"),
-        "pr_link": data.get("pr_link"),
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "completed_at": None
-    }
-
-    tracker["items"].append(item)
-    save_tracker(tracker)
-    return item
-
-
-def update_tracker_item(item_id, update_data):
-    """Update a tracker item by id."""
-    tracker = load_tracker()
-
-    item = next((i for i in tracker["items"] if i["id"] == item_id), None)
-    if not item:
-        raise Exception(f"404 Item not found: {item_id}")
-
-    for key in ["status", "lane", "priority", "notes", "pr_link", "tags"]:
-        if key in update_data:
-            item[key] = update_data[key]
-
-    if update_data.get("status") == "done" and not item.get("completed_at"):
-        item["completed_at"] = datetime.utcnow().isoformat() + "Z"
-
-    save_tracker(tracker)
-    return item
-
-
-def delete_tracker_item(item_id):
-    """Soft-delete a tracker item (mark as archived)."""
-    tracker = load_tracker()
-
-    item = next((i for i in tracker["items"] if i["id"] == item_id), None)
-    if not item:
-        raise Exception(f"404 Item not found: {item_id}")
-
-    item["status"] = "archived"
-    save_tracker(tracker)
-    return item
-
-
-
 # agent_id is attacker-controlled (GET /agent?id=...) and is spliced into a glob
 # pattern below. Reject path-traversal segments and glob metacharacters before
 # the pattern is ever built — a bare "/", "\", "..", "*", "?", "[" or "]" has no
@@ -1473,11 +1301,76 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         .error { color: #f44; }
         .fade-in { animation: fadeIn 0.3s ease-in; }
         @keyframes fadeIn { from { opacity: 0.5; } to { opacity: 1; } }
+
+        /* Orchestrator status banner */
+        #orchestrator-banner { margin-bottom: 16px; padding: 12px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; }
+        .status-none { color: #999; }
+        .status-activity { color: #8ac; font-weight: bold; }
+        .status-age { color: #666; font-size: 11px; margin-left: 8px; }
+        .status-stale-warn { color: #f80; font-weight: bold; }
+        .audit-banner { background: #1a1408; border: 1px solid #f80; border-radius: 4px; padding: 12px; margin: 12px 0; }
+        .audit-banner-title { color: #f80; font-weight: bold; font-size: 12px; margin-bottom: 6px; }
+        .audit-ascii { font-family: 'Monaco', 'Menlo', monospace; font-size: 11px; color: #8ac; line-height: 1.3; white-space: pre; margin: 6px 0; }
+        .audit-marquee { animation: marqueeAnim 2s linear infinite; }
+        @keyframes marqueeAnim { 0% { content: '░▒▓'; } 33% { content: '▒▓░'; } 66% { content: '▓░▒'; } }
+
+        /* Tracker lanes */
+        .tracker-lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .tracker-lane { background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 4px; padding: 12px; }
+        .lane-header { font-size: 12px; font-weight: bold; color: #8ac; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .lane-count { font-size: 11px; color: #666; }
+        .lane-items { display: flex; flex-direction: column; gap: 8px; }
+        .tracker-item { background: #1a1a1a; border: 1px solid #333; border-radius: 3px; padding: 10px; cursor: pointer; transition: all 0.2s ease; }
+        .tracker-item:hover { border-color: #8ac; background: #151515; }
+        .tracker-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+        .tracker-item-title { flex: 1; font-size: 12px; font-weight: bold; color: #e0e0e0; word-break: break-word; }
+        .priority-chip { display: inline-block; padding: 2px 6px; border-radius: 2px; font-size: 10px; font-weight: bold; text-transform: uppercase; }
+        .priority-p0 { background: #f44; color: #fff; }
+        .priority-p1 { background: #f80; color: #000; }
+        .priority-p2 { background: #88f; color: #000; }
+        .priority-p3 { background: #666; color: #bbb; }
+        .tracker-item-tags { font-size: 10px; color: #8ac; margin-bottom: 6px; }
+        .tag { display: inline-block; margin-right: 4px; padding: 1px 3px; background: #0a0a0a; border: 1px solid #8ac; border-radius: 2px; }
+        .tracker-item-details { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2a2a; font-size: 11px; color: #ccc; }
+        .tracker-item.expanded .tracker-item-details { display: block; }
+        .detail-row { margin-bottom: 4px; }
+        .detail-label { color: #8ac; font-weight: bold; }
+        .detail-value { color: #999; }
+        .tracker-item-actions { display: flex; gap: 4px; margin-top: 8px; }
+        .tracker-action-btn { flex: 1; padding: 4px 8px; background: #2a2a2a; border: 1px solid #444; color: #8ac; border-radius: 2px; cursor: pointer; font-size: 10px; font-weight: bold; transition: all 0.2s ease; }
+        .tracker-action-btn:hover { background: #333; border-color: #8ac; }
+        .tracker-action-btn.primary { background: #8ac; color: #000; border-color: #8ac; }
+        .tracker-action-btn.primary:hover { background: #9bd; }
+        .tracker-action-btn.danger { background: #f44; color: #fff; border-color: #f44; }
+        .tracker-action-btn.danger:hover { background: #f55; }
+
+        /* Tracker add-item form */
+        .tracker-form { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; margin-bottom: 20px; }
+        .form-group { margin-bottom: 8px; }
+        .form-label { font-size: 11px; color: #8ac; font-weight: bold; text-transform: uppercase; margin-bottom: 4px; display: block; }
+        .form-input { width: 100%; padding: 6px; background: #0a0a0a; border: 1px solid #333; color: #e0e0e0; border-radius: 2px; font-size: 12px; font-family: inherit; box-sizing: border-box; }
+        .form-input:focus { outline: none; border-color: #8ac; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .form-submit { padding: 8px 16px; background: #8ac; color: #000; border: none; border-radius: 2px; font-weight: bold; font-size: 11px; cursor: pointer; transition: all 0.2s ease; }
+        .form-submit:hover { background: #9bd; }
+        .form-submit:disabled { background: #555; cursor: not-allowed; }
+        .tracker-archived-summary { font-size: 11px; color: #666; padding: 8px; background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 3px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Aesop Fleet Dashboard</h1>
+
+        <div id="orchestrator-banner" style="display: none;">
+            <div class="header-label">Orchestrator Status</div>
+            <div id="orchestrator-status" class="status-none">—</div>
+        </div>
+        <div id="audit-banner" class="audit-banner" style="display: none;" aria-hidden="true">
+            <div class="audit-banner-title">AUDIT CYCLE RUNNING</div>
+            <pre class="audit-ascii">   .-.--.        ___
+  ( o___ )----- (o,o)
+   `-.__.'       \_/   <span class="audit-marquee">░▒▓</span> scanning...</pre>
+        </div>
 
         <div class="header" id="header">
             <div class="header-item">
@@ -1532,6 +1425,33 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             <input type="text" class="inbox-input" id="inbox-input" placeholder="Type your task here...">
             <button class="inbox-button" id="inbox-button">Send to Inbox</button>
             <div class="inbox-status" id="inbox-status">Queued ✓</div>
+        </div>
+
+        <div class="tracker-form">
+            <div class="form-label">Add Work Item</div>
+            <div class="form-group">
+                <input type="text" class="form-input" id="tracker-title" placeholder="Title" maxlength="200">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <select class="form-input" id="tracker-priority" style="appearance: none; padding-right: 24px;">
+                        <option value="P0">P0 — Critical</option>
+                        <option value="P1">P1 — High</option>
+                        <option value="P2" selected>P2 — Medium</option>
+                        <option value="P3">P3 — Low</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <button class="form-submit" id="tracker-add-btn">+ Add Item</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <input type="text" class="form-input" id="tracker-notes" placeholder="Notes (optional)" maxlength="500">
+            </div>
+        </div>
+
+        <div id="tracker-container" class="loading" style="margin-bottom: 20px;">
+            <div class="tracker-lanes" id="tracker-lanes">—</div>
         </div>
 
         <div class="panel" style="margin-bottom: 20px;">
@@ -2019,6 +1939,183 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             });
         }
 
+        // ---- tracker panel: lanes + keyed items ----------
+        let latestTracker = { items: [] };
+
+        function getItemLane(item) {
+            return item.lane || item.status || 'proposed';
+        }
+
+        function buildTrackerItem(item) {
+            const priorityClass = `priority-${item.priority || 'P3'}`.toLowerCase();
+            const tagsHtml = (item.tags || []).map(t => `<span class="tag">${sanitize(t)}</span>`).join('');
+            const itemEl = document.createElement('div');
+            itemEl.className = 'tracker-item';
+            itemEl.dataset.itemId = item.id;
+            itemEl.innerHTML = `
+                <div class="tracker-item-header">
+                    <div class="tracker-item-title"></div>
+                    <span class="priority-chip ${priorityClass}"></span>
+                </div>
+                <div class="tracker-item-tags">${tagsHtml}</div>
+                <div class="tracker-item-details" style="display: none;">
+                    ${item.notes ? `<div class="detail-row"><span class="detail-label">Notes:</span> <span class="detail-value">${sanitize(item.notes)}</span></div>` : ''}
+                    ${item.pr_link ? `<div class="detail-row"><span class="detail-label">PR:</span> <a href="${sanitize(item.pr_link)}" target="_blank" style="color: #8ac;">${sanitize(item.pr_link.substring(0, 50))}</a></div>` : ''}
+                    ${item.created_at ? `<div class="detail-row"><span class="detail-label">Created:</span> <span class="detail-value">${sanitize(item.created_at)}</span></div>` : ''}
+                    ${item.completed_at ? `<div class="detail-row"><span class="detail-label">Completed:</span> <span class="detail-value">${sanitize(item.completed_at)}</span></div>` : ''}
+                </div>
+                <div class="tracker-item-actions">
+                    <button class="tracker-action-btn claim-btn" data-id="${sanitize(item.id)}">Claim</button>
+                    <button class="tracker-action-btn done-btn" data-id="${sanitize(item.id)}">Done</button>
+                    <button class="tracker-action-btn danger archive-btn" data-id="${sanitize(item.id)}">Archive</button>
+                </div>
+            `;
+            return itemEl;
+        }
+
+        function patchTracker(trackerData) {
+            latestTracker = trackerData || { items: [] };
+            const container = document.getElementById('tracker-lanes');
+            container.innerHTML = '';
+
+            if (!latestTracker.items || latestTracker.items.length === 0) {
+                container.innerHTML = '<div class="loading" style="grid-column: 1/-1; text-align: center; color: #666;">No work items</div>';
+                return;
+            }
+
+            const lanes = { proposed: [], ranked: [], 'in-progress': [], done: [], archived: [] };
+            latestTracker.items.forEach(item => {
+                const lane = getItemLane(item);
+                if (lane === 'archived') lanes.archived.push(item);
+                else if (lanes[lane]) lanes[lane].push(item);
+                else lanes.proposed.push(item);
+            });
+
+            const laneOrder = ['proposed', 'ranked', 'in-progress', 'done'];
+            laneOrder.forEach(laneName => {
+                const items = lanes[laneName] || [];
+                const laneEl = document.createElement('div');
+                laneEl.className = 'tracker-lane';
+                laneEl.innerHTML = `
+                    <div class="lane-header">
+                        <span>${laneName.charAt(0).toUpperCase() + laneName.slice(1).replace('-', ' ')}</span>
+                        <span class="lane-count">${items.length}</span>
+                    </div>
+                    <div class="lane-items" data-lane="${laneName}"></div>
+                `;
+                container.appendChild(laneEl);
+
+                const itemsContainer = laneEl.querySelector('.lane-items');
+                items.forEach(item => {
+                    const itemEl = buildTrackerItem(item);
+                    itemsContainer.appendChild(itemEl);
+                });
+            });
+
+            if (lanes.archived.length > 0) {
+                const archivedSummary = document.createElement('div');
+                archivedSummary.className = 'tracker-archived-summary';
+                archivedSummary.textContent = `${lanes.archived.length} archived item${lanes.archived.length !== 1 ? 's' : ''}`;
+                container.appendChild(archivedSummary);
+            }
+
+            document.getElementById('tracker-container').classList.remove('loading');
+            setupTrackerEventHandlers();
+        }
+
+        function setupTrackerEventHandlers() {
+            document.querySelectorAll('.tracker-item').forEach(row => {
+                row.addEventListener('click', function(e) {
+                    if (e.target.closest('.tracker-action-btn')) return;
+                    this.classList.toggle('expanded');
+                    const details = this.querySelector('.tracker-item-details');
+                    if (details) details.style.display = this.classList.contains('expanded') ? 'block' : 'none';
+                });
+            });
+
+            document.querySelectorAll('.claim-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const id = btn.dataset.id;
+                    submitTrackerUpdate(id, { status: 'in-progress', lane: 'in-progress' });
+                });
+            });
+
+            document.querySelectorAll('.done-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const id = btn.dataset.id;
+                    submitTrackerUpdate(id, { status: 'done', lane: 'done' });
+                });
+            });
+
+            document.querySelectorAll('.archive-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const id = btn.dataset.id;
+                    submitTrackerDelete(id);
+                });
+            });
+        }
+
+        function submitTrackerUpdate(id, update) {
+            const csrfToken = window.__AESOP_CSRF_TOKEN__ || '';
+            fetch(`/api/tracker/${encodeURIComponent(id)}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Aesop-Token': csrfToken
+                },
+                body: JSON.stringify(update)
+            })
+            .then(r => r.json())
+            .catch(() => console.error('Tracker update failed'));
+        }
+
+        function submitTrackerDelete(id) {
+            const csrfToken = window.__AESOP_CSRF_TOKEN__ || '';
+            fetch(`/api/tracker/${encodeURIComponent(id)}?action=delete`, {
+                method: 'POST',
+                headers: { 'X-Aesop-Token': csrfToken }
+            })
+            .then(r => r.json())
+            .catch(() => console.error('Tracker delete failed'));
+        }
+
+        // ---- orchestrator status panel --------
+        function patchOrchestratorStatus(statusData) {
+            const banner = document.getElementById('orchestrator-banner');
+            const auditBanner = document.getElementById('audit-banner');
+            const statusDiv = document.getElementById('orchestrator-status');
+
+            if (!statusData.orchestrators || statusData.orchestrators.length === 0) {
+                banner.style.display = 'none';
+                auditBanner.style.display = 'none';
+                return;
+            }
+
+            const orch = statusData.orchestrators[0];
+            banner.style.display = 'block';
+
+            let statusText = orch.activity || 'no active session';
+            if (orch.age_seconds !== undefined) {
+                const mins = Math.floor(orch.age_seconds / 60);
+                const secs = orch.age_seconds % 60;
+                const ageStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                statusText += ` · updated ${ageStr} ago`;
+                if (orch.stale) statusDiv.className = 'status-stale-warn';
+                else statusDiv.className = 'status-activity';
+            }
+            statusDiv.textContent = statusText;
+
+            // Show ASCII banner for audit phase
+            if (orch.phase === 'audit') {
+                auditBanner.style.display = 'block';
+            } else {
+                auditBanner.style.display = 'none';
+            }
+        }
+
         // ---- SSE wiring ----------------------------------------------------
         const evtSource = new EventSource('/events');
 
@@ -2053,6 +2150,26 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 setConnectionDegraded(true);
             }
         });
+        evtSource.addEventListener('tracker', (e) => {
+            try {
+                patchTracker(JSON.parse(e.data));
+                setConnectionStatus(true);
+                setConnectionDegraded(false);
+            } catch (err) {
+                console.error('Failed to parse tracker frame:', err);
+                setConnectionDegraded(true);
+            }
+        });
+        evtSource.addEventListener('status', (e) => {
+            try {
+                patchOrchestratorStatus(JSON.parse(e.data));
+                setConnectionStatus(true);
+                setConnectionDegraded(false);
+            } catch (err) {
+                console.error('Failed to parse status frame:', err);
+                setConnectionDegraded(true);
+            }
+        });
         evtSource.addEventListener('open', () => {
             setConnectionStatus(true);
             setConnectionDegraded(false);
@@ -2063,8 +2180,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         // functions as the push path so there's a single rendering code path).
         async function manualRefresh() {
             try {
-                const [dataResp, backlogResp, agentsResp] = await Promise.all([
-                    fetch('/data'), fetch('/api/backlog'), fetch('/api/agents')
+                const [dataResp, backlogResp, agentsResp, trackerResp] = await Promise.all([
+                    fetch('/data'), fetch('/api/backlog'), fetch('/api/agents'), fetch('/api/tracker')
                 ]);
                 if (dataResp.ok) patchDataSection(await dataResp.json());
                 if (backlogResp.ok) patchBacklog(await backlogResp.json());
@@ -2072,6 +2189,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     patchAgents(await agentsResp.json());
                     patchHeaderRunningCount(latestAgents);
                 }
+                if (trackerResp.ok) patchTracker(await trackerResp.json());
             } catch (e) {
                 console.error('Manual refresh error:', e);
             }
@@ -2114,6 +2232,54 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         document.getElementById('inbox-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') handleInboxSubmit();
         });
+
+        async function handleTrackerAddItem() {
+            const titleInput = document.getElementById('tracker-title');
+            const priorityInput = document.getElementById('tracker-priority');
+            const notesInput = document.getElementById('tracker-notes');
+            const button = document.getElementById('tracker-add-btn');
+
+            const title = titleInput.value.trim();
+            if (!title) return;
+
+            const itemData = {
+                title: title,
+                priority: priorityInput.value || 'P2',
+                notes: notesInput.value.trim() || null,
+                source: 'dashboard',
+                tags: [],
+                status: 'todo',
+                lane: 'proposed'
+            };
+
+            button.disabled = true;
+            try {
+                const response = await fetch('/api/tracker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(itemData)
+                });
+                if (response.ok) {
+                    titleInput.value = '';
+                    notesInput.value = '';
+                    priorityInput.value = 'P2';
+                }
+            } catch (e) {
+                console.error('Tracker add error:', e);
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        document.getElementById('tracker-add-btn').addEventListener('click', handleTrackerAddItem);
+        document.getElementById('tracker-title').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleTrackerAddItem();
+        });
+
+        // Initial fetch for tracker and status data
+        Promise.all([fetch('/api/tracker')]).then(([trackerResp]) => {
+            if (trackerResp.ok) trackerResp.json().then(data => patchTracker({ items: data }));
+        }).catch(e => console.error('Initial tracker fetch error:', e));
     </script>
 </body>
 </html>"""
