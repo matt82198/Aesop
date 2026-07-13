@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Orchestrator status CLI tool — atomic status updates for the orchestration layer.
+"""Orchestrator status CLI tool - atomic status updates for the orchestration layer.
 
 Usage:
   python orchestrator_status.py set --activity "dispatching wave-8" --phase audit [--id main --role orchestrator]
@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -37,7 +37,7 @@ def set_status(activity, phase, id=None, role=None):
         "parent_id": None,
         "activity": activity,
         "phase": phase,
-        "updated_at": datetime.utcnow().isoformat() + "Z"
+        "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     }
     
     status_file = state_dir / "orchestrator-status.json"
