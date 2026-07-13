@@ -3,23 +3,29 @@
 import http.server
 import json
 import os
+import queue
 import sys
 import threading
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 import config
 import csrf
 import sse
 from render import render_dashboard
-from collectors import *
-from agents import *
-from sse import *
 from csrf import validate_csrf_request
 from collectors import (_snapshot_data, _snapshot_tracker,
-                       _snapshot_orchestrator_status, drain_tracker_inbox)
-from agents import _AGENT_ID_FORBIDDEN, _transcripts_fingerprint
-from sse import _latest_lock, _latest_snapshots, _maybe_emit
+                       _snapshot_orchestrator_status, drain_tracker_inbox,
+                       create_tracker_item, delete_tracker_item, get_alerts,
+                       get_heartbeat_status, get_main_thread_messages,
+                       get_monitor_heartbeat_status, get_recent_events,
+                       get_repos_status, get_tracker_items,
+                       parse_audit_backlog, update_tracker_item)
+from agents import (_AGENT_ID_FORBIDDEN, _transcripts_fingerprint,
+                   extract_agent_dispatch_prompt, get_fleet_agents)
+from sse import (_latest_lock, _latest_snapshots, _maybe_emit,
+                register_sse_client, unregister_sse_client)
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
@@ -109,6 +115,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def handle_tracker_create(self):
         """Handle POST /api/tracker (create item)."""
         try:
+            is_valid, reason = validate_csrf_request(self.headers)
+            if not is_valid:
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "CSRF protection: " + reason}).encode('utf-8'))
+                return
+
             content_length = int(self.headers.get('Content-Length', 0))
             if content_length <= 0 or content_length > 10000:
                 self.send_response(400)
