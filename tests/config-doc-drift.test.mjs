@@ -30,12 +30,14 @@ const REQUIRED_KEYS = [
   { file: 'monitor/collect-signals.mjs', keyPath: 'temp_root' },
   { file: 'monitor/collect-signals.mjs', keyPath: 'state_root' },
 
-  // From monitor/collect-signals.mjs (lines 55-71):
+  // From monitor/collect-signals.mjs (lines 55-71, heartbeat thresholds at ~148-155):
   //   config.repos, config.monitor.log_max_lines, config.monitor.log_max_kb, config.monitor.extended_signals
+  //   config.monitor.heartbeat_thresholds.{monitor,watchdog,default}
   { file: 'monitor/collect-signals.mjs', keyPath: 'repos' },
   { file: 'monitor/collect-signals.mjs', keyPath: 'monitor.log_max_lines' },
   { file: 'monitor/collect-signals.mjs', keyPath: 'monitor.log_max_kb' },
   { file: 'monitor/collect-signals.mjs', keyPath: 'monitor.extended_signals' },
+  { file: 'monitor/collect-signals.mjs', keyPath: 'monitor.heartbeat_thresholds' },
 
   // From dash/dash-extra.mjs (lines 26-30):
   //   config.transcripts_root

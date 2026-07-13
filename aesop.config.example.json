@@ -34,7 +34,12 @@
   "monitor": {
     "log_max_lines": 500,
     "log_max_kb": 40,
-    "extended_signals": false
+    "extended_signals": false,
+    "heartbeat_thresholds": {
+      "monitor": 3600,
+      "watchdog": 300,
+      "default": 1800
+    }
   },
   "cardinal_rules": {
     "subagent_model": "haiku"
