@@ -139,6 +139,11 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
         # Use the more conservative count
         keep_count = min(keep_count, bytes_keep_count)
 
+    # Guard: ensure we keep at least 1 line, archive the rest
+    if keep_count <= 0:
+        # If calculated keep_count is 0 or negative, keep at least 1 line
+        keep_count = 1
+
     # Split lines
     archive_lines = lines[:-keep_count] if keep_count < len(lines) else []
     remaining_lines = lines[-keep_count:] if keep_count > 0 else []

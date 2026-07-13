@@ -250,6 +250,40 @@ class TestRotateLogs(unittest.TestCase):
         # Should contain "line 250" (the newest)
         self.assertTrue(any("line 250" in line for line in remaining))
 
+    def test_keep_count_guard_tiny_max_bytes(self):
+        """Test that rotation guards against keep_count <= 0 when max_bytes is tiny.
+
+        When max_bytes is very small (e.g., 1 byte) and all lines exceed it,
+        the calculated keep_count becomes 0 or negative. The guard should
+        ensure at least 1 line is kept and the rest are archived.
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+        # Create lines of 10 bytes each
+        with open(logfile, 'w') as f:
+            for i in range(1, 21):
+                f.write(f"line {i:02d}\n")  # Each line is ~10 bytes
+
+        # Set max_bytes to 1 (tiny, would cause keep_count <= 0)
+        result = self._run_rotate(logfile, ["--max-bytes", "1"])
+        self.assertEqual(result.returncode, 0)
+
+        # After rotation, original should have at least 1 line
+        remaining_lines = self._count_lines(logfile)
+        self.assertGreaterEqual(remaining_lines, 1, "Must keep at least 1 line")
+
+        # Verify archive was created with the rest
+        archive_dir = os.path.join(self.temp_dir, "archive")
+        self.assertTrue(os.path.exists(archive_dir))
+
+        archive_files = os.listdir(archive_dir)
+        self.assertGreater(len(archive_files), 0)
+
+        # Verify total lines preserved
+        archive_file = os.path.join(archive_dir, archive_files[0])
+        archived_lines = self._count_lines(archive_file)
+        total_lines = remaining_lines + archived_lines
+        self.assertEqual(total_lines, 20)
+
 
 if __name__ == "__main__":
     unittest.main()
