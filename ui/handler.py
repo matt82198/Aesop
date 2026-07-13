@@ -2,26 +2,26 @@
 """Aesop UI — HTTP request handler (DashboardHandler) + server entry (wave-9 split)."""
 import http.server
 import json
-import os
 import queue
 import sys
 import threading
 import urllib.parse
-from datetime import datetime
 from pathlib import Path
 
 import config
 import csrf
 import sse
+import api
+import api.tracker
+import api.submit
 from render import render_dashboard
 from csrf import validate_csrf_request
 from collectors import (_snapshot_data, _snapshot_tracker,
                        _snapshot_orchestrator_status, drain_tracker_inbox,
-                       create_tracker_item, delete_tracker_item, get_alerts,
-                       get_heartbeat_status, get_main_thread_messages,
-                       get_monitor_heartbeat_status, get_recent_events,
-                       get_repos_status, get_tracker_items,
-                       parse_audit_backlog, update_tracker_item)
+                       get_alerts, get_heartbeat_status,
+                       get_main_thread_messages, get_monitor_heartbeat_status,
+                       get_recent_events, get_repos_status,
+                       parse_audit_backlog)
 from agents import (_AGENT_ID_FORBIDDEN, _transcripts_fingerprint,
                    extract_agent_dispatch_prompt, get_fleet_agents)
 from sse import (_latest_lock, _latest_snapshots, _maybe_emit,
@@ -100,12 +100,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             status = params.get('status', [None])[0]
             priority = params.get('priority', [None])[0]
 
-            items = get_tracker_items(status=status, priority=priority)
-            self.send_response(200)
+            status_code, body = api.tracker.list_items(status=status, priority=priority)
+            self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
-            self.wfile.write(json.dumps(items, default=str).encode('utf-8'))
+            self.wfile.write(json.dumps(body, default=str).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
@@ -131,19 +131,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Invalid Content-Length"}).encode('utf-8'))
                 return
 
-            body = self.rfile.read(content_length).decode('utf-8', errors='ignore')
-            data = json.loads(body)
-
-            item = create_tracker_item(data)
-            self.send_response(201)
+            body_bytes = self.rfile.read(content_length)
+            status_code, result = api.tracker.create(self.headers, body_bytes)
+            self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps(item, default=str).encode('utf-8'))
-        except json.JSONDecodeError:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode('utf-8'))
+            self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
@@ -178,11 +171,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             action = params.get('action', ['update'])[0]
 
             if action == "delete":
-                item = delete_tracker_item(item_id)
-                self.send_response(200)
+                status_code, result = api.tracker.delete(item_id)
+                self.send_response(status_code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(json.dumps(item, default=str).encode('utf-8'))
+                self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
             else:
                 content_length = int(self.headers.get('Content-Length', 0))
                 if content_length <= 0 or content_length > 10000:
@@ -192,14 +185,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(json.dumps({"error": "Invalid Content-Length"}).encode('utf-8'))
                     return
 
-                body = self.rfile.read(content_length).decode('utf-8', errors='ignore')
-                update_data = json.loads(body)
-
-                item = update_tracker_item(item_id, update_data)
-                self.send_response(200)
+                body_bytes = self.rfile.read(content_length)
+                status_code, result = api.tracker.update(item_id, body_bytes)
+                self.send_response(status_code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(json.dumps(item, default=str).encode('utf-8'))
+                self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
         except Exception as e:
             if "404" in str(e):
                 self.send_response(404)
@@ -398,8 +389,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 }).encode('utf-8'))
                 return
 
-            body = self.rfile.read(content_length).decode('utf-8', errors='ignore')
-            data = json.loads(body)
+            body_bytes = self.rfile.read(content_length)
+            data = json.loads(body_bytes.decode('utf-8', errors='ignore'))
             text = data.get("text", "").strip()
 
             if not text:
@@ -407,30 +398,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            # Append to inbox
-            inbox_content = f"- [{datetime.now().isoformat()}] {text}\n"
-            # Security: reject symlinks (TOCTOU defense)
-            if config.INBOX_FILE.exists():
-                if os.path.islink(str(config.INBOX_FILE)):
-                    self.send_response(400)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({
-                        "error": "Inbox file is a symlink (rejected for security)"
-                    }).encode('utf-8'))
-                    return
-            else:
-                config.INBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
-                # Must match the encoding (utf-8) AND newline convention (LF) of the
-                # append below — text-mode write_text() with no encoding= falls back
-                # to the locale-preferred encoding (cp1252 on Windows), which mangles
-                # non-ASCII bytes like the em-dash and leaves the file as a whole not
-                # valid UTF-8 for anything that reads it with encoding="utf-8".
-                with open(config.INBOX_FILE, 'w', encoding='utf-8', newline='\n') as f:
-                    f.write("# UI Inbox — orchestrator reads each turn / on /power\n\n")
-
-            with open(config.INBOX_FILE, 'a', encoding='utf-8') as f:
-                f.write(inbox_content)
+            ok, result = api.submit.append_to_inbox(text)
+            if not ok:
+                status_code, error = result
+                self.send_response(status_code)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(error).encode('utf-8'))
+                return
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
