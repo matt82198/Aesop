@@ -104,6 +104,15 @@ Scans listed repos for: dirty working tree, unpushed commits, untracked files. O
 
 - `eod_sweep.py [--repos PATHS] [--readonly-repos PATHS] [--fix-push]` — check repo health, optionally push
 
+## orchestrator_status.py — Atomic orchestrator status updates (wave-8+)
+
+Manages orchestrator heartbeat and activity tracking for SSE status section and wave-9+ multi-orchestrator coordination.
+
+- `python orchestrator_status.py set --activity "dispatching wave-8" --phase audit [--id main --role orchestrator]` — atomically write status
+- `python orchestrator_status.py clear` — remove status file
+
+Writes `state/orchestrator-status.json` atomically (temp+replace). Forward-compatible with bare-object → list normalization in serve.py. Exit: 0=success, 1=error.
+
 ## Invariants
 
 - **Dependency-light**: Python tools must work on base Python 3 (no pip installs).

@@ -1024,7 +1024,7 @@ _sse_clients = []  # list[queue.Queue]
 _sse_client_count = 0  # Track concurrent connections for cap enforcement
 
 _latest_lock = threading.Lock()
-_latest_snapshots = {"data": None, "backlog": None, "agents": None}  # name -> json str
+_latest_snapshots = {"data": None, "backlog": None, "agents": None, "tracker": None, "status": None}  # name -> json str
 
 _collector_lock = threading.Lock()
 _collector_started = False
@@ -1066,6 +1066,116 @@ def _transcripts_fingerprint():
         return (count, latest)
     except Exception:
         return (0, 0.0)
+
+
+
+# New functions for tracker SSE integration (to be inserted into serve.py)
+
+def _snapshot_tracker():
+    """Read tracker.json, return {items: [...]}."""
+    tracker_file = STATE_DIR / "tracker.json"
+    if not tracker_file.exists():
+        return {"items": []}
+    try:
+        data = json.loads(tracker_file.read_text(encoding='utf-8'))
+        if isinstance(data, dict) and "items" in data:
+            return {"items": data.get("items", [])}
+        return {"items": []}
+    except Exception as e:
+        print(f"[tracker] Snapshot error: {e}", file=sys.stderr)
+        return {"items": []}
+
+
+def _snapshot_orchestrator_status():
+    """Read and normalize orchestrator-status.json."""
+    status_file = STATE_DIR / "orchestrator-status.json"
+    if not status_file.exists():
+        return {"orchestrators": []}
+    try:
+        data = json.loads(status_file.read_text(encoding='utf-8'))
+        if not isinstance(data, dict):
+            return {"orchestrators": []}
+        # Already normalized list shape
+        if "orchestrators" in data and isinstance(data["orchestrators"], list):
+            return data
+        # Wrap bare object as single entry
+        if "id" in data or "role" in data:
+            age_seconds = 0
+            stale = False
+            try:
+                updated_at_str = data.get("updated_at", "")
+                if updated_at_str:
+                    updated_at_str = updated_at_str.rstrip('Z')
+                    updated_at = datetime.fromisoformat(updated_at_str)
+                    age_seconds = int((datetime.utcnow() - updated_at).total_seconds())
+                    stale = age_seconds > 1800
+            except:
+                pass
+            entry = dict(data)
+            entry["age_seconds"] = age_seconds
+            entry["stale"] = stale
+            return {"orchestrators": [entry]}
+        return {"orchestrators": []}
+    except Exception as e:
+        print(f"[status] Snapshot error: {e}", file=sys.stderr)
+        return {"orchestrators": []}
+
+
+def drain_tracker_inbox():
+    """Drain .tracker-inbox.jsonl, create items idempotently."""
+    inbox_file = STATE_DIR / ".tracker-inbox.jsonl"
+    if not inbox_file.exists():
+        return []
+    
+    created = []
+    try:
+        content = inbox_file.read_text(encoding='utf-8')
+        if not content.strip():
+            inbox_file.unlink()
+            return []
+        
+        lines = content.strip().splitlines()
+        tracker = load_tracker()
+        existing_hashes = set()
+        for item in tracker.get("items", []):
+            source = item.get("source", "")
+            title = item.get("title", "")
+            h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
+            existing_hashes.add(h)
+        
+        rejects = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                if not isinstance(entry, dict):
+                    rejects.append(line)
+                    continue
+                
+                source = entry.get("source", "")
+                title = entry.get("title", "")
+                h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
+                
+                if h not in existing_hashes:
+                    item = create_tracker_item(entry)
+                    created.append(item)
+                    existing_hashes.add(h)
+            except json.JSONDecodeError:
+                rejects.append(line)
+            except Exception as e:
+                rejects.append(line + " # " + str(e))
+        
+        if rejects:
+            rejects_file = inbox_file.with_name(".tracker-inbox.rejects")
+            rejects_file.write_text("\n".join(rejects) + "\n", encoding='utf-8')
+        
+        inbox_file.unlink()
+    except Exception as e:
+        print(f"[inbox] Drain error: {e}", file=sys.stderr)
+    
+    return created
 
 
 def register_sse_client():
@@ -1127,6 +1237,10 @@ def collector_loop(stop_event):
     last_agents_fingerprint = None
     cached_backlog_snapshot = {"tiers": []}
     cached_agents_snapshot = []
+    last_tracker_mtime = object()
+    last_status_mtime = object()
+    cached_tracker_snapshot = {'items': []}
+    cached_status_snapshot = {'orchestrators': []}
 
     while not stop_event.is_set():
         try:
@@ -1146,6 +1260,32 @@ def collector_loop(stop_event):
                 last_agents_fingerprint = fingerprint
                 cached_agents_snapshot = get_fleet_agents()
             _maybe_emit("agents", cached_agents_snapshot, last_hashes)
+
+            # Emit tracker section (mtime-gated)
+            try:
+                tracker_mtime = (STATE_DIR / "tracker.json").stat().st_mtime if (STATE_DIR / "tracker.json").exists() else None
+            except OSError:
+                tracker_mtime = None
+            if tracker_mtime != last_tracker_mtime:
+                last_tracker_mtime = tracker_mtime
+                cached_tracker_snapshot = _snapshot_tracker()
+            _maybe_emit("tracker", cached_tracker_snapshot, last_hashes)
+
+            # Emit status section (mtime-gated)
+            try:
+                status_mtime = (STATE_DIR / "orchestrator-status.json").stat().st_mtime if (STATE_DIR / "orchestrator-status.json").exists() else None
+            except OSError:
+                status_mtime = None
+            if status_mtime != last_status_mtime:
+                last_status_mtime = status_mtime
+                cached_status_snapshot = _snapshot_orchestrator_status()
+            _maybe_emit("status", cached_status_snapshot, last_hashes)
+
+            # Drain inbox
+            try:
+                drain_tracker_inbox()
+            except Exception as e:
+                print(f"[collector] Inbox drain error: {e}", file=sys.stderr, flush=True)
         except Exception as e:
             import sys
             print(f"[collector_loop] Exception: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
@@ -2250,10 +2390,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 initial["data"] = json.dumps(_snapshot_data(), default=str, sort_keys=True)
                 initial["backlog"] = json.dumps(parse_audit_backlog(), default=str, sort_keys=True)
                 initial["agents"] = json.dumps(get_fleet_agents(), default=str, sort_keys=True)
+                initial["tracker"] = json.dumps(_snapshot_tracker(), default=str, sort_keys=True)
+                initial["status"] = json.dumps(_snapshot_orchestrator_status(), default=str, sort_keys=True)
                 with _latest_lock:
                     _latest_snapshots.update(initial)
 
-            for name in ("data", "backlog", "agents"):
+            for name in ("data", "backlog", "agents", "tracker", "status"):
                 payload = initial.get(name)
                 if payload is not None:
                     self._write_sse_event(name, payload)
