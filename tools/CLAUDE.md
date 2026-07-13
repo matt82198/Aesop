@@ -24,6 +24,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `fleet_ledger.py` — Append-only ledger of agent runs, resource use, and verdicts; supports harvest (scan tasks) and rotate (archive)
 - `heartbeat.py` — Single-instance loop liveness registry; write beats to state/.heartbeats/<name>, check staleness across fleet
 - `inbox_drain.py` — Drain UI inbox submissions; tracks processed dashboard work items (queue while no session running)
+- `orchestrator_status.py` — Atomic writer for state/orchestrator-status.json (set/clear activity+phase); feeds the dashboard status panel
 
 **Repository operations**:
 - `reconstitute.sh` — Clone or fetch repos from config (tab/space-delimited); validates clone targets against fleet-root (physical paths, security)

@@ -1970,18 +1970,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     <button class="tracker-action-btn danger archive-btn" data-id="${sanitize(item.id)}">Archive</button>
                 </div>
             `;
+            itemEl.querySelector('.tracker-item-title').textContent = item.title || '(untitled)';
+            itemEl.querySelector('.priority-chip').textContent = item.priority || 'P3';
             return itemEl;
         }
 
         function patchTracker(trackerData) {
+            if (Array.isArray(trackerData)) trackerData = { items: trackerData };
             latestTracker = trackerData || { items: [] };
+            if (!Array.isArray(latestTracker.items)) latestTracker.items = [];
             const container = document.getElementById('tracker-lanes');
             container.innerHTML = '';
-
-            if (!latestTracker.items || latestTracker.items.length === 0) {
-                container.innerHTML = '<div class="loading" style="grid-column: 1/-1; text-align: center; color: #666;">No work items</div>';
-                return;
-            }
 
             const lanes = { proposed: [], ranked: [], 'in-progress': [], done: [], archived: [] };
             latestTracker.items.forEach(item => {
@@ -2011,6 +2010,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     itemsContainer.appendChild(itemEl);
                 });
             });
+
+            if (latestTracker.items.length === 0) {
+                const emptyHint = document.createElement('div');
+                emptyHint.className = 'loading';
+                emptyHint.style.cssText = 'grid-column: 1/-1; text-align: center; color: #aaa;';
+                emptyHint.textContent = 'No work items yet — add one above';
+                container.appendChild(emptyHint);
+            }
 
             if (lanes.archived.length > 0) {
                 const archivedSummary = document.createElement('div');
@@ -2256,7 +2263,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             try {
                 const response = await fetch('/api/tracker', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Aesop-Token': window.__AESOP_CSRF_TOKEN__ || ''
+                    },
                     body: JSON.stringify(itemData)
                 });
                 if (response.ok) {
