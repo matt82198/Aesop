@@ -554,6 +554,348 @@ def get_alerts():
 
 
 
+
+# ==============================================================================
+# Tracker Data Layer (state/tracker.json) — wave-8 CRUD API
+# ==============================================================================
+
+TRACKER_FILE = STATE_DIR / "tracker.json"
+
+
+def load_tracker():
+    """Load tracker.json, return empty tracker if missing or corrupt."""
+    if not TRACKER_FILE.exists():
+        return {"version": 1, "items": []}
+
+    try:
+        data = json.loads(TRACKER_FILE.read_text(encoding='utf-8'))
+        if not isinstance(data, dict) or "version" not in data:
+            raise ValueError("Invalid tracker schema")
+        return data
+    except Exception as e:
+        print(f"[tracker] Corrupt tracker.json: {e}", file=sys.stderr)
+        corrupt_path = TRACKER_FILE.with_suffix('.json.corrupt')
+        try:
+            if TRACKER_FILE.exists():
+                TRACKER_FILE.rename(corrupt_path)
+        except:
+            pass
+        return {"version": 1, "items": []}
+
+
+def save_tracker(tracker):
+    """Save tracker atomically using temp file + os.replace."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    temp_file = TRACKER_FILE.with_suffix('.json.tmp')
+    try:
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(tracker, f, indent=2)
+        os.replace(str(temp_file), str(TRACKER_FILE))
+    except Exception as e:
+        print(f"[tracker] Error saving tracker: {e}", file=sys.stderr)
+        try:
+            temp_file.unlink()
+        except:
+            pass
+        raise
+
+
+def migrate_tracker_from_backlog():
+    """One-time idempotent migration: AUDIT-BACKLOG.md -> tracker.json."""
+    if TRACKER_FILE.exists():
+        return load_tracker()
+
+    backlog_data = parse_audit_backlog()
+    if not backlog_data.get("tiers"):
+        return {"version": 1, "items": []}
+
+    items = []
+    for tier_data in backlog_data["tiers"]:
+        priority = tier_data["tier"]
+
+        for backlog_item in tier_data.get("items", []):
+            status_glyph = backlog_item["status"]
+
+            if status_glyph == "✅":
+                status, lane = "done", "done"
+                tags = []
+            elif status_glyph == "🔵":
+                status, lane = "in-progress", "in-progress"
+                tags = []
+            elif status_glyph == "⏸":
+                status, lane = "todo", "proposed"
+                tags = ["needs-decision"]
+            else:
+                status, lane = "todo", "ranked"
+                tags = []
+
+            title = backlog_item.get("title", "")
+            tag_prefix = backlog_item.get("tag", "")
+            if tag_prefix:
+                tag_value = tag_prefix.strip("[]")
+                if tag_value and tag_value not in tags:
+                    tags.insert(0, tag_value)
+
+            item = {
+                "id": secrets.token_hex(6),
+                "title": title,
+                "priority": priority,
+                "status": status,
+                "lane": lane,
+                "source": "audit-backlog-migration",
+                "tags": tags,
+                "notes": None,
+                "pr_link": None,
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "completed_at": None
+            }
+            items.append(item)
+
+    tracker = {"version": 1, "items": items}
+    save_tracker(tracker)
+    return tracker
+
+
+def get_tracker_items(status=None, priority=None):
+    """Retrieve tracker items with optional filters."""
+    tracker = load_tracker()
+    items = tracker.get("items", [])
+
+    if status:
+        items = [i for i in items if i.get("status") == status]
+    if priority:
+        items = [i for i in items if i.get("priority") == priority]
+
+    return items
+
+
+def create_tracker_item(data):
+    """Create a new tracker item."""
+    tracker = load_tracker()
+
+    item = {
+        "id": secrets.token_hex(6),
+        "title": data.get("title", ""),
+        "priority": data.get("priority", "P1"),
+        "status": data.get("status", "todo"),
+        "lane": data.get("lane", "proposed"),
+        "source": data.get("source", "manual"),
+        "tags": data.get("tags", []) if isinstance(data.get("tags"), list) else [],
+        "notes": data.get("notes"),
+        "pr_link": data.get("pr_link"),
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "completed_at": None
+    }
+
+    tracker["items"].append(item)
+    save_tracker(tracker)
+    return item
+
+
+def update_tracker_item(item_id, update_data):
+    """Update a tracker item by id."""
+    tracker = load_tracker()
+
+    item = next((i for i in tracker["items"] if i["id"] == item_id), None)
+    if not item:
+        raise Exception(f"404 Item not found: {item_id}")
+
+    for key in ["status", "lane", "priority", "notes", "pr_link", "tags"]:
+        if key in update_data:
+            item[key] = update_data[key]
+
+    if update_data.get("status") == "done" and not item.get("completed_at"):
+        item["completed_at"] = datetime.utcnow().isoformat() + "Z"
+
+    save_tracker(tracker)
+    return item
+
+
+def delete_tracker_item(item_id):
+    """Soft-delete a tracker item (mark as archived)."""
+    tracker = load_tracker()
+
+    item = next((i for i in tracker["items"] if i["id"] == item_id), None)
+    if not item:
+        raise Exception(f"404 Item not found: {item_id}")
+
+    item["status"] = "archived"
+    save_tracker(tracker)
+    return item
+
+
+
+
+# ==============================================================================
+# Tracker Data Layer (state/tracker.json) — wave-8 CRUD API  
+# ==============================================================================
+
+TRACKER_FILE = STATE_DIR / "tracker.json"
+
+
+def load_tracker():
+    """Load tracker.json, return empty tracker if missing or corrupt."""
+    if not TRACKER_FILE.exists():
+        return {"version": 1, "items": []}
+
+    try:
+        data = json.loads(TRACKER_FILE.read_text(encoding='utf-8'))
+        if not isinstance(data, dict) or "version" not in data:
+            raise ValueError("Invalid tracker schema")
+        return data
+    except Exception as e:
+        print(f"[tracker] Corrupt tracker.json: {e}", file=sys.stderr)
+        corrupt_path = TRACKER_FILE.with_suffix('.json.corrupt')
+        try:
+            if TRACKER_FILE.exists():
+                TRACKER_FILE.rename(corrupt_path)
+        except:
+            pass
+        return {"version": 1, "items": []}
+
+
+def save_tracker(tracker):
+    """Save tracker atomically using temp file + os.replace."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    temp_file = TRACKER_FILE.with_suffix('.json.tmp')
+    try:
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(tracker, f, indent=2)
+        os.replace(str(temp_file), str(TRACKER_FILE))
+    except Exception as e:
+        print(f"[tracker] Error saving tracker: {e}", file=sys.stderr)
+        try:
+            temp_file.unlink()
+        except:
+            pass
+        raise
+
+
+def migrate_tracker_from_backlog():
+    """One-time idempotent migration: AUDIT-BACKLOG.md -> tracker.json."""
+    if TRACKER_FILE.exists():
+        return load_tracker()
+
+    backlog_data = parse_audit_backlog()
+    if not backlog_data.get("tiers"):
+        return {"version": 1, "items": []}
+
+    items = []
+    for tier_data in backlog_data["tiers"]:
+        priority = tier_data["tier"]
+
+        for backlog_item in tier_data.get("items", []):
+            status_glyph = backlog_item["status"]
+
+            if status_glyph == "✅":
+                status, lane = "done", "done"
+                tags = []
+            elif status_glyph == "🔵":
+                status, lane = "in-progress", "in-progress"
+                tags = []
+            elif status_glyph == "⏸":
+                status, lane = "todo", "proposed"
+                tags = ["needs-decision"]
+            else:
+                status, lane = "todo", "ranked"
+                tags = []
+
+            title = backlog_item.get("title", "")
+            tag_prefix = backlog_item.get("tag", "")
+            if tag_prefix:
+                tag_value = tag_prefix.strip("[]")
+                if tag_value and tag_value not in tags:
+                    tags.insert(0, tag_value)
+
+            item = {
+                "id": secrets.token_hex(6),
+                "title": title,
+                "priority": priority,
+                "status": status,
+                "lane": lane,
+                "source": "audit-backlog-migration",
+                "tags": tags,
+                "notes": None,
+                "pr_link": None,
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "completed_at": None
+            }
+            items.append(item)
+
+    tracker = {"version": 1, "items": items}
+    save_tracker(tracker)
+    return tracker
+
+
+def get_tracker_items(status=None, priority=None):
+    """Retrieve tracker items with optional filters."""
+    tracker = load_tracker()
+    items = tracker.get("items", [])
+
+    if status:
+        items = [i for i in items if i.get("status") == status]
+    if priority:
+        items = [i for i in items if i.get("priority") == priority]
+
+    return items
+
+
+def create_tracker_item(data):
+    """Create a new tracker item."""
+    tracker = load_tracker()
+
+    item = {
+        "id": secrets.token_hex(6),
+        "title": data.get("title", ""),
+        "priority": data.get("priority", "P1"),
+        "status": data.get("status", "todo"),
+        "lane": data.get("lane", "proposed"),
+        "source": data.get("source", "manual"),
+        "tags": data.get("tags", []) if isinstance(data.get("tags"), list) else [],
+        "notes": data.get("notes"),
+        "pr_link": data.get("pr_link"),
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "completed_at": None
+    }
+
+    tracker["items"].append(item)
+    save_tracker(tracker)
+    return item
+
+
+def update_tracker_item(item_id, update_data):
+    """Update a tracker item by id."""
+    tracker = load_tracker()
+
+    item = next((i for i in tracker["items"] if i["id"] == item_id), None)
+    if not item:
+        raise Exception(f"404 Item not found: {item_id}")
+
+    for key in ["status", "lane", "priority", "notes", "pr_link", "tags"]:
+        if key in update_data:
+            item[key] = update_data[key]
+
+    if update_data.get("status") == "done" and not item.get("completed_at"):
+        item["completed_at"] = datetime.utcnow().isoformat() + "Z"
+
+    save_tracker(tracker)
+    return item
+
+
+def delete_tracker_item(item_id):
+    """Soft-delete a tracker item (mark as archived)."""
+    tracker = load_tracker()
+
+    item = next((i for i in tracker["items"] if i["id"] == item_id), None)
+    if not item:
+        raise Exception(f"404 Item not found: {item_id}")
+
+    item["status"] = "archived"
+    save_tracker(tracker)
+    return item
+
+
+
 # agent_id is attacker-controlled (GET /agent?id=...) and is spliced into a glob
 # pattern below. Reject path-traversal segments and glob metacharacters before
 # the pattern is ever built — a bare "/", "\", "..", "*", "?", "[" or "]" has no
@@ -843,6 +1185,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_backlog()
         elif self.path == "/api/agents":
             self.serve_agents()
+        elif self.path.startswith("/api/tracker"):
+            self.serve_tracker()
         elif self.path.startswith("/agent?"):
             self.serve_agent()
         elif self.path == "/events":
@@ -854,6 +1198,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         """Handle POST requests."""
         if self.path == "/submit":
             self.handle_submit()
+        elif self.path == "/api/tracker":
+            self.handle_tracker_create()
+        elif self.path.startswith("/api/tracker/"):
+            self.handle_tracker_mutate()
         else:
             self.send_error(404)
 
@@ -1651,6 +1999,120 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+
+    def serve_tracker(self):
+        """Serve tracker items as JSON via GET /api/tracker."""
+        try:
+            # Parse query string for filters
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            status = params.get('status', [None])[0]
+            priority = params.get('priority', [None])[0]
+
+            items = get_tracker_items(status=status, priority=priority)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(items, default=str).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def handle_tracker_create(self):
+        """Handle POST /api/tracker (create item)."""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length <= 0 or content_length > 10000:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid Content-Length"}).encode('utf-8'))
+                return
+
+            body = self.rfile.read(content_length).decode('utf-8', errors='ignore')
+            data = json.loads(body)
+
+            item = create_tracker_item(data)
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(item, default=str).encode('utf-8'))
+        except json.JSONDecodeError:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def handle_tracker_mutate(self):
+        """Handle POST /api/tracker/<id> (update or delete)."""
+        try:
+            is_valid, reason = validate_csrf_request(self.headers)
+            if not is_valid:
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "CSRF protection: " + reason}).encode('utf-8'))
+                return
+
+            # Extract item_id from path
+            path_parts = self.path.strip("/").split("/")
+            if len(path_parts) < 3:
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Not found"}).encode('utf-8'))
+                return
+
+            item_id = path_parts[2]
+
+            # Parse query for action (update or delete)
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            action = params.get('action', ['update'])[0]
+
+            if action == "delete":
+                item = delete_tracker_item(item_id)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps(item, default=str).encode('utf-8'))
+            else:
+                content_length = int(self.headers.get('Content-Length', 0))
+                if content_length <= 0 or content_length > 10000:
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Invalid Content-Length"}).encode('utf-8'))
+                    return
+
+                body = self.rfile.read(content_length).decode('utf-8', errors='ignore')
+                update_data = json.loads(body)
+
+                item = update_tracker_item(item_id, update_data)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps(item, default=str).encode('utf-8'))
+        except Exception as e:
+            if "404" in str(e):
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            else:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
 
     def serve_backlog(self):
         """Serve audit backlog data as JSON via GET /api/backlog."""
