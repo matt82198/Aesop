@@ -88,15 +88,30 @@ else
 fi
 
 if [ "$MODE" = "--once" ]; then
-  "${CYCLE_CMD_ARRAY[@]}" 2>&1
+  full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
+  cmd_exit=$?
+  echo "$full_out"
+  if [ $cmd_exit -ne 0 ]; then
+    err_msg="[$(date '+%F %T')] ERROR: cycle #1 failed with exit code $cmd_exit"
+    echo "$err_msg" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    echo "[ERROR: exit $cmd_exit]" >&2
+  fi
   release_lock "$LOCK_DIR"
-  exit 0
+  exit $cmd_exit
 fi
 
 n=0
 while true; do
   n=$((n+1))
-  out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1 | tail -2)
-  printf '%s  cycle #%d\n%s\n' "$(date '+%H:%M:%S')" "$n" "$out"
+  full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
+  cmd_exit=$?
+  if [ $cmd_exit -eq 0 ]; then
+    out=$(echo "$full_out" | tail -2)
+    printf '%s  cycle #%d\n%s\n' "$(date '+%H:%M:%S')" "$n" "$out"
+  else
+    echo "[$(date '+%F %T')] ERROR: cycle #$n failed with exit code $cmd_exit" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    out=$(echo "$full_out" | tail -2)
+    printf '%s  cycle #%d [ERROR: exit %d]\n%s\n' "$(date '+%H:%M:%S')" "$n" "$cmd_exit" "$out"
+  fi
   sleep 150
 done
