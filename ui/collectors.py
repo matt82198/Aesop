@@ -6,8 +6,7 @@ import os
 import re
 import secrets
 import sys
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
 from time import time
 
 import config
@@ -393,7 +392,7 @@ def migrate_tracker_from_backlog():
                 "tags": tags,
                 "notes": None,
                 "pr_link": None,
-                "created_at": datetime.utcnow().isoformat() + "Z",
+                "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "completed_at": None
             }
             items.append(item)
@@ -428,7 +427,7 @@ def create_tracker_item(data):
         "tags": data.get("tags", []) if isinstance(data.get("tags"), list) else [],
         "notes": data.get("notes"),
         "pr_link": data.get("pr_link"),
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "completed_at": None
     }
 
@@ -449,7 +448,7 @@ def update_tracker_item(item_id, update_data):
             item[key] = update_data[key]
 
     if update_data.get("status") == "done" and not item.get("completed_at"):
-        item["completed_at"] = datetime.utcnow().isoformat() + "Z"
+        item["completed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     save_tracker(tracker)
     return item
@@ -512,7 +511,7 @@ def _snapshot_orchestrator_status():
                 if updated_at_str:
                     updated_at_str = updated_at_str.rstrip('Z')
                     updated_at = datetime.fromisoformat(updated_at_str)
-                    age_seconds = int((datetime.utcnow() - updated_at).total_seconds())
+                    age_seconds = int((datetime.now(timezone.utc).replace(tzinfo=None) - updated_at).total_seconds())
                     stale = age_seconds > 1800
             except:
                 pass
