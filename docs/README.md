@@ -7,6 +7,9 @@ Aesop ships five behavior-as-code pillars: **onboarding templates**, **policy ho
 ## Core Governance & Rules
 
 - [CARDINAL-RULES.md](CARDINAL-RULES.md) — Foundational operational principles (dispatch model, cost, subagent discipline, retry caps)
+- [RELIABILITY.md](RELIABILITY.md) — Reliability core: never wait, inputs always produce outputs, pride bar for completion
+- [CHECKPOINTING.md](CHECKPOINTING.md) — Durable STATE.md/BUILDLOG.md lifecycle, recovery on resume, log rotation patterns
+- [SCRIPTS-POLICY.md](SCRIPTS-POLICY.md) — Local-only execution, shared script library, task-local vs. reusable heuristics
 - [DISPATCH-MODEL.md](DISPATCH-MODEL.md) — Fable/Haiku orchestration patterns and cost calculations
 - [GOVERNANCE.md](GOVERNANCE.md) — Single-instance loops, single-writer files, heartbeat protocol, security gates
 
