@@ -22,6 +22,41 @@ const LOCK_TIMEOUT_MS = parseInt(process.env.AESOP_LOCK_TIMEOUT_MS || '30000', 1
 const STALE_LOCK_THRESHOLD = 10 * 60 * 1000; // 10 minutes
 
 /**
+ * Check whether a pid is a live process, cross-platform (Windows + POSIX).
+ *
+ * A stale lock marker's timestamp alone is not trustworthy: a process with
+ * write access to state/ could forge an old timestamp to force-break a
+ * LEGITIMATE live lock (data loss on PROPOSALS.md). Signal-0 delivery via
+ * process.kill() lets us verify the recorded owner is actually gone before
+ * we ever remove its lock directory.
+ *
+ * @param {number} pid
+ * @returns {boolean} true if the pid is alive (or owned by another user —
+ *   EPERM means a process with that pid exists but we can't signal it, which
+ *   still counts as alive for staleness purposes), false if no such process.
+ */
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    // Signal 0 does not actually send a signal; it only checks existence/permission.
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    if (e.code === 'ESRCH') {
+      return false; // No such process — definitely dead.
+    }
+    if (e.code === 'EPERM') {
+      return true; // Process exists but we lack permission to signal it — alive.
+    }
+    // Unknown error (e.g. platform quirk): fail closed and assume alive so we
+    // never break a lock we can't actually prove is dead.
+    return true;
+  }
+}
+
+/**
  * Acquire an atomic lock directory for a file.
  * Implements exponential backoff + stale lock breaking.
  *
@@ -83,18 +118,42 @@ export function acquireLock(filePath, opts = {}) {
             const lockEpoch = parseInt(lines[1], 10);
             const lockAge = Date.now() - lockEpoch * 1000;
             if (lockAge > STALE_LOCK_THRESHOLD) {
-              // Stale lock detected; warn and reclaim it
-              console.error(
-                `Warning: Stale lock detected for ${path.basename(filePath)} (age: ${Math.round(lockAge / 1000)}s); breaking lock`
-              );
-              try {
-                fs.rmSync(lockDir, { recursive: true, force: true });
-              } catch {
-                // Cleanup failed; will retry or timeout
+              // Timestamp alone is not trustworthy: a process with write
+              // access to state/ could forge an old timestamp to break a
+              // LEGITIMATE live lock (data loss on PROPOSALS.md). Verify the
+              // recorded owner pid is actually dead before reclaiming.
+              const pidField = lines[0];
+              const holderPid = parseInt(pidField, 10);
+              const pidValid = Number.isInteger(holderPid) && holderPid > 0 && String(holderPid) === pidField.trim();
+
+              let ownerDead;
+              if (!pidValid) {
+                console.error(
+                  `Warning: Stale lock marker for ${path.basename(filePath)} has missing/unparseable pid ("${pidField}"); treating as stale-eligible`
+                );
+                ownerDead = true;
+              } else {
+                ownerDead = !isPidAlive(holderPid);
               }
-              // Retry immediately after cleanup
-              attempt++;
-              continue;
+
+              if (ownerDead) {
+                // Stale lock detected; warn and reclaim it
+                console.error(
+                  `Warning: Stale lock detected for ${path.basename(filePath)} (age: ${Math.round(lockAge / 1000)}s, pid: ${pidValid ? holderPid : 'unknown'}); breaking lock`
+                );
+                try {
+                  fs.rmSync(lockDir, { recursive: true, force: true });
+                } catch {
+                  // Cleanup failed; will retry or timeout
+                }
+                // Retry immediately after cleanup
+                attempt++;
+                continue;
+              }
+              // Timestamp is stale but the recorded owner process is still
+              // alive — do not break a live holder's lock. Fall through to
+              // the backoff/retry below; fail-closed timeout still applies
+              // if the holder never releases.
             }
           }
         } catch {
