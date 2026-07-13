@@ -21,9 +21,12 @@ header-bootstrap path is exercised) — then asserts:
   (b) it contains the submitted marker text
 
 Run: python tools/verify_submit_encoding.py     (exit 0 = proven, 1 = failed)
-Skips with exit 0 + SKIP message if playwright/chromium is unavailable
-(so CI without browsers doesn't fail; run locally for the real proof).
+     python tools/verify_submit_encoding.py --allow-skip (exit 0 = proven or skipped, 1 = failed)
+
+Fails with exit 1 if playwright/chromium is unavailable (unless --allow-skip is passed).
+Use --allow-skip for environments that legitimately can't run a browser.
 """
+import argparse
 import os
 import shutil
 import socket
@@ -65,11 +68,26 @@ def build_fixture(root: Path):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Browser-level proof for /submit UTF-8 encoding"
+    )
+    parser.add_argument(
+        "--allow-skip",
+        action="store_true",
+        help="Allow skipping if playwright/chromium is unavailable (exit 0 instead of 1)"
+    )
+    args = parser.parse_args()
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        print("SKIP: python-playwright not installed")
-        return 0
+        msg = "playwright missing — run `python -m playwright install chromium`, or pass --allow-skip"
+        if args.allow_skip:
+            print(f"SKIP: {msg}")
+            return 0
+        else:
+            print(f"FAIL: {msg}")
+            return 1
 
     root = Path(tempfile.mkdtemp(prefix="aesop-verify-submit-"))
     inbox_file = root / "state" / "ui-inbox.md"
@@ -104,8 +122,13 @@ def main():
             try:
                 browser = pw.chromium.launch(headless=True)
             except Exception as e:
-                print(f"SKIP: chromium unavailable ({e}); run: python -m playwright install chromium")
-                return 0
+                msg = f"chromium unavailable ({e}); run: python -m playwright install chromium"
+                if args.allow_skip:
+                    print(f"SKIP: {msg}")
+                    return 0
+                else:
+                    print(f"FAIL: {msg}")
+                    return 1
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{port}/", wait_until="domcontentloaded")
 

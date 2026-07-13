@@ -9,9 +9,12 @@ asserts the contract the unit tests can't see:
   (e) the expanded row is STILL expanded after those live updates
 
 Run: python tools/verify_dash.py            (exit 0 = proven, 1 = failed)
-Skips with exit 0 + SKIP message if playwright/chromium is unavailable
-(so CI without browsers doesn't fail; run locally for the real proof).
+     python tools/verify_dash.py --allow-skip (exit 0 = proven or skipped, 1 = failed)
+
+Fails with exit 1 if playwright/chromium is unavailable (unless --allow-skip is passed).
+Use --allow-skip for environments that legitimately can't run a browser.
 """
+import argparse
 import json
 import os
 import shutil
@@ -91,11 +94,26 @@ def build_fixture(root: Path, hint: str, with_high_alerts: bool = False):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Browser-level proof for the realtime SSE dashboard"
+    )
+    parser.add_argument(
+        "--allow-skip",
+        action="store_true",
+        help="Allow skipping if playwright/chromium is unavailable (exit 0 instead of 1)"
+    )
+    args = parser.parse_args()
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        print("SKIP: python-playwright not installed")
-        return 0
+        msg = "playwright missing — run `python -m playwright install chromium`, or pass --allow-skip"
+        if args.allow_skip:
+            print(f"SKIP: {msg}")
+            return 0
+        else:
+            print(f"FAIL: {msg}")
+            return 1
 
     root = Path(tempfile.mkdtemp(prefix="aesop-verify-dash-"))
     port = free_port()
@@ -126,8 +144,13 @@ def main():
             try:
                 browser = pw.chromium.launch(headless=True)
             except Exception as e:
-                print(f"SKIP: chromium unavailable ({e}); run: python -m playwright install chromium")
-                return 0
+                msg = f"chromium unavailable ({e}); run: python -m playwright install chromium"
+                if args.allow_skip:
+                    print(f"SKIP: {msg}")
+                    return 0
+                else:
+                    print(f"FAIL: {msg}")
+                    return 1
             page = browser.new_page()
             page.on("console", lambda m: console_errors.append(m.text)
                     if m.type == "error" else None)

@@ -44,6 +44,23 @@ jobs:
       - name: Run Python tests
         run: npm run test:py
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright and Chromium
+        run: pip install playwright && playwright install --with-deps chromium
+
+      - name: Run dashboard browser proof (verify_dash)
+        run: python tools/verify_dash.py
+
+      - name: Run submit encoding browser proof (verify_submit_encoding)
+        run: python tools/verify_submit_encoding.py
+
       - name: Run hook self-tests
         run: bash hooks/pre-push-policy.sh --test
 
