@@ -9,6 +9,7 @@ import urllib.parse
 from pathlib import Path
 
 import config
+import cost
 import csrf
 import sse
 import api
@@ -28,6 +29,38 @@ from sse import (_latest_lock, _latest_snapshots, _maybe_emit,
                 register_sse_client, unregister_sse_client)
 
 
+# SSE section names, in emit order. /api/state returns the same sections so the
+# frontend's first paint is one round trip (plan D3.1).
+_STATE_SECTIONS = ("data", "backlog", "agents", "tracker", "status", "cost")
+
+# MIME types for the built dist's content-hashed assets (wave-14, plan D3.4).
+_ASSET_MIME = {
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".map": "application/json; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+}
+
+
+def _is_local_origin(origin):
+    """True if an Origin header value is on the local allowlist.
+
+    Keep in sync with csrf.validate_csrf_request(): same three local forms
+    (http://127.0.0.1:<port>, http://localhost:<port>, http://[::1]:<port>).
+    """
+    return bool(origin) and (
+        origin.startswith("http://127.0.0.1:") or
+        origin.startswith("http://localhost:") or
+        origin.startswith("http://[::1]:")
+    )
+
+
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler for dashboard."""
 
@@ -41,12 +74,20 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_html()
         elif self.path == "/data":
             self.serve_data()
+        elif self.path == "/api/state":
+            self.serve_api_state()
+        elif self.path == "/api/session":
+            self.serve_api_session()
+        elif self.path == "/api/cost":
+            self.serve_api_cost()
         elif self.path == "/api/backlog":
             self.serve_backlog()
         elif self.path == "/api/agents":
             self.serve_agents()
         elif self.path.startswith("/api/tracker"):
             self.serve_tracker()
+        elif self.path.startswith("/assets/"):
+            self.serve_asset()
         elif self.path.startswith("/agent?"):
             self.serve_agent()
         elif self.path == "/events":
@@ -66,13 +107,168 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
     def serve_html(self):
-        """Serve the dashboard HTML."""
-        html = render_dashboard(csrf.SESSION_TOKEN)
+        """Serve the dashboard HTML.
+
+        Wave-14 (plan D3.4/D7): when a built frontend exists at
+        config.WEB_DIST/index.html, render that through the same CSRF-sentinel
+        substitution; otherwise fall back to the legacy templates/dashboard.html
+        unchanged (keeps main green until the U9 cutover). config.WEB_DIST is
+        read at call time so config.reload() keeps working across fixtures.
+        """
+        dist_index = config.WEB_DIST / "index.html"
+        if dist_index.is_file():
+            html = render_dashboard(csrf.SESSION_TOKEN, template_path=dist_index)
+        else:
+            html = render_dashboard(csrf.SESSION_TOKEN)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(html.encode('utf-8'))
+
+    def serve_asset(self):
+        """GET /assets/* — static files from the built dist (config.WEB_DIST/assets).
+
+        Security: path-traversal containment via resolve() + is_relative_to,
+        mirroring the pattern in agents.py — the resolved candidate must stay
+        inside WEB_DIST/assets or the request is refused. URL-encoded (%2e%2e,
+        %2f, %5c) and absolute-path inputs are decoded first so the containment
+        check sees the real target.
+
+        Caching: filenames are content-hashed by the Vite build, so responses
+        are immutable (Cache-Control: public, max-age=31536000, immutable).
+        """
+        try:
+            assets_root = config.WEB_DIST / "assets"
+            if not assets_root.is_dir():
+                # No built dist present (pre-cutover main) — nothing to serve.
+                self.send_error(404)
+                return
+
+            raw_path = urllib.parse.urlparse(self.path).path
+            rel = urllib.parse.unquote(raw_path[len("/assets/"):])
+            if not rel or "\x00" in rel:
+                self.send_error(404)
+                return
+
+            candidate = (assets_root / rel).resolve()
+
+            # Containment check: the resolved target must stay inside
+            # WEB_DIST/assets. Same belt-and-suspenders shape as agents.py.
+            try:
+                is_contained = candidate.is_relative_to(assets_root.resolve())
+            except AttributeError:
+                # Path.is_relative_to requires Python 3.9+; fall back for older runtimes.
+                try:
+                    candidate.relative_to(assets_root.resolve())
+                    is_contained = True
+                except ValueError:
+                    is_contained = False
+            if not is_contained:
+                self.send_error(403)
+                return
+
+            if not candidate.is_file():
+                self.send_error(404)
+                return
+
+            content = candidate.read_bytes()
+            mime = _ASSET_MIME.get(candidate.suffix.lower(), "application/octet-stream")
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.end_headers()
+            self.wfile.write(content)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+            pass  # client went away mid-response — normal, not an error
+        except Exception as e:
+            print(f"[serve_asset] Uncaught exception: {e}", file=sys.stderr)
+            self.send_error(500)
+
+    def serve_api_state(self):
+        """GET /api/state — consolidated snapshot of all six SSE sections.
+
+        One round trip for the frontend's first paint (plan D3.1). Reuses the
+        collectors' latest-snapshot mechanism: sections the background collector
+        has already produced are returned as-is; anything not yet snapshotted
+        (first-ever request) is computed inline, mirroring serve_events.
+        """
+        try:
+            sse.start_collector_thread()
+            with _latest_lock:
+                latest = dict(_latest_snapshots)
+
+            computers = {
+                "data": _snapshot_data,
+                "backlog": parse_audit_backlog,
+                "agents": get_fleet_agents,
+                "tracker": _snapshot_tracker,
+                "status": _snapshot_orchestrator_status,
+                "cost": cost.get_cost_summary,
+            }
+            state = {}
+            for name in _STATE_SECTIONS:
+                payload = latest.get(name)
+                if payload is not None:
+                    state[name] = json.loads(payload)
+                else:
+                    state[name] = computers[name]()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(state, default=str).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def serve_api_session(self):
+        """GET /api/session — the CSRF token for same-origin JS (plan D3.3).
+
+        Exists so the Vite dev server (which cannot do the sentinel
+        substitution) still gets a working token; the built app keeps the
+        sentinel-injection path as primary.
+
+        SECURITY — Origin-checked FAIL-CLOSED: unlike the mutation endpoints
+        (where a missing Origin is tolerated because the token itself gates the
+        write), this endpoint HANDS OUT the token, so absence of an Origin
+        header is a refusal. Only the same local allowlist csrf.py uses
+        (127.0.0.1 / localhost / [::1]) is accepted.
+        """
+        origin = self.headers.get("Origin", "").strip()
+        if not _is_local_origin(origin):
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(
+                {"error": "Forbidden: /api/session requires a local Origin header"}
+            ).encode('utf-8'))
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.end_headers()
+        self.wfile.write(json.dumps({"token": csrf.SESSION_TOKEN}).encode('utf-8'))
+
+    def serve_api_cost(self):
+        """GET /api/cost — cost/scorecard summary from the outcomes ledger (plan D3.2)."""
+        try:
+            summary = cost.get_cost_summary()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(summary, default=str).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
     def serve_data(self):
         """Serve dashboard data as JSON."""
@@ -325,10 +521,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 initial["agents"] = json.dumps(get_fleet_agents(), default=str, sort_keys=True)
                 initial["tracker"] = json.dumps(_snapshot_tracker(), default=str, sort_keys=True)
                 initial["status"] = json.dumps(_snapshot_orchestrator_status(), default=str, sort_keys=True)
+                initial["cost"] = json.dumps(cost.get_cost_summary(), default=str, sort_keys=True)
                 with _latest_lock:
                     _latest_snapshots.update(initial)
 
-            for name in ("data", "backlog", "agents", "tracker", "status"):
+            for name in _STATE_SECTIONS:
                 payload = initial.get(name)
                 if payload is not None:
                     self._write_sse_event(name, payload)
