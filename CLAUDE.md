@@ -13,6 +13,7 @@
 - **hooks/** — Git pre-push policy enforcement (branch protection, secret scanning) — see hooks/CLAUDE.md
 - **bin/** — CLI scaffolder (Node.js entry point for aesop template) — see bin/CLAUDE.md
 - **ui/** — Web dashboard (serve.py, realtime SSE, CSRF protection, collector thread) — see ui/CLAUDE.md
+- **state_store/** — Event-sourced state layer (SQLite WAL, projections, git-as-export) — see state_store/CLAUDE.md
 - **tests/** — Test suites (shell, Node, Python) and fixtures — see tests/CLAUDE.md
 - **docs/** — Architecture guides, cardinal rules, tutorials
 - **state/** — Runtime durable checkpoints (git-ignored, created by daemons)
