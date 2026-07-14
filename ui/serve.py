@@ -45,7 +45,7 @@ import sse
 sse.reset_state()
 
 # Re-export sibling symbols so serve.X keeps resolving for tests + the handler.
-from config import *
+# For config symbols, use __getattr__ to ensure they stay live through config.reload()
 from csrf import *
 from render import render_dashboard
 from collectors import *
@@ -61,5 +61,18 @@ from sse import (_sse_lock, _sse_clients, _latest_lock, _latest_snapshots,
 import handler
 from handler import DashboardHandler, run_server
 
+
+def __getattr__(name):
+    """Forward config symbols to the live config module so they stay current
+    through config.reload() calls. This prevents the frozen `from config import *`
+    pattern which would go stale after any reload."""
+    import config
+    if hasattr(config, name):
+        return getattr(config, name)
+    raise AttributeError(f"module 'serve' has no attribute '{name}'")
+
+
 if __name__ == "__main__":
+    print(f"Aesop Dashboard: http://127.0.0.1:{config.PORT}", flush=True)
+    print(f"Press Ctrl-C to stop", flush=True)
     run_server()

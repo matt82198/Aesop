@@ -152,7 +152,7 @@ def get_heartbeat_status():
     try:
         if not config.WATCHDOG_HEARTBEAT.exists():
             return {"alive": "UNKNOWN", "age": -1, "threshold": 300}
-        content = config.WATCHDOG_HEARTBEAT.read_text().strip()
+        content = config.WATCHDOG_HEARTBEAT.read_text(encoding='utf-8').strip()
         if not content:
             return {"alive": "UNKNOWN", "age": -1, "threshold": 300}
         # Parse epoch value robustly; assume seconds (standard epoch format)
@@ -193,7 +193,7 @@ def get_monitor_heartbeat_status():
                 return {"alive": "not running", "age": -1, "threshold": 3600}
             monitor_hb = alt_path
 
-        content = monitor_hb.read_text().strip()
+        content = monitor_hb.read_text(encoding='utf-8').strip()
         if not content:
             return {"alive": "not running", "age": -1, "threshold": 3600}
         # Parse epoch value robustly; assume seconds (standard epoch format)
@@ -275,7 +275,7 @@ def get_repos_status():
     try:
         if not config.REPOS_JSON.exists():
             return repos
-        data = json.loads(config.REPOS_JSON.read_text())
+        data = json.loads(config.REPOS_JSON.read_text(encoding='utf-8'))
         if isinstance(data, list):
             repos = data[:10]  # Limit to 10
         elif isinstance(data, dict):
@@ -290,7 +290,7 @@ def get_recent_events():
     try:
         if not config.BACKUP_LOG.exists():
             return events
-        lines = config.BACKUP_LOG.read_text().strip().split('\n')
+        lines = config.BACKUP_LOG.read_text(encoding='utf-8').strip().split('\n')
         events = [line.strip() for line in lines[-8:] if line.strip()]
     except Exception as e:
         print(f"[collectors] Failed to read recent events: {e}", file=sys.stderr)
@@ -302,7 +302,7 @@ def get_alerts():
     try:
         if not config.ALERTS_LOG.exists():
             return alerts
-        lines = config.ALERTS_LOG.read_text().strip().split('\n')
+        lines = config.ALERTS_LOG.read_text(encoding='utf-8').strip().split('\n')
         unreviewed = [
             line.strip() for line in lines
             if line.strip()

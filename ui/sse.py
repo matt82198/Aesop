@@ -16,8 +16,6 @@ _sse_lock = threading.Lock()
 
 _sse_clients = []  # list[queue.Queue]
 
-_sse_client_count = 0  # Track concurrent connections for cap enforcement
-
 _latest_lock = threading.Lock()
 
 _latest_snapshots = {"data": None, "backlog": None, "agents": None, "tracker": None, "status": None}  # name -> json str
@@ -40,8 +38,8 @@ def reset_state():
     harmless no-op before the collector ever starts.
     """
     global _collector_started, _collector_stop_event
-    _collector_stop_event.set()            # stop a thread left over from a prior import
     with _collector_lock:
+        _collector_stop_event.set()        # stop a thread left over from a prior import
         _collector_stop_event = threading.Event()
         _collector_started = False
     with _latest_lock:
