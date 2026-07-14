@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { DashboardData, AuditBacklog, Agent, TrackerSnapshot, OrchestratorStatus, CostSummary, SSEConnectionStatus } from './types';
 
-interface SSEState {
+export interface SSEState {
   data: DashboardData | null;
   backlog: AuditBacklog | null;
   agents: Agent[] | null;

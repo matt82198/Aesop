@@ -13,6 +13,8 @@ import { useHashRoute, type Route } from './lib/useHashRoute';
 import { useSSE } from './lib/useSSE';
 import { HealthHeader } from './components/HealthHeader';
 import { Overview } from './views/Overview';
+import { Work } from './views/Work';
+import Activity from './views/Activity';
 import { Cost } from './views/Cost';
 import { TESTIDS } from './test/fixtures';
 
@@ -121,8 +123,8 @@ export default function App() {
             repos={sseState.data?.repos ?? null}
           />
         )}
-        {route === '#/work' && <Placeholder name="Work" testid={TESTIDS.viewWork} />}
-        {route === '#/activity' && <Placeholder name="Activity" testid={TESTIDS.viewActivity} />}
+        {route === '#/work' && <Work />}
+        {route === '#/activity' && <Activity state={sseState} />}
         {route === '#/cost' &&
           (sseState.cost ? <Cost cost={sseState.cost} /> : <Placeholder name="Cost" testid={TESTIDS.viewCost} />)}
       </main>

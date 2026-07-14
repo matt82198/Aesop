@@ -75,9 +75,13 @@ export function HealthHeader({
     window.location.hash = '#/';
   }, []);
 
-  // Determine audit phase badge
+  // Determine audit phase badge — the status file signals via phase/activity, not role
   const isAuditPhase =
-    orchestrator?.orchestrators.some((o) => o.role?.includes('audit')) ?? false;
+    orchestrator?.orchestrators.some(
+      (o) => o.phase?.toLowerCase().includes('audit') || o.activity?.toLowerCase().includes('audit'),
+    ) ?? false;
+  const orchestratorActivity =
+    orchestrator?.orchestrators.map((o) => o.activity || o.phase).filter(Boolean)[0] ?? 'no active session';
 
   const agentsCount = agents?.length ?? 0;
   const alertsCount = alerts?.count ?? 0;
@@ -144,8 +148,12 @@ export function HealthHeader({
           aria-label="Orchestrator status"
         >
           <span className="health-header__label">Orchestrator</span>
-          {isAuditPhase && <span className="health-header__badge">Audit</span>}
-          <span className="health-header__status">Active</span>
+          {isAuditPhase && (
+            <span className="health-header__badge" role="status">
+              Audit
+            </span>
+          )}
+          <span className="health-header__status">{orchestratorActivity}</span>
         </button>
 
         {/* Agents count */}
