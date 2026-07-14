@@ -34,3 +34,7 @@ Aesop ships five behavior-as-code pillars: **onboarding templates**, **policy ho
 
 - [PUBLISHING.md](PUBLISHING.md) — Release Aesop to npm using GitHub Actions with OIDC trusted publishing
 - [av-resilience.md](av-resilience.md) — Antivirus & behavioral-engine resilience patterns for reliable agent execution
+
+## Design Spikes
+
+- [spikes/tiered-cognition/](spikes/tiered-cognition/) — Wave-11 spike: tiered cognition/execution architecture (Haiku as sole I/O substrate; Sonnet/Opus/Fable cognition tiers emit structured work-orders)
