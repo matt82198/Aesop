@@ -41,6 +41,30 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
 
+
+def _real_console_errors(console_errors, failed_urls):
+    """Drop noise from the captured console errors.
+
+    Playwright reports a failed sub-resource as a generic
+    "Failed to load resource: ... 404" console line that carries NO url, so
+    string-matching it is fragile. We instead correlate with the actual
+    failed-response urls: a generic resource-load line is ignorable when the
+    only failed responses were favicon (which the server now answers 204, so
+    this is belt-and-suspenders). Non-favicon failed responses are surfaced
+    explicitly so a real broken asset still fails the proof.
+    """
+    non_favicon = [u for u in failed_urls if "favicon" not in u.lower()]
+    real = []
+    for e in console_errors:
+        low = e.lower()
+        if "favicon" in low:
+            continue
+        if "failed to load resource" in low and not non_favicon:
+            continue  # only favicon failed → ignore the urlless generic line
+        real.append(e)
+    real.extend(f"failed resource: {u}" for u in non_favicon)
+    return real
+
 AGENT_FULL_ID = "verifyagent0123456789ab"
 PROMPT_MARKER = "FIXTURE-PROMPT-MARKER: rebuild the flux capacitor\n" + "\n".join(
     f"line {i}: recalibrate subsystem {i} and verify each tolerance band carefully"
@@ -151,7 +175,7 @@ def build_fixture(root: Path, hint: str):
         "status:'running',age_s:4,hint:hint,taskLabel:hint}]));\n"
     )
     (root / "dash" / "dash-extra.mjs").write_text(fake, encoding="utf-8")
-    transcript = root / "transcripts" / f"{AGENT_FULL_ID}.output"
+    transcript = root / "transcripts" / f"agent-{AGENT_FULL_ID}.jsonl"
     lines = [
         json.dumps({"type": "user", "parentUuid": None,
                     "message": {"content": PROMPT_MARKER}}),
@@ -208,6 +232,7 @@ def run_empty_phase(pw, failures):
     root = Path(tempfile.mkdtemp(prefix="aesop-verify-w14-empty-"))
     port = free_port()
     console_errors = []
+    failed_urls = []
     build_empty_fixture(root)
     try:
         server = start_server(root, port)
@@ -221,6 +246,7 @@ def run_empty_phase(pw, failures):
         page.on("console", lambda m: console_errors.append(m.text)
                 if m.type == "error" else None)
         page.on("pageerror", lambda e: console_errors.append(str(e)))
+        page.on("response", lambda r: failed_urls.append(r.url) if r.status >= 400 else None)
         page.goto(f"http://127.0.0.1:{port}/", wait_until="domcontentloaded")
         try:
             page.wait_for_selector("[data-testid='health-header']", timeout=15000)
@@ -235,7 +261,7 @@ def run_empty_phase(pw, failures):
             except Exception as e:
                 failures.append(f"(i) empty-state view {testid} did not render: {e}")
         time.sleep(0.5)
-        real_errors = [e for e in console_errors if "favicon" not in e.lower()]
+        real_errors = _real_console_errors(console_errors, failed_urls)
         if real_errors:
             failures.append(f"(i) empty-state console errors: {real_errors[:3]}")
         browser.close()
@@ -261,6 +287,7 @@ def main():
     root = Path(tempfile.mkdtemp(prefix="aesop-verify-wave14-dash-"))
     port = free_port()
     console_errors = []
+    failed_urls = []
     failures = []
     build_fixture(root, hint="fixture hint alpha")
     try:
@@ -283,6 +310,7 @@ def main():
             page.on("console", lambda m: console_errors.append(m.text)
                     if m.type == "error" else None)
             page.on("pageerror", lambda e: console_errors.append(str(e)))
+            page.on("response", lambda r: failed_urls.append(r.url) if r.status >= 400 else None)
             page.goto(f"http://127.0.0.1:{port}/", wait_until="domcontentloaded")
 
             # (b) app serves React dist, not the legacy template
@@ -453,7 +481,7 @@ def main():
 
             # (a) console clean across the whole populated run
             time.sleep(0.5)
-            real_errors = [e for e in console_errors if "favicon" not in e.lower()]
+            real_errors = _real_console_errors(console_errors, failed_urls)
             if real_errors:
                 failures.append(f"(a) console errors: {real_errors[:3]}")
 
