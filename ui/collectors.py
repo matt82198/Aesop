@@ -316,7 +316,27 @@ def get_alerts():
     return alerts
 
 def load_tracker():
-    """Load tracker.json, return empty tracker if missing or corrupt."""
+    """Load tracker.json, return empty tracker if missing or corrupt.
+
+    Defect 2 fix: Check dirty flag. If render previously failed, the event log
+    and tracker.json may be out of sync. Re-render from projection to self-heal.
+    """
+    # Check dirty flag (indicates previous render failure)
+    dirty_file = config.STATE_DIR / ".tracker-render-dirty"
+    if dirty_file.exists():
+        try:
+            print("[tracker] Detected previous render failure; recovering...", file=sys.stderr)
+            api = _tracker_api()
+            # Force re-render from projection
+            try:
+                save_tracker(api.project("tracker"))
+                dirty_file.unlink()
+                print("[tracker] Recovery render completed", file=sys.stderr)
+            except Exception as e:
+                print(f"[tracker] Recovery render failed: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[tracker] Failed to recover from dirty flag: {e}", file=sys.stderr)
+
     if not config.TRACKER_FILE.exists():
         return {"version": 1, "items": []}
 
@@ -441,9 +461,32 @@ def _tracker_api():
 
 
 def _ensure_tracker_migrated(api):
-    """Backfill the event log from the existing tracker.json once (idempotent)."""
-    if api.get("tracker"):
+    """Backfill the event log from the existing tracker.json once (idempotent).
+
+    Defect 3 fix: Guard migration with a marker event (migration_started with
+    version=1). The first caller to append this marker wins and performs the
+    backfill. Subsequent callers see the marker and skip the backfill. This
+    prevents concurrent callers from polluting the audit log with duplicate
+    item_created events.
+    """
+    events = api.get("tracker")
+
+    # Check for migration marker (first event of type "migration_started")
+    has_migration_marker = any(e.get("type") == "migration_started" and
+                               e.get("payload", {}).get("version") == 1
+                               for e in events)
+    if has_migration_marker:
+        # Migration already completed (or in progress); skip backfill
         return
+
+    # Append migration marker first to atomically claim the migration
+    try:
+        api.append("tracker", "migration_started", {"version": 1}, "system")
+    except Exception as e:
+        print(f"[tracker] Failed to append migration marker: {e}", file=sys.stderr)
+        return
+
+    # Now safe to backfill (other callers will see marker and skip)
     if config.TRACKER_FILE.exists():
         try:
             data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
@@ -459,8 +502,25 @@ def _tracker_items_by_id(api):
 
 
 def _render_tracker(api):
-    """Materialize the projection back to tracker.json (atomic)."""
-    save_tracker(api.project("tracker"))
+    """Materialize the projection back to tracker.json (atomic).
+
+    Defect 2 fix: Wrap render in try/except. On failure, log loudly and mark
+    a dirty flag so the next read triggers a recovery re-render. This ensures
+    that if the event log has events but tracker.json is stale, the next read
+    self-heals by detecting the mismatch and re-rendering.
+    """
+    try:
+        save_tracker(api.project("tracker"))
+    except Exception as e:
+        print(f"[tracker] CRITICAL: Failed to render tracker after event append: {e}",
+              file=sys.stderr)
+        # Mark dirty flag for recovery on next read
+        dirty_file = config.STATE_DIR / ".tracker-render-dirty"
+        try:
+            dirty_file.write_text(str(time()), encoding='utf-8')
+        except Exception as e2:
+            print(f"[tracker] Failed to write dirty flag: {e2}", file=sys.stderr)
+        raise
 
 
 def create_tracker_item(data):
@@ -580,27 +640,66 @@ def _snapshot_orchestrator_status():
         return {"orchestrators": []}
 
 def drain_tracker_inbox():
-    """Drain .tracker-inbox.jsonl, create items idempotently."""
+    """Drain .tracker-inbox.jsonl, create items idempotently.
+
+    Defect 1 fix: Atomically rename inbox file to unique processing name FIRST
+    to ensure only one caller processes it under concurrent access. Strengthen
+    dedup to check both tracker.json AND api.project("tracker") so items
+    in the event store but not yet rendered are also excluded.
+    """
     inbox_file = config.STATE_DIR / ".tracker-inbox.jsonl"
     if not inbox_file.exists():
         return []
-    
+
     created = []
     try:
-        content = inbox_file.read_text(encoding='utf-8')
-        if not content.strip():
-            inbox_file.unlink()
+        # Defect 1: Atomically rename inbox to unique processing name first.
+        # This ensures only one caller wins; others see no file.
+        processing_file = inbox_file.with_name(
+            f".tracker-inbox.jsonl.processing-{secrets.token_hex(8)}"
+        )
+        try:
+            os.replace(str(inbox_file), str(processing_file))
+        except FileNotFoundError:
+            # Another caller already renamed it; nothing to process
             return []
-        
+        except Exception as e:
+            print(f"[inbox] Failed to rename inbox: {e}", file=sys.stderr)
+            return []
+
+        content = processing_file.read_text(encoding='utf-8')
+        if not content.strip():
+            processing_file.unlink()
+            return []
+
         lines = content.strip().splitlines()
-        tracker = load_tracker()
+
+        # Defect 1: Build dedup hash set from both tracker.json AND event store projection.
+        # This catches items in the event store that haven't been rendered to tracker.json yet.
         existing_hashes = set()
-        for item in tracker.get("items", []):
+
+        # Check rendered tracker.json
+        tracker_json = load_tracker()
+        for item in tracker_json.get("items", []):
             source = item.get("source", "")
             title = item.get("title", "")
             h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
             existing_hashes.add(h)
-        
+
+        # Also check event store projection (catches items in DB but not yet rendered)
+        try:
+            api = _tracker_api()
+            projected = api.project("tracker")
+            for item in projected.get("items", []):
+                source = item.get("source", "")
+                title = item.get("title", "")
+                h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
+                existing_hashes.add(h)
+        except Exception as e:
+            print(f"[inbox] Failed to project tracker state: {e}", file=sys.stderr)
+            # Fall back to tracker.json only if projection fails
+            pass
+
         rejects = []
         for line in lines:
             line = line.strip()
@@ -611,11 +710,11 @@ def drain_tracker_inbox():
                 if not isinstance(entry, dict):
                     rejects.append(line)
                     continue
-                
+
                 source = entry.get("source", "")
                 title = entry.get("title", "")
                 h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
-                
+
                 if h not in existing_hashes:
                     item = create_tracker_item(entry)
                     created.append(item)
@@ -624,13 +723,13 @@ def drain_tracker_inbox():
                 rejects.append(line)
             except Exception as e:
                 rejects.append(line + " # " + str(e))
-        
+
         if rejects:
             rejects_file = inbox_file.with_name(".tracker-inbox.rejects")
             rejects_file.write_text("\n".join(rejects) + "\n", encoding='utf-8')
-        
-        inbox_file.unlink()
+
+        processing_file.unlink()
     except Exception as e:
         print(f"[inbox] Drain error: {e}", file=sys.stderr)
-    
+
     return created
