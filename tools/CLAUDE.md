@@ -19,6 +19,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 
 **CI/merge operations**:
 - `ci_merge_wait.py` — CI-gated merge helper; polls gh pr view until checks conclude (SUCCESS/FAILURE), then merges ONLY if SUCCESS (structurally unreachable otherwise)
+- `metrics_gate.py` — NO-UNVERIFIED-METRICS gate; scans git diff for hard numeric claims (%, multipliers, $) in markdown that lack verification comments
 
 **Alerting**:
 - `alert_bridge.py` — Slack/Discord webhook bridge; scans SECURITY-ALERTS.log (>= min_severity) + heartbeat staleness, POSTs opt-in (cursor-idempotent, webhook URL masked). Called per-cycle by run-watchdog.sh.
