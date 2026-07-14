@@ -14,10 +14,80 @@
   color: var(--color-text);
 }
 
+.agents-panel__summaries {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.agent-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+
+.agent-summary__project {
+  flex: 0 0 auto;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+  min-width: fit-content;
+}
+
+.agent-summary__status {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.agent-summary__status--running {
+  background: var(--color-status-ok-bg);
+  color: var(--color-status-ok);
+}
+
+.agent-summary__status--idle {
+  background: var(--color-status-info-bg);
+  color: var(--color-status-info);
+}
+
+.agent-summary__status--SUSPICIOUS,
+.agent-summary__status--HIGH {
+  background: var(--color-status-error-bg);
+  color: var(--color-status-error);
+}
+
+.agent-summary__status--MED,
+.agent-summary__status--DRIFT {
+  background: var(--color-status-warn-bg);
+  color: var(--color-status-warn);
+}
+
+.agent-summary__runtime {
+  flex: 1;
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  min-width: fit-content;
+}
+
 .agents-panel__list {
   list-style: none;
   margin: 0;
   padding: 0;
+  margin-top: var(--space-4);
 }
 
 .empty-state {

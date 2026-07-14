@@ -21,6 +21,7 @@ interface HealthHeaderProps {
   agents: Agent[] | null;
   alerts: Alert | null;
   connectionStatus: SSEConnectionStatus;
+  dataTimestamp: number | null; // Epoch ms when last SSE payload was received
   onThemeToggle: () => void;
   onRefresh: () => void;
 }
@@ -49,6 +50,20 @@ function getStatusColor(status: string): string {
   return 'var(--color-status-neutral)';
 }
 
+/**
+ * Format a timestamp as a relative time string (e.g., "1m ago", "15s ago").
+ */
+function formatRelativeTime(epochMs: number): string {
+  const ageMs = Date.now() - epochMs;
+  const ageSecs = Math.floor(ageMs / 1000);
+
+  if (ageSecs < 60) return `${ageSecs}s ago`;
+  const mins = Math.floor(ageSecs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(ageSecs / 3600);
+  return `${hours}h ago`;
+}
+
 export function HealthHeader({
   watchdog,
   monitor,
@@ -56,6 +71,7 @@ export function HealthHeader({
   agents,
   alerts,
   connectionStatus,
+  dataTimestamp,
   onThemeToggle,
   onRefresh,
 }: HealthHeaderProps) {
@@ -86,6 +102,11 @@ export function HealthHeader({
   const agentsCount = agents?.length ?? 0;
   const alertsCount = alerts?.count ?? 0;
 
+  // Compute data staleness (stale if > 60 seconds old)
+  const dataAgeMs = dataTimestamp ? Date.now() - dataTimestamp : -1;
+  const isDataStale = dataAgeMs > 60000;
+  const dataTimeStr = dataTimestamp ? formatRelativeTime(dataTimestamp) : 'unknown';
+
   // Determine max severity for alerts color
   let maxAlertSeverity = 'neutral';
   if (alertsCount > 0 && alerts?.lines.length) {
@@ -110,10 +131,13 @@ export function HealthHeader({
         >
           <span className="health-header__label">Watchdog</span>
           <span
-            className="health-header__status"
-            style={{
-              color: getStatusColor(watchdog?.alive ?? 'unknown'),
-            }}
+            className={`health-header__status text-status-${
+              watchdog?.alive === 'ALIVE'
+                ? 'ok'
+                : watchdog?.alive === 'STALE'
+                  ? 'error'
+                  : 'neutral'
+            }`}
           >
             {watchdog?.alive ?? 'unknown'}
             {watchdog && watchdog.age >= 0 && ` +${formatAge(watchdog.age)}`}
@@ -130,10 +154,9 @@ export function HealthHeader({
         >
           <span className="health-header__label">Monitor</span>
           <span
-            className="health-header__status"
-            style={{
-              color: getStatusColor(monitor?.alive ?? 'unknown'),
-            }}
+            className={`health-header__status text-status-${
+              monitor?.alive === 'ALIVE' ? 'ok' : 'neutral'
+            }`}
           >
             {monitor?.alive ?? 'unknown'}
           </span>
@@ -171,17 +194,36 @@ export function HealthHeader({
         {/* Alerts count */}
         <button
           type="button"
-          className="health-header__cell health-header__cell--alerts"
+          className={`health-header__cell health-header__cell--alerts ${
+            maxAlertSeverity === 'error'
+              ? 'text-status-error'
+              : maxAlertSeverity === 'warn'
+                ? 'text-status-warn'
+                : ''
+          }`}
           data-testid={TESTIDS.healthAlertsCount}
           onClick={handleAlertsClick}
-          style={{
-            color: maxAlertSeverity === 'error' ? 'var(--color-status-error)' : maxAlertSeverity === 'warn' ? 'var(--color-status-warn)' : undefined,
-          }}
           aria-label={`${alertsCount} alerts`}
         >
           <span className="health-header__label">Alerts</span>
           <span className="health-header__count">{alertsCount}</span>
         </button>
+
+        {/* Data timestamp */}
+        <span
+          className={`health-header__cell health-header__cell--timestamp ${
+            isDataStale ? 'health-header__cell--stale' : ''
+          }`}
+          data-testid="health-data-timestamp"
+          role="status"
+          aria-live="polite"
+          aria-label={`Data as of ${dataTimeStr}`}
+        >
+          <span className="health-header__label">Data</span>
+          <span className={`health-header__status ${isDataStale ? 'text-status-warn' : 'text-status-ok'}`}>
+            {dataTimeStr}
+          </span>
+        </span>
 
         {/* SSE status */}
         <span
@@ -194,15 +236,13 @@ export function HealthHeader({
         >
           <span className="health-header__label">SSE</span>
           <span
-            className="health-header__status"
-            style={{
-              color:
-                connectionStatus.status === 'live'
-                  ? 'var(--color-status-ok)'
-                  : connectionStatus.status === 'reconnecting'
-                    ? 'var(--color-status-warn)'
-                    : 'var(--color-status-error)',
-            }}
+            className={`health-header__status text-status-${
+              connectionStatus.status === 'live'
+                ? 'ok'
+                : connectionStatus.status === 'reconnecting'
+                  ? 'warn'
+                  : 'error'
+            }`}
           >
             {connectionStatus.status === 'live'
               ? 'Live'

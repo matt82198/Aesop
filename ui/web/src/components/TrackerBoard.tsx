@@ -2,7 +2,7 @@
  * TrackerBoard — kanban-style layout with 4 lanes + archived summary.
  * Lane bucketing: proposed/ranked/in-progress/done.
  * Unknown lanes -> proposed. Empty lanes compact.
- * Lane counts with accessible labels.
+ * Lane counts with accessible labels and health badges.
  */
 
 import { TESTIDS } from '../test/fixtures';
@@ -51,12 +51,27 @@ export function TrackerBoard({ items, onUpdate }: TrackerBoardProps) {
   // Render lanes
   const renderedLanes = LANE_ORDER.map((lane) => {
     const items = laneMap.get(lane) || [];
+
+    // Calculate health badge info (done/total where derivable)
+    let badgeText = `${items.length} items`;
+    if (lane === 'done') {
+      badgeText = `${items.length}/${items.length} done`;
+    } else if (items.length > 0) {
+      const doneCount = items.filter((item) => item.status === 'done').length;
+      if (doneCount > 0) {
+        badgeText = `${doneCount}/${items.length} done`;
+      }
+    }
+
     return (
       <section key={lane} className="tracker-lane" data-testid={TESTIDS.trackerLane}>
         <h2 className="lane-header">
           {getLaneLabel(lane)}
-          <span className="lane-count" aria-label={`${items.length} items in ${getLaneLabel(lane)}`}>
-            {items.length}
+          <span
+            className={`lane-badge ${items.length === 0 ? 'lane-badge--empty' : 'lane-badge--active'}`}
+            aria-label={`${badgeText} in ${getLaneLabel(lane)}`}
+          >
+            {badgeText}
           </span>
         </h2>
         <div className="lane-content">

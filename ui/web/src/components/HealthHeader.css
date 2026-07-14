@@ -87,6 +87,25 @@
   border-color: var(--color-border-subtle);
 }
 
+.health-header__cell--timestamp {
+  cursor: default;
+}
+
+.health-header__cell--timestamp:hover {
+  background: var(--color-bg-subtle);
+  border-color: var(--color-border-subtle);
+}
+
+.health-header__cell--stale {
+  background: var(--color-status-warn-bg);
+  border-color: var(--color-status-warn);
+}
+
+.health-header__cell--stale:hover {
+  background: var(--color-status-warn-bg);
+  border-color: var(--color-status-warn);
+}
+
 .health-header__cell--theme,
 .health-header__cell--refresh {
   margin-left: auto;

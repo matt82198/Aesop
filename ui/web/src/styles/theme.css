@@ -87,6 +87,27 @@
   color-scheme: light;
 }
 
+/* ---- Status color classes (replaces inline styles) ---- */
+.text-status-ok {
+  color: var(--color-status-ok);
+}
+
+.text-status-warn {
+  color: var(--color-status-warn);
+}
+
+.text-status-error {
+  color: var(--color-status-error);
+}
+
+.text-status-info {
+  color: var(--color-status-info);
+}
+
+.text-status-neutral {
+  color: var(--color-status-neutral);
+}
+
 /* ---- Dark palette values, shared between the media query and the
         explicit data-theme override. Duplicated blocks because CSS custom
         properties can't be aliased conditionally without a preprocessor. ---- */

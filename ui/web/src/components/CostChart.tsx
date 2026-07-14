@@ -6,6 +6,7 @@
  */
 
 import type { CostSummary } from '../lib/types';
+import { formatTimestamp } from '../lib/format';
 import { TESTIDS } from '../test/fixtures';
 import './CostChart.css';
 
@@ -14,17 +15,17 @@ interface CostChartProps {
 }
 
 export function CostChart({ cost }: CostChartProps) {
-  const { daily_totals } = cost;
+  const { daily_totals, overall_scorecard } = cost;
   const days = Object.keys(daily_totals).sort();
+  const lastDayKey = days.length > 0 ? days[days.length - 1] : null;
 
-  if (days.length === 0) {
+  if (days.length === 0 || overall_scorecard.total_runs === 0) {
     return (
-      <div className="chart-empty" data-testid={TESTIDS.costChart}>
-        <svg viewBox="0 0 400 200" className="cost-chart-svg">
-          <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle">
-            No data
-          </text>
-        </svg>
+      <div className="chart-container" data-testid={TESTIDS.costChart}>
+        <div className="chart-empty">
+          <p className="chart-empty-message">No ledger data yet</p>
+          <p className="chart-empty-hint">Cost data will appear as agents complete runs.</p>
+        </div>
       </div>
     );
   }
@@ -46,13 +47,13 @@ export function CostChart({ cost }: CostChartProps) {
   const BAR_GROUP_SPACING = BAR_WIDTH * 1.5;
 
   return (
-    <svg
-      viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
-      className="cost-chart-svg"
-      data-testid={TESTIDS.costChart}
-      role="img"
-      aria-label="Daily token usage by model"
-    >
+    <div className="chart-container" data-testid={TESTIDS.costChart}>
+      <svg
+        viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
+        className="cost-chart-svg"
+        role="img"
+        aria-label="Daily token usage by model"
+      >
       {/* Axes */}
       <line
         x1={CHART_MARGIN}
@@ -139,6 +140,13 @@ export function CostChart({ cost }: CostChartProps) {
           Out
         </text>
       </g>
-    </svg>
+      </svg>
+
+      {lastDayKey && (
+        <div className="chart-footer">
+          <span className="chart-footer-timestamp">updated {formatTimestamp(lastDayKey + 'T23:59:59Z')}</span>
+        </div>
+      )}
+    </div>
   );
 }

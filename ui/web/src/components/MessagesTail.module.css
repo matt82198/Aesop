@@ -123,6 +123,19 @@
   white-space: pre-wrap;
 }
 
+.footer {
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg);
+  text-align: right;
+  font-size: var(--font-size-xs);
+}
+
+.footerTimestamp {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
 /* Respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .messagesBox {

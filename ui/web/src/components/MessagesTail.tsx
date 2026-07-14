@@ -48,9 +48,10 @@ export default function MessagesTail({ messages }: Props) {
   }, [messages, isFollowing]);
 
   const displayMessages = messages.slice(-MAX_MESSAGES);
+  const lastMessageTimestamp = displayMessages.length > 0 ? displayMessages[displayMessages.length - 1].timestamp : null;
 
   return (
-    <div data-testid={TESTIDS.messagesTail} className={styles.container}>
+    <div data-testid={TESTIDS.messagesTail} className={styles.container} aria-live="polite" aria-label="Main-thread messages">
       <div className={styles.header}>
         <h3 className={styles.title}>Main-Thread Messages</h3>
         <button
@@ -82,6 +83,12 @@ export default function MessagesTail({ messages }: Props) {
           ))
         )}
       </div>
+
+      {lastMessageTimestamp && (
+        <div className={styles.footer}>
+          <span className={styles.footerTimestamp}>updated {formatTimestamp(lastMessageTimestamp)}</span>
+        </div>
+      )}
     </div>
   );
 }

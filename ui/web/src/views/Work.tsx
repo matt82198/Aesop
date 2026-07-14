@@ -20,8 +20,11 @@ export function Work() {
   const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
-    if (sse.tracker?.items) {
+    if (sse.tracker?.items !== undefined && sse.tracker?.items !== null) {
       setTrackerItems(sse.tracker.items);
+    } else if (sse.tracker === null) {
+      // Treat null items as empty array
+      setTrackerItems([]);
     }
   }, [sse.tracker]);
 

@@ -200,6 +200,25 @@
   font-weight: var(--font-weight-bold);
 }
 
+.lane-badge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  white-space: nowrap;
+}
+
+.lane-badge--active {
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+
+.lane-badge--empty {
+  background: var(--color-bg-inset);
+  color: var(--color-text-muted);
+}
+
 .lane-content {
   display: flex;
   flex-direction: column;
