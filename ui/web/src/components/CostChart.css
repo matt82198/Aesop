@@ -1,0 +1,74 @@
+/* CostChart — SVG bar chart for daily token usage */
+
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 250px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.cost-chart-svg {
+  max-width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* Chart axes and styling */
+.chart-axis {
+  stroke: var(--color-border);
+  stroke-width: 2;
+}
+
+.chart-label-x,
+.chart-label-y {
+  font-size: 12px;
+  fill: var(--color-text-muted);
+  font-family: var(--font-sans);
+}
+
+/* Bar segments — stacked bars showing in/out tokens */
+.bar-segment {
+  stroke: var(--color-border-subtle);
+  stroke-width: 0.5;
+  transition: opacity var(--transition-fast);
+  cursor: pointer;
+}
+
+.bar-segment:hover {
+  opacity: 0.8;
+}
+
+.bar-input {
+  fill: var(--color-status-info);
+}
+
+.bar-output {
+  fill: var(--color-accent);
+}
+
+/* Legend */
+.chart-legend {
+  font-size: 12px;
+}
+
+.legend-text {
+  fill: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .cost-chart-svg {
+    width: 100%;
+  }
+
+  .chart-label-x,
+  .chart-label-y,
+  .legend-text {
+    font-size: 10px;
+  }
+}
