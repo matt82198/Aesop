@@ -7,7 +7,7 @@ Contracts under test:
   - get_fleet_agents() disambiguates colliding truncated agent ids (id, id-2, ...)
     so DOM row keys and click-to-expand lookups never merge two agents.
   - extract_agent_dispatch_prompt() prefix-matches truncated ids against full-id
-    *.output transcripts and returns the first user message as the dispatch prompt.
+    agent-<id>.jsonl transcripts and returns the first user message as the dispatch prompt.
 
 Run: python -m unittest tests.test_serve_sse
 """
@@ -99,7 +99,7 @@ class TestDispatchPromptExtraction(EnvFixtureCase):
 
     def test_prefix_match_and_prompt(self):
         full_id = "abc123def456fedcba9876"
-        transcript = self.fixture_root / "transcripts" / f"{full_id}.output"
+        transcript = self.fixture_root / "transcripts" / f"agent-{full_id}.jsonl"
         lines = [
             json.dumps({"type": "user", "parentUuid": None,
                         "message": {"content": "FIXTURE DISPATCH PROMPT: fix the widget"}}),
