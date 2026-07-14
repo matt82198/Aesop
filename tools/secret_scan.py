@@ -101,10 +101,17 @@ def is_binary_file(filepath):
 
 
 def should_skip_file(filepath):
-    """Check if file should be skipped entirely (.git/, __pycache__, .pyc, .pyo)."""
+    """Check if file should be skipped entirely (.git/, node_modules/, __pycache__, .pyc, .pyo)."""
     # Skip .git directories — match a path COMPONENT, not a substring
     # (".git" in str(path) also matched ".gitignore" and skipped scanning it).
     if ".git" in filepath.parts:
+        return True
+
+    # Skip node_modules — third-party deps, always git-ignored, never our code.
+    # CI installs them via `npm ci` for the dashboard build, so a whole-tree
+    # scan would otherwise walk thousands of package files (README example
+    # connection strings, files literally named token.js → false positives).
+    if "node_modules" in filepath.parts:
         return True
 
     # Skip __pycache__ directories
