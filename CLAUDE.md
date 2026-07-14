@@ -16,6 +16,7 @@
 - **state_store/** — Event-sourced state layer (SQLite WAL, projections, git-as-export) — see state_store/CLAUDE.md
 - **tests/** — Test suites (shell, Node, Python) and fixtures — see tests/CLAUDE.md
 - **docs/** — Architecture guides, cardinal rules, tutorials
+- **assets/** — Logo, branding, media (repo-visible documentation assets)
 - **state/** — Runtime durable checkpoints (git-ignored, created by daemons)
 
 ## Key principles

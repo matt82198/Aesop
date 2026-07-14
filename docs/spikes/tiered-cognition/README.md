@@ -1,8 +1,6 @@
 # Tiered Cognition/Execution — spike + staged wave-12 artifact
 
-> **STATUS: STAGED, NOT ACTIVATED.** Nothing in this directory is wired into
-> `~/.claude/settings.json` or `~/.claude/hooks/`. The live model-policy hook
-> (`force-haiku-subagents.mjs`) is untouched and still governs the fleet.
+> **STATUS: CANCELLED 2026-07-14** after A/B testing measured 4.6x weighted cost for identical quality (see MEMORY.md wave-11 entry). Kept for reference; do not activate. Nothing in this directory is wired into `~/.claude/settings.json` or `~/.claude/hooks/`. The live model-policy hook (`force-haiku-subagents.mjs`) is untouched and still governs the fleet.
 
 ## Contents
 
