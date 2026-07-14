@@ -3,10 +3,11 @@
 # Backs up committed + uncommitted fleet work and scans for security issues every 150s.
 # Usage: run-watchdog.sh [--once]
 #
-# Configuration: export AESOP_ROOT=/path/to/aesop before running, or edit default below.
+# Configuration: export AESOP_ROOT=/path/to/aesop before running (defaults to script directory's parent).
 # Testing: export AESOP_WATCHDOG_CYCLE_CMD to override backup-fleet.sh invocation
 
-AESOP_ROOT="${AESOP_ROOT:-.}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
 MODE="${1:-daemon}"
 LOCK_DIR="$AESOP_ROOT/state/.watchdog-lock"
 LOCK_STALE_THRESHOLD=300
