@@ -41,7 +41,7 @@ def get_transcripts_root():
 def scan_transcripts(transcripts_root, threshold_seconds):
     """Scan transcripts root for agent-*.jsonl files and compute staleness.
 
-    Returns: list of dicts {agent_id, age_seconds, stalled, last_mtime (ISO format)}
+    Returns: list of dicts {agent, transcript, mtime_age_s, verdict, suggested_action, last_mtime (ISO)}
     """
     transcripts_root = Path(transcripts_root)
 
@@ -51,6 +51,10 @@ def scan_transcripts(transcripts_root, threshold_seconds):
     now = time.time()
     results = []
 
+    # Thresholds for verdict classification
+    STALE_THRESHOLD = threshold_seconds
+    DEAD_THRESHOLD = threshold_seconds * 2  # Dead if 2x threshold
+
     # Walk all subdirectories for agent-*.jsonl files
     for jsonl_file in transcripts_root.rglob("agent-*.jsonl"):
         if not jsonl_file.is_file():
@@ -58,15 +62,27 @@ def scan_transcripts(transcripts_root, threshold_seconds):
 
         mtime = jsonl_file.stat().st_mtime
         age_seconds = int(now - mtime)
-        stalled = age_seconds > threshold_seconds
 
         # Extract agent_id from filename (e.g., agent-abc123.jsonl -> abc123)
         agent_id = jsonl_file.stem.replace("agent-", "")
 
+        # Determine verdict
+        if age_seconds <= STALE_THRESHOLD:
+            verdict = "ok"
+            suggested_action = None
+        elif age_seconds <= DEAD_THRESHOLD:
+            verdict = "stale"
+            suggested_action = "monitor for progress or investigate why transcript is stalled"
+        else:
+            verdict = "dead"
+            suggested_action = "investigate immediately; agent may be hung or crashed"
+
         results.append({
-            "agent_id": agent_id,
-            "age_seconds": age_seconds,
-            "stalled": stalled,
+            "agent": agent_id,
+            "transcript": str(jsonl_file),
+            "mtime_age_s": age_seconds,
+            "verdict": verdict,
+            "suggested_action": suggested_action,
             "last_mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime)),
         })
 
@@ -79,16 +95,18 @@ def print_human_table(results):
         print("no transcripts found")
         return
 
-    # Sort by age_seconds (oldest first)
-    sorted_results = sorted(results, key=lambda r: r["age_seconds"], reverse=True)
+    # Sort by mtime_age_s (oldest first)
+    sorted_results = sorted(results, key=lambda r: r["mtime_age_s"], reverse=True)
 
     # Header
-    print(f"{'AGENT_ID':<30} {'AGE (s)':<10} {'STATUS':<10} {'LAST_MTIME':<25}")
-    print("-" * 75)
+    print(f"{'AGENT':<30} {'AGE (s)':<10} {'VERDICT':<10} {'ACTION':<40}")
+    print("-" * 90)
 
     for entry in sorted_results:
-        status = "STALLED" if entry["stalled"] else "ACTIVE"
-        print(f"{entry['agent_id']:<30} {entry['age_seconds']:<10} {status:<10} {entry['last_mtime']:<25}")
+        action = entry["suggested_action"] or "—"
+        # Truncate action for display
+        action = action[:38] if len(action) > 38 else action
+        print(f"{entry['agent']:<30} {entry['mtime_age_s']:<10} {entry['verdict']:<10} {action:<40}")
 
 
 def print_json_output(results):
@@ -143,7 +161,7 @@ def main():
     # Determine exit code
     exit_code = 0
     if args.exit_nonzero_on_stall and results:
-        has_stalled = any(r["stalled"] for r in results)
+        has_stalled = any(r["verdict"] in ("stale", "dead") for r in results)
         if has_stalled:
             exit_code = 1
 

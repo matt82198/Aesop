@@ -90,11 +90,21 @@ def main():
             return 1
 
     root = Path(tempfile.mkdtemp(prefix="aesop-verify-submit-"))
-    inbox_file = root / "state" / "ui-inbox.md"
+    state_root = root / "state"
+
+    # HARD GUARD: refuse to run if state_root looks like the real repo state dir
+    # (e.g., ~/aesop/state or an absolute path ending with /aesop/state)
+    real_state = Path.home() / "aesop" / "state"
+    if state_root.resolve() == real_state.resolve():
+        print("FAIL: state dir resolved to real repo state (~aesop/state), refusing to run")
+        return 1
+
+    inbox_file = state_root / "ui-inbox.md"
     port = free_port()
     env = dict(
         os.environ,
         AESOP_ROOT=str(root),
+        AESOP_STATE_ROOT=str(state_root),
         AESOP_TRANSCRIPTS_ROOT=str(root / "transcripts"),
         AESOP_UI_COLLECT_INTERVAL="0.3",
         PORT=str(port),
