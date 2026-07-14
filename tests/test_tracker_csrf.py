@@ -78,28 +78,34 @@ class TrackerCSRFTestCase(unittest.TestCase):
     def _conn(self):
         return http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
 
+    def _request(self, method, path, body=None, headers=None):
+        # Retry transient Windows socket aborts (WSAECONNABORTED / reset) that can
+        # surface when many ThreadingHTTPServer instances churn in one test process.
+        last = None
+        for _ in range(3):
+            con = self._conn()
+            try:
+                con.request(method, path, body=body, headers=headers or {})
+                resp = con.getresponse()
+                return resp.status, resp.read()
+            except (ConnectionAbortedError, ConnectionResetError,
+                    http.client.RemoteDisconnected) as e:
+                last = e
+                continue
+            finally:
+                con.close()
+        raise last
+
     def _post(self, path, body, headers=None):
-        con = self._conn()
-        try:
-            payload = json.dumps(body).encode("utf-8")
-            hdrs = {"Content-Type": "application/json", "Content-Length": str(len(payload))}
-            hdrs.update(headers or {})
-            con.request("POST", path, body=payload, headers=hdrs)
-            resp = con.getresponse()
-            data = resp.read()
-            return resp.status, data
-        finally:
-            con.close()
+        payload = json.dumps(body).encode("utf-8")
+        hdrs = {"Content-Type": "application/json", "Content-Length": str(len(payload))}
+        hdrs.update(headers or {})
+        return self._request("POST", path, payload, hdrs)
 
     def _get_items(self):
-        con = self._conn()
-        try:
-            con.request("GET", "/api/tracker")
-            resp = con.getresponse()
-            self.assertEqual(resp.status, 200)
-            return json.loads(resp.read().decode("utf-8"))
-        finally:
-            con.close()
+        status, data = self._request("GET", "/api/tracker")
+        self.assertEqual(status, 200)
+        return json.loads(data.decode("utf-8"))
 
 
 class TestTrackerCreateCSRF(TrackerCSRFTestCase):

@@ -180,12 +180,21 @@ class TestServeAgentHTTPEndToEnd(EnvFixtureCase):
             super().tearDown()
 
     def _get(self, path):
-        con = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
-        con.request("GET", path)
-        resp = con.getresponse()
-        body = resp.read()
-        con.close()
-        return resp.status, body
+        # Retry transient Windows socket aborts (WSAECONNABORTED / reset).
+        last = None
+        for _ in range(3):
+            con = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+            try:
+                con.request("GET", path)
+                resp = con.getresponse()
+                return resp.status, resp.read()
+            except (ConnectionAbortedError, ConnectionResetError,
+                    http.client.RemoteDisconnected) as e:
+                last = e
+                continue
+            finally:
+                con.close()
+        raise last
 
     def test_dotdot_slash_traversal_poc_never_leaks_secret(self):
         status, body = self._get("/agent?id=..%2Foutside_secret%2Fleaked")
