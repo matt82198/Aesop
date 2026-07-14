@@ -208,6 +208,7 @@ def run_empty_phase(pw, failures):
     root = Path(tempfile.mkdtemp(prefix="aesop-verify-w14-empty-"))
     port = free_port()
     console_errors = []
+    build_empty_fixture(root)
     try:
         server = start_server(root, port)
     except RuntimeError as e:
