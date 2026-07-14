@@ -27,6 +27,12 @@ import json
 
 from csrf import validate_csrf_request
 
+
+class NotFoundError(Exception):
+    """Raised when a tracker item is not found."""
+    pass
+
+
 # Mutating endpoints cap request bodies at 10KB. Kept as a shared constant so
 # handler.py's pre-read bound check and this module's own re-check never drift.
 MAX_BODY_BYTES = 10000

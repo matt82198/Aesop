@@ -118,20 +118,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             is_valid, reason = validate_csrf_request(self.headers)
             if not is_valid:
                 self.send_response(403)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "CSRF protection: " + reason}).encode('utf-8'))
                 return
 
             content_length = int(self.headers.get('Content-Length', 0))
-            if content_length <= 0 or content_length > 10000:
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid Content-Length"}).encode('utf-8'))
-                return
-
-            body_bytes = self.rfile.read(content_length)
+            # Read bounded amount; api.validate_mutation() validates Content-Length
+            body_bytes = self.rfile.read(min(max(content_length, 0), api.MAX_BODY_BYTES))
             status_code, result = api.tracker.create(self.headers, body_bytes)
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -139,7 +133,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
@@ -149,7 +143,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             is_valid, reason = validate_csrf_request(self.headers)
             if not is_valid:
                 self.send_response(403)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "CSRF protection: " + reason}).encode('utf-8'))
                 return
@@ -158,7 +152,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             path_parts = self.path.strip("/").split("/")
             if len(path_parts) < 3:
                 self.send_response(404)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Not found"}).encode('utf-8'))
                 return
@@ -178,30 +172,18 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
             else:
                 content_length = int(self.headers.get('Content-Length', 0))
-                if content_length <= 0 or content_length > 10000:
-                    self.send_response(400)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Invalid Content-Length"}).encode('utf-8'))
-                    return
-
-                body_bytes = self.rfile.read(content_length)
+                # Read bounded amount; api.validate_mutation() validates Content-Length
+                body_bytes = self.rfile.read(min(max(content_length, 0), api.MAX_BODY_BYTES))
                 status_code, result = api.tracker.update(item_id, body_bytes)
                 self.send_response(status_code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
         except Exception as e:
-            if "404" in str(e):
-                self.send_response(404)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
-            else:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
 
     def serve_backlog(self):
@@ -215,7 +197,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
@@ -230,7 +212,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(agents, default=str).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
@@ -244,7 +226,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             if not agent_id:
                 self.send_response(400)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "missing id parameter"}).encode('utf-8'))
                 return
@@ -258,7 +240,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 # with no matching transcript -> 404. Never 200 on error.
                 status = 400 if data.get("invalid") else 404
                 self.send_response(status)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": data["error"]}).encode('utf-8'))
                 return
@@ -270,7 +252,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             print(f"[serve_agent] Uncaught exception: {e}", file=sys.stderr)
             self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
@@ -279,6 +261,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         """Write one SSE frame with timeout. Caller handles disconnect exceptions."""
         msg = f"event: {event_name}\ndata: {payload}\n\n"
         # Set socket timeout to prevent stalled writes from blocking the server
+        old_timeout = None
         try:
             old_timeout = self.connection.gettimeout()
             self.connection.settimeout(config.SSE_WRITE_TIMEOUT)
@@ -290,7 +273,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         finally:
             # Restore original timeout
             try:
-                if 'old_timeout' in locals():
+                if old_timeout is not None:
                     self.connection.settimeout(old_timeout)
             except (AttributeError, OSError):
                 pass
@@ -372,7 +355,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             is_valid, reason = validate_csrf_request(self.headers)
             if not is_valid:
                 self.send_response(403)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps({
                     "error": "CSRF protection: " + reason
@@ -382,7 +365,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             if content_length <= 0 or content_length > 10000:  # 10KB limit, must be positive
                 self.send_response(400)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps({
                     "error": "Invalid Content-Length (must be 1-10000 bytes)"
@@ -395,25 +378,29 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
             if not text:
                 self.send_response(400)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
+                self.wfile.write(json.dumps({"error": "No text provided"}).encode('utf-8'))
                 return
 
             ok, result = api.submit.append_to_inbox(text)
             if not ok:
                 status_code, error = result
                 self.send_response(status_code)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps(error).encode('utf-8'))
                 return
 
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True}).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
 def run_server():
     """Start the HTTP server.
