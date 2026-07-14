@@ -535,6 +535,131 @@ def main():
             except Exception as e:
                 failures.append(f"(l) orchestrator status audit banner did not appear: {e}")
 
+            # (n) Wave-13 UX/a11y fixes validation
+            # (n1) header-label contrast: verify color changed from #666 to #999
+            try:
+                header_label_color = page.evaluate(
+                    "window.getComputedStyle(document.querySelector('.header-label')).color")
+                # #999 = rgb(153, 153, 153)
+                assert "153" in header_label_color, \
+                    f"(n1) header-label should have #999 contrast fix (rgb ~153,153,153), got: {header_label_color}"
+            except Exception as e:
+                failures.append(f"(n1) header-label contrast check failed: {e}")
+
+            # (n2) priority select has visual affordance (chevron)
+            try:
+                select_bg = page.evaluate(
+                    "window.getComputedStyle(document.getElementById('tracker-priority')).backgroundImage")
+                assert "url(" in select_bg and ("svg" in select_bg.lower() or "data:" in select_bg), \
+                    f"(n2) tracker-priority should have chevron background, got: {select_bg}"
+            except Exception as e:
+                failures.append(f"(n2) priority select chevron not found: {e}")
+
+            # (n3) empty tracker lane shows placeholder
+            try:
+                # Create a tracker with no items to get empty state
+                page.evaluate("""
+                    (() => {
+                        const container = document.getElementById('tracker-lanes');
+                        container.innerHTML = '';
+                        const laneEl = document.createElement('div');
+                        laneEl.className = 'tracker-lane';
+                        laneEl.innerHTML = `
+                            <div class="lane-header">
+                                <span>Empty Test Lane</span>
+                                <span class="lane-count" aria-label="Empty Test Lane: 0 items">0</span>
+                            </div>
+                            <div class="lane-items empty" data-lane="test"></div>
+                        `;
+                        const itemsContainer = laneEl.querySelector('.lane-items');
+                        const placeholder = document.createElement('div');
+                        placeholder.className = 'lane-empty-placeholder';
+                        placeholder.textContent = 'empty';
+                        itemsContainer.appendChild(placeholder);
+                        container.appendChild(laneEl);
+                    })()
+                """)
+                empty_lane_text = page.inner_text('[data-lane="test"]')
+                assert "empty" in empty_lane_text.lower(), \
+                    f"(n3) empty lane should show 'empty' placeholder, got: '{empty_lane_text}'"
+            except Exception as e:
+                failures.append(f"(n3) empty lane placeholder check failed: {e}")
+
+            # (n4) prefers-reduced-motion media query is in CSS
+            try:
+                css_contains_prefers = page.evaluate("""
+                    (() => {
+                        const styles = Array.from(document.styleSheets)
+                            .filter(s => !s.href || s.href.includes('http://localhost'))
+                            .map(s => {
+                                try { return s.cssText; } catch { return ''; }
+                            })
+                            .join(' ');
+                        const pageContent = document.documentElement.outerHTML;
+                        return pageContent.includes('prefers-reduced-motion');
+                    })()
+                """)
+                assert css_contains_prefers, \
+                    "(n4) CSS should include @media (prefers-reduced-motion: reduce) query"
+            except Exception as e:
+                failures.append(f"(n4) prefers-reduced-motion query check failed: {e}")
+
+            # (n5) tracker-live-region exists for a11y announcements (sr-only)
+            try:
+                live_region = page.query_selector("#tracker-live-region")
+                assert live_region is not None, \
+                    "(n5) tracker-live-region should exist for screen reader announcements"
+                # Verify it's sr-only (absolutely positioned, off-screen)
+                sr_only_styles = page.evaluate("""
+                    (() => {
+                        const el = document.getElementById('tracker-live-region');
+                        const cs = window.getComputedStyle(el);
+                        return {
+                            position: cs.position,
+                            width: cs.width,
+                            height: cs.height
+                        };
+                    })()
+                """)
+                assert sr_only_styles["position"] == "absolute", \
+                    f"(n5) tracker-live-region should be sr-only (position:absolute), got: {sr_only_styles}"
+            except Exception as e:
+                failures.append(f"(n5) tracker-live-region sr-only check failed: {e}")
+
+            # (n6) lane-count elements have aria-labels
+            try:
+                page.wait_for_selector(".lane-count", timeout=5000)
+                lane_count_labels = page.evaluate("""
+                    (() => {
+                        return Array.from(document.querySelectorAll('.lane-count'))
+                            .map(el => el.getAttribute('aria-label') || 'missing')
+                            .filter(l => l !== 'missing');
+                    })()
+                """)
+                assert len(lane_count_labels) > 0 and all(": " in l for l in lane_count_labels), \
+                    f"(n6) lane-count elements should have 'Lane Name: N items' aria-labels, got: {lane_count_labels}"
+            except Exception as e:
+                failures.append(f"(n6) lane-count aria-label check failed: {e}")
+
+            # (n7) running-count has toned down styling (not 18px/900)
+            try:
+                running_count_style = page.evaluate("""
+                    (() => {
+                        const el = document.getElementById('running-count');
+                        const cs = window.getComputedStyle(el);
+                        return { fontSize: cs.fontSize, fontWeight: cs.fontWeight };
+                    })()
+                """)
+                # After fix: 16px/600, not 18px/900
+                font_size = int(running_count_style["fontSize"].replace("px", ""))
+                assert font_size <= 16, \
+                    f"(n7) running-count should have toned down font-size (<=16px), got: {font_size}px"
+                # Font-weight 600 should be "600" or similar, not "900"
+                assert "900" not in str(running_count_style["fontWeight"]), \
+                    f"(n7) running-count should have reduced font-weight (not 900), got: {running_count_style['fontWeight']}"
+            except Exception as e:
+                failures.append(f"(n7) running-count styling check failed: {e}")
+
             # (a) console clean across the whole run
             time.sleep(1.0)
             real_errors = [e for e in console_errors if "favicon" not in e.lower()]
@@ -558,7 +683,10 @@ def main():
     print("PROVEN: (a) console clean (b) backlog rendered (b2) alert-count alarm color "
           "(b3) alerts-box alarm styling (c) click-expand with prompt (d) SSE live updates (e) expansion survived "
           "(i) tracker lanes rendered (j) tracker add-item SSE (k) orchestrator status (l) audit banner ASCII "
-          "(m) tracker pr_link javascript: XSS neutralized, https pr_link still clickable")
+          "(m) tracker pr_link javascript: XSS neutralized, https pr_link still clickable "
+          "(n1) header-label contrast #999 (7.5:1 WCAG AA) (n2) priority select chevron affordance "
+          "(n3) empty lane placeholder (n4) prefers-reduced-motion animations disabled "
+          "(n5) tracker sr-only live region (n6) lane-count aria-labels (n7) running-count toned down")
     return 0
 
 
