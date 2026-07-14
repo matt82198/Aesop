@@ -1,5 +1,9 @@
 # Aesop Dispatch Model — Cost & Orchestration Patterns
 
+**TL;DR**: Spawn 5–8 cheap Haiku subagents in parallel (not serial Opus). Result: **83% cost savings + 4× speed** via parallelism. Rule: subagents ALWAYS Haiku unless scoped work genuinely exceeds its capability (rare).
+
+---
+
 ## The fable conceit
 
 In Aesop's Fables, Aesop (the narrator) directs the characters (tortoise, hare, fox, etc.) through moral tales. Here, **Aesop (the orchestrator)** directs a fleet of **Fables (the subagents)** toward reliable task completion.
