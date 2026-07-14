@@ -26,6 +26,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 **Orchestration infrastructure**:
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject); uses fail-closed locking for atomic state updates
 - `power_selftest.py` — Health check harness for /power bootstrap; validates hooks, brain, heartbeats, decisions, and scanner
+- `healthcheck.py` — Fleet health aggregator (heartbeat ages, alert severity, orchestrator status, tracker items); one colored ball (🟢/🟡/🔴) + reason bullets
 - `buildlog.py` — Uniform BUILDLOG.md appender; ensures consistent timestamp + message + git HEAD ref formatting
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates in state directory if missing
 - `fleet_ledger.py` — Append-only ledger of agent runs, resource use, and verdicts; supports harvest (scan tasks) and rotate (archive)
@@ -86,6 +87,23 @@ Configuration via `aesop.config.json` or env vars: `BRAIN_ROOT`, `AESOP_STATE_RO
 Gracefully degrades when targets don't exist (reports `n/a` instead of crashing).
 
 Exit: 0=OK/DEGRADED, 1=FAIL. Output: `POWER-SELFTEST: OK|DEGRADED|FAIL — <checks>` + optional bullets.
+
+## healthcheck.py — Fleet health aggregator
+
+Aggregates heartbeat ages, security alerts, orchestrator status, and tracker item counts into one colored health indicator.
+
+- `python healthcheck.py` — print human-readable health ball (🟢/🟡/🔴) + reason + tracker summary
+- `python healthcheck.py --json` — print JSON with ball, health status, issues, and tracker lanes
+
+Configuration via `aesop.config.json` or env vars: `AESOP_STATE_ROOT`, etc. (reads config at call time).
+Gracefully handles missing state files (missing = reported, not crash).
+
+Exit: 0 always. Output: One-liner `HEALTH: 🟢|🟡|🔴 <reason>` + optional bullet list.
+
+**Ball colors**:
+- 🟢 Green: all heartbeats fresh + no HIGH alerts
+- 🟡 Yellow: stale heartbeat OR unreviewed MED alert
+- 🔴 Red: HIGH alert OR watchdog dead (>600s) while orchestrator actively dispatching
 
 ## inbox_drain.py — Drain UI inbox submissions
 
