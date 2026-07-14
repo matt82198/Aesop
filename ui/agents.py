@@ -55,7 +55,7 @@ _AGENT_ID_FORBIDDEN = re.compile(r'\.\.|[/\\*?\[\]]')
 
 def extract_agent_dispatch_prompt(agent_id):
     """
-    Extract dispatch prompt and metadata from agent output file.
+    Extract dispatch prompt and metadata from agent jsonl transcript.
     Returns dict with prompt, dispatcher, model, activity times, and message count.
     Robust: missing/invalid file -> {error: "..."}
     Security: rejects agent_id containing path-traversal or glob-metacharacter
@@ -64,20 +64,24 @@ def extract_agent_dispatch_prompt(agent_id):
     carry "invalid": True when the input itself was rejected, so callers can
     map that to an HTTP 400 rather than a plain 404.
 
-    CRITICAL: Use prefix-matching via glob, not exact match. The dashboard supplies
-    truncated agent IDs; files on disk carry full IDs (e.g., a77b995bcdb953e9c.output).
+    CRITICAL: Use prefix-matching via glob, not exact match. The dashboard (dash-extra.mjs)
+    scans for agent-*.jsonl files and emits a 13-char truncated ID; files on disk carry
+    full IDs (e.g., agent-a77b995bcdb953e9c1234567.jsonl). This function must search for
+    the same file format that the dashboard actually finds.
     """
     try:
         if not agent_id or _AGENT_ID_FORBIDDEN.search(agent_id):
             return {"error": "invalid agent id", "invalid": True}
 
-        # Prefix-match: search in config.TRANSCRIPTS_ROOT for files matching agent_id*.output
+        # Prefix-match: search in config.TRANSCRIPTS_ROOT for files matching agent-agent_id*.jsonl
+        # The dashboard (dash-extra.mjs) scans for agent-*.jsonl files and emits
+        # a 13-char truncated ID; we must match against the same .jsonl files.
         if not config.TRANSCRIPTS_ROOT.exists():
             return {"error": f"transcripts root not found at {config.TRANSCRIPTS_ROOT}"}
 
         # Glob for matching files (prefix-match handles truncated IDs)
         matches = sorted(
-            config.TRANSCRIPTS_ROOT.glob(f"**/{agent_id}*.output"),
+            config.TRANSCRIPTS_ROOT.glob(f"**/agent-{agent_id}*.jsonl"),
             key=lambda p: p.stat().st_mtime, reverse=True,
         )
         if not matches:

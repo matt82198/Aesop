@@ -128,7 +128,7 @@ class TestExtractAgentDispatchPromptHappyPath(EnvFixtureCase):
 
     def test_valid_prefix_id_still_resolves(self):
         full_id = "abc123def456fedcba9876"
-        transcript = self.fixture_root / "transcripts" / f"{full_id}.output"
+        transcript = self.fixture_root / "transcripts" / f"agent-{full_id}.jsonl"
         lines = [
             json.dumps({"type": "user", "parentUuid": None,
                         "message": {"content": "FIXTURE DISPATCH PROMPT: fix the widget"}}),
@@ -221,7 +221,7 @@ class TestServeAgentHTTPEndToEnd(EnvFixtureCase):
 
     def test_valid_id_happy_path_still_returns_200(self):
         full_id = "validhappyid001"
-        transcript = self.fixture_root / "transcripts" / f"{full_id}.output"
+        transcript = self.fixture_root / "transcripts" / f"agent-{full_id}.jsonl"
         lines = [
             json.dumps({"type": "user", "parentUuid": None,
                         "message": {"content": "HAPPY PATH PROMPT"}}),

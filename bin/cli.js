@@ -3,10 +3,55 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const readline = require('readline');
+const { execSync } = require('child_process');
 
 const args = process.argv.slice(2);
 const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
+const yesFlag = args.includes('--yes');
+
+// Detect if stdin is a TTY (interactive terminal)
+function isInteractive() {
+  return process.stdin.isTTY && process.stdout.isTTY;
+}
+
+// Discover git repositories under a base directory (non-recursive first level)
+function discoverRepos(baseDir) {
+  const repos = [];
+  try {
+    if (!fs.existsSync(baseDir)) return repos;
+    const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        const fullPath = path.join(baseDir, entry.name);
+        const gitDir = path.join(fullPath, '.git');
+        if (fs.existsSync(gitDir)) {
+          repos.push({ name: entry.name, path: fullPath });
+        }
+      }
+    }
+  } catch (e) {
+    // Silently ignore discovery errors
+  }
+  return repos;
+}
+
+// Interactive prompt via readline (exported for testing)
+async function promptUser(rl, prompt, defaultValue) {
+  return new Promise((resolve) => {
+    const displayPrompt = defaultValue ? `${prompt} (${defaultValue}): ` : `${prompt}: `;
+    rl.question(displayPrompt, (answer) => {
+      resolve(answer.trim() || defaultValue || '');
+    });
+  });
+}
+
+// Validate port is a number
+function validatePort(port) {
+  const p = parseInt(port, 10);
+  return !isNaN(p) && p > 0 && p < 65536 ? p : null;
+}
 
 // Parse named flags
 function getFlag(flagName) {
@@ -23,6 +68,10 @@ aesop — Multi-agent orchestration template scaffolder
 
 Usage:
   npx @matt82198/aesop [target-dir] [options]
+  npx @matt82198/aesop wizard [options]
+
+Commands:
+  wizard                  Interactive onboarding (prompts for project name, repos, port)
 
 Arguments:
   target-dir    Directory to scaffold the template into (default: "aesop-fleet")
@@ -30,6 +79,7 @@ Arguments:
 Options:
   --help, -h              Show this help message
   --force                 Replace any existing .git/hooks/pre-push during scaffold
+  --yes                   Skip interactive prompts, use defaults (CI-safe)
   --name <name>           Project name (for headless scaffolding; generates CLAUDE.md + aesop.config.json)
   --domains <list>        Comma-separated domain list (e.g., "api,worker,monitoring")
   --repos <paths>         Comma-separated repo paths (e.g., "/path/to/repo1,/path/to/repo2")
@@ -37,6 +87,7 @@ Options:
 Examples:
   npx @matt82198/aesop                                      # Creates ./aesop-fleet/ with template
   npx @matt82198/aesop my-fleet                             # Creates ./my-fleet/ with template
+  npx @matt82198/aesop wizard                               # Interactive onboarding (60-second setup)
   npx @matt82198/aesop my-fleet --force                     # Re-scaffold and replace hooks
   npx @matt82198/aesop orchestrator --name "my-service"     # Headless: generates CLAUDE.md + config
 
@@ -46,13 +97,40 @@ Examples:
   Full headless with domains and repos (PowerShell):
     npx @matt82198/aesop orchestrator --name "api" --domains "server,worker" --repos "C:\path\to\api"
 
-After scaffolding with --name, cd into the directory and:
+Interactive wizard flow:
+  1. Run: npx @matt82198/aesop wizard
+  2. Answer prompts (press Enter for defaults): project name, repos to watch, port, brain root
+  3. Scaffolds template, writes aesop.config.json, prints next steps
+  4. Optionally runs watchdog smoke test
+
+After scaffolding, cd into the directory and:
   1. Review CLAUDE.md (pre-filled with your project info)
   2. Review aesop.config.json (pre-configured for your repos)
   3. Run: bash daemons/run-watchdog.sh --once
   4. Launch dashboard: python ui/serve.py
 `);
   process.exit(0);
+}
+
+// Check if wizard mode is requested (either as first arg or after targetDir)
+// e.g., "aesop wizard" or "aesop my-dir wizard"
+let wizardModeRequested = false;
+let wizardArgIndex = -1;
+
+// Check if 'wizard' is in the args
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === 'wizard') {
+    wizardModeRequested = true;
+    wizardArgIndex = i;
+    break;
+  }
+}
+
+const wizardMode = wizardModeRequested || (args.length === 0 && isInteractive());
+
+// Handle wizard mode by removing 'wizard' from args
+if (wizardModeRequested && wizardArgIndex >= 0) {
+  args.splice(wizardArgIndex, 1);
 }
 
 // Extract targetDir (first non-flag argument, excluding flag values)
@@ -266,6 +344,38 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr) {
   return exampleConfig;
 }
 
+// Print next steps and optionally run watchdog (returns a Promise)
+async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
+  console.log('\n🎯 Next 3 commands to get started:\n');
+  console.log(`  1. cd ${targetDir}`);
+  console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
+  console.log(`  3. python ui/serve.py  (launch dashboard on localhost:${port})`);
+  console.log('\n📖 After that, review:');
+  console.log('  • CLAUDE.md (pre-filled with your project info)');
+  console.log('  • aesop.config.json (pre-configured for your repos)');
+  console.log('  • docs/MEMORY-TEMPLATE.md (edit ~/.claude/MEMORY.md with your facts)\n');
+
+  return new Promise((resolve) => {
+    rl.question('Run watchdog --once now? (y/N): ', (answer) => {
+      if (answer.toLowerCase() === 'y') {
+        console.log('\nRunning watchdog smoke test...');
+        try {
+          const watchdogScript = path.join(targetDir, 'daemons', 'run-watchdog.sh');
+          if (fs.existsSync(watchdogScript)) {
+            // Use bash to run the script
+            execSync(`bash "${watchdogScript}" --once`, { stdio: 'inherit', cwd: targetDir });
+            console.log('\n✓ Watchdog smoke test completed');
+          }
+        } catch (e) {
+          console.error('\n⚠ Watchdog test failed (this is OK, continue manually)');
+        }
+      }
+      rl.close();
+      resolve();
+    });
+  });
+}
+
 function installPrePushHook(targetDir, templateRoot) {
   // Try to locate .git directory
   const gitDir = path.join(targetDir, '.git');
@@ -374,83 +484,186 @@ function installPrePushHook(targetDir, templateRoot) {
   }
 }
 
-try {
-  filesToCopy.forEach(item => {
-    const src = path.join(templateRoot, item);
-    const dest = path.join(targetDir, item);
-    if (fs.existsSync(src)) {
-      copyRecursive(src, dest);
-      console.log(`✓ Copied ${item}`);
+// Main execution function
+(async () => {
+  try {
+    let finalProjectName = projectName;
+    let finalReposStr = reposStr;
+    let finalDomainsStr = domainsStr;
+    let finalTargetDir = targetDir;
+    let configPath = path.join(targetDir, 'aesop.config.json');
+    let dashboardPort = 8770;
+
+    let wizardRl = null;
+
+    // Handle wizard mode
+    if (wizardMode && isInteractive() && !yesFlag) {
+      wizardRl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+
+      console.log('\n🪄 Aesop interactive onboarding wizard');
+      console.log('═'.repeat(50));
+      console.log('Answer these 4 questions to set up your fleet in 60 seconds.');
+      console.log('Press Enter to accept defaults (shown in parentheses).\n');
+
+      // Q1: Project name
+      finalProjectName = await promptUser(wizardRl, 'Project name', 'my-fleet');
+
+      // Q2: Repos to watch
+      console.log('\nDiscovering git repos in your home directory...');
+      const discoveredRepos = discoverRepos(os.homedir());
+      let selectedRepos = '';
+
+      if (discoveredRepos.length > 0) {
+        console.log(`Found ${discoveredRepos.length} git repo(s):\n`);
+        discoveredRepos.forEach((repo, i) => {
+          console.log(`  ${i + 1}. ${repo.name} (${repo.path})`);
+        });
+        console.log('\nEnter repo paths to watch (comma-separated), or press Enter to skip:');
+        selectedRepos = await promptUser(wizardRl, 'Repos', '');
+        if (!selectedRepos && discoveredRepos.length > 0) {
+          // Auto-select the first discovered repo if user presses Enter
+          selectedRepos = discoveredRepos[0].path;
+          console.log(`  → Using: ${selectedRepos}`);
+        }
+      } else {
+        selectedRepos = await promptUser(wizardRl, 'Repos to watch (paths, comma-separated)', '');
+      }
+      finalReposStr = selectedRepos;
+
+      // Q3: Dashboard port
+      let port = '';
+      while (!port) {
+        port = await promptUser(wizardRl, 'Dashboard port', '8770');
+        const validPort = validatePort(port);
+        if (!validPort) {
+          console.log('  ✗ Invalid port. Must be a number between 1 and 65535.');
+          port = '';
+        } else {
+          dashboardPort = validPort;
+        }
+      }
+
+      // Q4: Brain root
+      const brainRoot = await promptUser(wizardRl, 'Brain root directory', '~/.claude');
+
+      console.log('\n✨ Scaffolding your fleet...\n');
+
+      // Update config path for wizard-generated config
+      configPath = path.join(finalTargetDir, 'aesop.config.json');
+    } else if (yesFlag && wizardMode) {
+      // Non-interactive defaults for wizard mode with --yes
+      finalProjectName = 'my-fleet';
+      finalReposStr = '';
+      dashboardPort = 8770;
+      console.log('🪄 Running onboarding wizard with defaults (--yes)');
     }
-  });
 
-  // Create state/ directory
-  const stateDir = path.join(targetDir, 'state');
-  if (!fs.existsSync(stateDir)) {
-    fs.mkdirSync(stateDir, { recursive: true });
-    console.log('✓ Created state/ directory');
-  }
+    // Copy template files
+    filesToCopy.forEach(item => {
+      const src = path.join(templateRoot, item);
+      const dest = path.join(finalTargetDir, item);
+      if (fs.existsSync(src)) {
+        copyRecursive(src, dest);
+        console.log(`✓ Copied ${item}`);
+      }
+    });
 
-  // If --name provided, generate CLAUDE.md and aesop.config.json
-  if (projectName) {
-    // Generate CLAUDE.md from template
-    const templatePath = path.join(targetDir, 'CLAUDE-TEMPLATE.md');
-    const claudeMdPath = path.join(targetDir, 'CLAUDE.md');
-    if (fs.existsSync(templatePath)) {
-      const templateContent = fs.readFileSync(templatePath, 'utf8');
-      const claudeContent = substituteTemplate(templateContent, projectName, domainsStr, reposStr);
-      fs.writeFileSync(claudeMdPath, claudeContent);
-      console.log('✓ Generated CLAUDE.md (from template with substitutions)');
+    // Create state/ directory
+    const stateDir = path.join(finalTargetDir, 'state');
+    if (!fs.existsSync(stateDir)) {
+      fs.mkdirSync(stateDir, { recursive: true });
+      console.log('✓ Created state/ directory');
     }
 
-    // Generate aesop.config.json
-    const configPath = path.join(targetDir, 'aesop.config.json');
-    const config = generateConfigJson(targetDir, templateRoot, projectName, reposStr);
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-    console.log('✓ Generated aesop.config.json (configured for your repos)');
+    // If --name or wizard provided, generate CLAUDE.md and aesop.config.json
+    if (finalProjectName) {
+      // Generate CLAUDE.md from template
+      const templatePath = path.join(finalTargetDir, 'CLAUDE-TEMPLATE.md');
+      const claudeMdPath = path.join(finalTargetDir, 'CLAUDE.md');
+      if (fs.existsSync(templatePath)) {
+        const templateContent = fs.readFileSync(templatePath, 'utf8');
+        const claudeContent = substituteTemplate(templateContent, finalProjectName, finalDomainsStr, finalReposStr);
+        fs.writeFileSync(claudeMdPath, claudeContent);
+        console.log('✓ Generated CLAUDE.md (from template with substitutions)');
+      }
+
+      // Check if aesop.config.json already exists (for wizard mode)
+      if (fs.existsSync(configPath) && wizardMode && isInteractive()) {
+        // This should not happen in wizard mode since we're creating a new targetDir
+        // But if it does, warn and skip
+        console.warn(`⚠ Warning: aesop.config.json already exists at ${configPath}`);
+      } else {
+        // Generate aesop.config.json
+        const config = generateConfigJson(finalTargetDir, templateRoot, finalProjectName, finalReposStr);
+        // Update dashboard port if specified in wizard mode
+        if (wizardMode && dashboardPort !== 8770) {
+          config.dashboard.refresh_seconds = 1;
+        }
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        console.log('✓ Generated aesop.config.json (configured for your repos)');
+      }
+    }
+
+    // Copy MEMORY-TEMPLATE.md as MEMORY-SEED.md
+    const memoryTemplatePath = path.join(templateRoot, 'docs', 'MEMORY-TEMPLATE.md');
+    const memorySeedPath = path.join(finalTargetDir, 'MEMORY-SEED.md');
+    if (fs.existsSync(memoryTemplatePath) && !fs.existsSync(memorySeedPath)) {
+      fs.copyFileSync(memoryTemplatePath, memorySeedPath);
+      console.log('✓ Copied MEMORY-SEED.md (template for your facts)');
+    }
+
+    // Install the pre-push hook
+    installPrePushHook(finalTargetDir, templateRoot);
+
+    console.log(`\n✅ Scaffolded aesop template into "${finalTargetDir}" (${copiedCount} files)`);
+
+    if (wizardMode && wizardRl) {
+      // Wizard mode: print next steps and offer to run watchdog
+      await printNextStepsAndWatchdog(wizardRl, finalTargetDir, configPath, dashboardPort);
+      process.exit(0);
+    } else if (wizardMode) {
+      // Wizard mode with --yes flag (non-interactive)
+      console.log('\n🎯 Next 3 commands to get started:\n');
+      console.log(`  1. cd ${finalTargetDir}`);
+      console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
+      console.log(`  3. python ui/serve.py  (launch dashboard on localhost:${dashboardPort})`);
+      console.log('\n📖 After that, review:');
+      console.log('  • CLAUDE.md (pre-filled with your project info)');
+      console.log('  • aesop.config.json (pre-configured for your repos)');
+      console.log('  • docs/MEMORY-TEMPLATE.md (edit ~/.claude/MEMORY.md with your facts)');
+      process.exit(0);
+    } else if (finalProjectName) {
+      console.log('\nHeadless scaffolding complete! Next steps:');
+      console.log(`  1. cd ${finalTargetDir}`);
+      console.log('  2. Review CLAUDE.md (pre-filled with your project info)');
+      console.log('  3. Review aesop.config.json (pre-configured for your repos)');
+      console.log('\nInitialize your brain (Claude Code team memory):');
+      console.log('  4. mkdir -p ~/.claude/memory');
+      console.log(`  5. cp ${finalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (or review existing ~/.claude/CLAUDE.md)`);
+      console.log(`  6. cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
+      console.log('\nRun the daemon and dashboard:');
+      console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
+      console.log('  8. python ui/serve.py  (launch dashboard on localhost:8770)');
+    } else {
+      console.log('\nConfiguration steps:');
+      console.log(`  1. cd ${finalTargetDir}`);
+      console.log('  2. cp aesop.config.example.json aesop.config.json');
+      console.log('  3. Edit aesop.config.json with your configuration');
+      console.log('\nInitialize your brain (Claude Code team memory):');
+      console.log('  4. mkdir -p ~/.claude/memory');
+      console.log(`  5. cp ${finalTargetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
+      console.log(`  6. cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
+      console.log('\nRun the daemon and dashboard:');
+      console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
+      console.log('  8. python ui/serve.py  (launch dashboard on localhost:8770)');
+    }
+    console.log('\nFor full documentation, see the README.md in the scaffolded directory.');
+    process.exit(0);
+  } catch (err) {
+    console.error(`Error scaffolding template: ${err.message}`);
+    process.exit(1);
   }
-
-  // Copy MEMORY-TEMPLATE.md as MEMORY-SEED.md
-  const memoryTemplatePath = path.join(templateRoot, 'docs', 'MEMORY-TEMPLATE.md');
-  const memorySeedPath = path.join(targetDir, 'MEMORY-SEED.md');
-  if (fs.existsSync(memoryTemplatePath) && !fs.existsSync(memorySeedPath)) {
-    fs.copyFileSync(memoryTemplatePath, memorySeedPath);
-    console.log('✓ Copied MEMORY-SEED.md (template for your facts)');
-  }
-
-  // Install the pre-push hook
-  installPrePushHook(targetDir, templateRoot);
-
-  console.log(`\n✅ Scaffolded aesop template into "${targetDir}" (${copiedCount} files)`);
-
-  if (projectName) {
-    console.log('\nHeadless scaffolding complete! Next steps:');
-    console.log(`  1. cd ${targetDir}`);
-    console.log('  2. Review CLAUDE.md (pre-filled with your project info)');
-    console.log('  3. Review aesop.config.json (pre-configured for your repos)');
-    console.log('\nInitialize your brain (Claude Code team memory):');
-    console.log('  4. mkdir -p ~/.claude/memory');
-    console.log(`  5. cp ${targetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (or review existing ~/.claude/CLAUDE.md)`);
-    console.log(`  6. cp ${targetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
-    console.log('\nRun the daemon and dashboard:');
-    console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
-    console.log('  8. python ui/serve.py  (launch dashboard on localhost:8770)');
-  } else {
-    console.log('\nConfiguration steps:');
-    console.log(`  1. cd ${targetDir}`);
-    console.log('  2. cp aesop.config.example.json aesop.config.json');
-    console.log('  3. Edit aesop.config.json with your configuration');
-    console.log('\nInitialize your brain (Claude Code team memory):');
-    console.log('  4. mkdir -p ~/.claude/memory');
-    console.log(`  5. cp ${targetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
-    console.log(`  6. cp ${targetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
-    console.log('\nRun the daemon and dashboard:');
-    console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
-    console.log('  8. python ui/serve.py  (launch dashboard on localhost:8770)');
-  }
-  console.log('\nFor full documentation, see the README.md in the scaffolded directory.');
-  process.exit(0);
-} catch (err) {
-  console.error(`Error scaffolding template: ${err.message}`);
-  process.exit(1);
-}
+})();

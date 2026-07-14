@@ -162,14 +162,16 @@ export function AgentRow({ agent }: AgentRowProps) {
           <div className="agent-row__detail-row">
             <span className="agent-row__detail-label">Runtime:</span>
             <span className="agent-row__detail-value">
-              {Math.floor(agent.runtimeSeconds / 60)}m {agent.runtimeSeconds % 60}s
+              {typeof agent.runtimeSeconds === 'number'
+                ? `${Math.floor(agent.runtimeSeconds / 60)}m ${agent.runtimeSeconds % 60}s`
+                : 'unknown'}
             </span>
           </div>
 
           <div className="agent-row__detail-row">
             <span className="agent-row__detail-label">Tokens Used:</span>
             <span className="agent-row__detail-value">
-              {agent.tokensUsed.toLocaleString()}
+              {typeof agent.tokensUsed === 'number' ? agent.tokensUsed.toLocaleString() : 'unknown'}
             </span>
           </div>
 

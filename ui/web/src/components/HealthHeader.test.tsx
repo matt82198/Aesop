@@ -250,7 +250,9 @@ describe('HealthHeader', () => {
       orchestrators: [
         {
           id: 'main',
-          role: 'audit-orchestrator',
+          role: 'orchestrator',
+          activity: 'running audit',
+          phase: 'audit',
           age_seconds: 42,
           stale: false,
         },

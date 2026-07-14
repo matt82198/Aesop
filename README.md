@@ -128,13 +128,44 @@ Settings > Branches > main
 
 Private brain (`~/.claude`) is never committed to this repo. Keep `aesop.config.json` git-ignored. Implement `tools/secret_scan.py` with your security rules. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for setup.
 
+## Dashboard (Wave-14 Rewrite)
+
+The dashboard is a **React 18 + Vite + TypeScript** single-page app with four hash-routed views:
+
+### Viewing the Dashboard
+```bash
+python ui/serve.py
+```
+Opens `http://localhost:8770` — live fleet health, security alerts, work-item kanban, cost analytics.
+
+### Architecture
+- **Backend**: Python stdlib HTTP server (`ui/handler.py`) serves the built React app + JSON/SSE APIs (`/api/state`, `/api/cost`, `/events`).
+- **Frontend**: `ui/web/` (React app) is built to `dist/` (committed to git) and served as static files by the Python server.
+- **CSRF protection**: Token injected into `dist/index.html` via sentinel substitution; mutations gated by `/submit` and `/api/tracker` endpoints.
+
+### Development
+```bash
+cd ui/web
+npm install
+npm run dev        # Vite dev server with API proxy to http://localhost:8770
+npm run build      # Build to dist/ (commit the dist/)
+```
+
+The dev server proxies `/data`, `/api`, `/events`, `/agent`, `/submit` to the Python backend on :8770, so the frontend can develop against live APIs.
+
+### Views
+- **Overview**: Fleet agents, security alerts, recent events.
+- **Work** (`#/work`): Tracker kanban (4 lanes: proposed/ranked/in-progress/done), audit backlog progress.
+- **Activity** (`#/activity`): Agent timeline, main-thread message tail (live reasoning).
+- **Cost** (`#/cost`): Per-model spend/tokens, per-day bar chart, verdict scorecard (success/failure rates).
+
 ## Extending Aesop
 
 **Custom signal collectors**: Edit `monitor/collect-signals.mjs` to add domain-specific health checks.
 
 **Custom watchdog hooks**: Edit `daemons/backup-fleet.sh` to run linters, integrate with your CI, or customize secret-scan logic.
 
-**Dashboard panels**: Edit `ui/serve.py` or `dash/watchdog-gui.sh` to surface your metrics.
+**Dashboard components**: Add React components in `ui/web/src/components/` or new views in `ui/web/src/views/`. Rebuild and commit `dist/`.
 
 ## Troubleshooting
 

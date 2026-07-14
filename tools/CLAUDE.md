@@ -11,6 +11,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `secret_scan.py` — Pre-push secret/credential detection gate; scans staged, history, or paths by regex + filename patterns
 - `scanner_selftest.py` — Regression harness for secret_scan.py; validates TP/FP vectors and self-scan cleanliness
 - `prepublish_scan.py` — Pre-publish gate running full git history + staged-changes scans; exit 0 only if CLEAR-TO-PUBLISH
+- `metrics_gate.py` — PR gate for numeric claims in *.md files; verifies hard percentages/multipliers/dollar amounts via source comments
 
 **Browser-level verification (CI gates)**:
 - `verify_dash.py` — Browser proof for realtime SSE dashboard; validates console errors, backlog rendering, live SSE updates (use `--allow-skip` in browserless environments)
@@ -18,10 +19,15 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 
 **CI/merge operations**:
 - `ci_merge_wait.py` — CI-gated merge helper; polls gh pr view until checks conclude (SUCCESS/FAILURE), then merges ONLY if SUCCESS (structurally unreachable otherwise)
+- `metrics_gate.py` — NO-UNVERIFIED-METRICS gate; scans git diff for hard numeric claims (%, multipliers, $) in markdown that lack verification comments
+
+**Alerting**:
+- `alert_bridge.py` — Slack/Discord webhook bridge; scans SECURITY-ALERTS.log (>= min_severity) + heartbeat staleness, POSTs opt-in (cursor-idempotent, webhook URL masked). Called per-cycle by run-watchdog.sh.
 
 **Orchestration infrastructure**:
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject); uses fail-closed locking for atomic state updates
 - `power_selftest.py` — Health check harness for /power bootstrap; validates hooks, brain, heartbeats, decisions, and scanner
+- `healthcheck.py` — Fleet health aggregator (heartbeat ages, alert severity, orchestrator status, tracker items); one colored ball (🟢/🟡/🔴) + reason bullets
 - `buildlog.py` — Uniform BUILDLOG.md appender; ensures consistent timestamp + message + git HEAD ref formatting
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates in state directory if missing
 - `fleet_ledger.py` — Append-only ledger of agent runs, resource use, and verdicts; supports harvest (scan tasks) and rotate (archive)
@@ -82,6 +88,23 @@ Configuration via `aesop.config.json` or env vars: `BRAIN_ROOT`, `AESOP_STATE_RO
 Gracefully degrades when targets don't exist (reports `n/a` instead of crashing).
 
 Exit: 0=OK/DEGRADED, 1=FAIL. Output: `POWER-SELFTEST: OK|DEGRADED|FAIL — <checks>` + optional bullets.
+
+## healthcheck.py — Fleet health aggregator
+
+Aggregates heartbeat ages, security alerts, orchestrator status, and tracker item counts into one colored health indicator.
+
+- `python healthcheck.py` — print human-readable health ball (🟢/🟡/🔴) + reason + tracker summary
+- `python healthcheck.py --json` — print JSON with ball, health status, issues, and tracker lanes
+
+Configuration via `aesop.config.json` or env vars: `AESOP_STATE_ROOT`, etc. (reads config at call time).
+Gracefully handles missing state files (missing = reported, not crash).
+
+Exit: 0 always. Output: One-liner `HEALTH: 🟢|🟡|🔴 <reason>` + optional bullet list.
+
+**Ball colors**:
+- 🟢 Green: all heartbeats fresh + no HIGH alerts
+- 🟡 Yellow: stale heartbeat OR unreviewed MED alert
+- 🔴 Red: HIGH alert OR watchdog dead (>600s) while orchestrator actively dispatching
 
 ## inbox_drain.py — Drain UI inbox submissions
 

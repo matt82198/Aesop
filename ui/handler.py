@@ -110,17 +110,25 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def serve_html(self):
         """Serve the dashboard HTML.
 
-        Wave-14 (plan D3.4/D7): when a built frontend exists at
-        config.WEB_DIST/index.html, render that through the same CSRF-sentinel
-        substitution; otherwise fall back to the legacy templates/dashboard.html
-        unchanged (keeps main green until the U9 cutover). config.WEB_DIST is
-        read at call time so config.reload() keeps working across fixtures.
+        Wave-14 (plan D3.4/D7 U9 cutover): the built frontend at
+        config.WEB_DIST/index.html is always required and must be present;
+        if missing, return a hard 500 with a clear error (never fall back to
+        a legacy template). config.WEB_DIST is read at call time so
+        config.reload() keeps working across fixtures.
         """
         dist_index = config.WEB_DIST / "index.html"
-        if dist_index.is_file():
-            html = render_dashboard(csrf.SESSION_TOKEN, template_path=dist_index)
-        else:
-            html = render_dashboard(csrf.SESSION_TOKEN)
+        if not dist_index.is_file():
+            error_msg = (
+                "built dashboard missing — run npm run build in ui/web"
+            )
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(error_msg.encode('utf-8'))
+            return
+
+        html = render_dashboard(csrf.SESSION_TOKEN, template_path=dist_index)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")

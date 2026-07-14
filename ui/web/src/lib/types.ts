@@ -25,8 +25,8 @@ export interface Agent {
   hint: string; // label, capped at 60 chars
   startedAt: string | null; // ISO 8601 transcript timestamp
   lastActivity: string | null; // ISO 8601 transcript timestamp
-  runtimeSeconds: number;
-  tokensUsed: number;
+  runtimeSeconds?: number;
+  tokensUsed?: number;
   taskLabel: string; // first prompt line, capped at 80 chars
   promptFull?: string;
 }
@@ -111,6 +111,8 @@ export interface Message {
 export interface OrchestratorEntry {
   id?: string;
   role?: string;
+  activity?: string;
+  phase?: string;
   age_seconds: number;
   stale: boolean;
   updated_at?: string;

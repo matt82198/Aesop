@@ -6,16 +6,16 @@
 import Timeline from '../components/Timeline';
 import MessagesTail from '../components/MessagesTail';
 import { TESTIDS } from '../test/fixtures';
-import type { FullState } from '../lib/types';
+import type { SSEState } from '../lib/useSSE';
 import styles from './Activity.module.css';
 
 interface Props {
-  state: FullState;
+  state: Pick<SSEState, 'agents' | 'data'>;
 }
 
 export default function Activity({ state }: Props) {
   const agents = state.agents || [];
-  const messages = state.data.messages || [];
+  const messages = state.data?.messages || [];
 
   return (
     <div data-testid={TESTIDS.viewActivity} className={styles.container}>

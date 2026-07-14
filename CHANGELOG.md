@@ -17,9 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Stall Detection** (wave-12): `tools/stall_check.py` silent-hang detection for the agent watchdog.
-- **CI-Gated Merge Helper** (wave-12): `tools/ci_merge_wait.py` awaits CI success before merge.
+### Added (Wave-14)
+- **Dashboard Rewrite**: Complete React 18 + Vite + TypeScript redesign with 4 hash-routed views (Overview, Work, Activity, Cost), sticky health header, live SSE updates, light/dark theming with WCAG AA contrast, keyboard navigation, and `aria-live` regions.
+- **Frontend Architecture**: Zero runtime dependencies beyond React/React-dom; Vite dev server with API proxy; committed `dist/` serves as authoritative build with content-hashed assets and immutable cache headers.
+- **Backend Additions**: `/api/state` consolidated first-paint snapshot (one round trip), `/api/session` for Vite dev server CSRF fallback, `/api/cost` cost/scorecard collector from `OUTCOMES-LEDGER.md` with optional pricing map and per-model/per-day aggregates.
+- **Cost Analytics**: Per-model token totals, per-day bar chart (pure SVG), verdict scorecard (success/failure/hung rates), configurable pricing estimates from `aesop.config.json`.
+- **Testing Infrastructure**: Vitest + Testing Library component tests, rewritten `tools/verify_dash.py` (Playwright) with data-testid-based assertions, CI drift gate for committed dist, a11y/theme verification in CI.
+
+### Changed (Wave-14)
+- **Dashboard Cutover**: `ui/templates/dashboard.html` deleted; `ui/handler.py` serve_html now returns hard 500 if dist missing (no fallback).
+- **Render Module**: `render.py` requires `template_path` parameter (no legacy default); raises TypeError if called without it.
+- **API Contract**: SSE emits 6 sections (added `cost`); `/api/state` returns consolidated snapshot for optimal first paint.
 
 ### Fixed
 - **Wave-12 Stability**: Swallowed failures now loud; `sse.reset_state()` locked for concurrent test isolation; tracker writes in tempdir; symlink/path-injection guards in rotate-logs.
