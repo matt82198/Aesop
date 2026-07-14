@@ -1,6 +1,8 @@
 # Governance & Control
 
-This guide covers the operational patterns that keep orchestration systems coherent, scalable, and auditable at production scale: single-instance loops, single-writer files, asynchronous inbox coordination, log rotation, branching discipline, and security gates.
+**TL;DR**: Keep the system coherent: one instance of each loop (heartbeat protocol), single writer per control file (MEMORY.md, STATE.md), append-only logs, secret-scan gate on every push, feature branches only (never direct-to-main). Prevents races, data loss, credential leaks, and makes work auditable.
+
+---
 
 ## Single-instance loops
 

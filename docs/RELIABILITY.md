@@ -1,6 +1,8 @@
 # Reliability & Core Obligations
 
-These principles ensure that orchestration systems fail visibly, never silently, and always deliver outputs — the foundation of trustworthy AI-driven automation.
+**TL;DR**: Three rules for shipping production work: (1) orchestrator never idles (spawn next task while agents run), (2) every action produces observable output (silence = failure), (3) pride bar — verify end-to-end before marking done. Together: reliable, visible, trustworthy automation.
+
+---
 
 ## NEVER WAIT: Keep the orchestrator busy
 
