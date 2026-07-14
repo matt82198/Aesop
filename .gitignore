@@ -27,3 +27,9 @@ ledger/
 node_modules/
 __pycache__/
 *.pyc
+
+# Web dashboard (wave-14): node_modules ignored; ui/web/dist IS committed
+# (D2: clone-and-run — python ui/serve.py serves the committed build).
+ui/web/node_modules/
+!ui/web/dist/
+!ui/web/dist/**

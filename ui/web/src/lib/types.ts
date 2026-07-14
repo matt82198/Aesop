@@ -1,0 +1,228 @@
+/**
+ * TypeScript types for Aesop UI API contracts.
+ * These types are imported by U4–U7 components and must remain stable across the wave.
+ */
+
+export interface HeartbeatStatus {
+  alive: 'ALIVE' | 'STALE' | 'UNKNOWN' | 'unknown' | 'not running';
+  age: number; // seconds, bucketed to 3-second intervals; -1 if unknown
+  threshold: number; // seconds until considered stale
+}
+
+/**
+ * One fleet agent — the JSON emitted by dash/dash-extra.mjs --json
+ * (served via GET /api/agents and the `agents` SSE section; also embedded
+ * as `agents` inside GET /data).
+ * `status`: 'running' | 'idle' age-derived, overridden by security-log
+ * severities 'SUSPICIOUS' | 'HIGH' | 'DRIFT' | 'MED'.
+ * ui/agents.py de-dupes colliding 13-char ids by suffixing "-2", "-3", ...
+ */
+export interface Agent {
+  id: string;
+  project: string;
+  status: 'running' | 'idle' | 'SUSPICIOUS' | 'HIGH' | 'DRIFT' | 'MED' | string;
+  age_s: number; // seconds since transcript mtime
+  hint: string; // label, capped at 60 chars
+  startedAt: string | null; // ISO 8601 transcript timestamp
+  lastActivity: string | null; // ISO 8601 transcript timestamp
+  runtimeSeconds: number;
+  tokensUsed: number;
+  taskLabel: string; // first prompt line, capped at 80 chars
+  promptFull?: string;
+}
+
+/**
+ * GET /agent?id=<id> — dispatch prompt + metadata
+ * (ui/agents.py extract_agent_dispatch_prompt).
+ * Error responses are {error: string} with 400 (invalid id) or 404 (no transcript).
+ */
+export interface AgentDetail {
+  id: string;
+  dispatch_prompt: string;
+  dispatcher: 'main thread' | 'parent agent';
+  model: string; // "unknown" when not found in transcript
+  message_count: number;
+  first_seen: number; // epoch seconds (file mtime)
+  last_activity: number; // epoch seconds (file mtime)
+}
+
+/** GET /api/session — CSRF token for same-origin JS (U2 adds this). */
+export interface SessionResponse {
+  token: string;
+}
+
+/** Uniform error payload shape for non-2xx JSON responses. */
+export interface ApiError {
+  error: string;
+}
+
+export interface Alert {
+  count: number;
+  lines: string[];
+}
+
+export interface TrackerItem {
+  id: string;
+  title: string;
+  priority: 'P0' | 'P1' | 'P2';
+  status: 'todo' | 'done' | 'in-progress' | 'archived';
+  lane: 'proposed' | 'ranked' | 'in-progress' | 'done';
+  source: string;
+  tags: string[];
+  notes: string | null;
+  pr_link: string | null;
+  created_at: string; // ISO 8601
+  completed_at: string | null;
+}
+
+/**
+ * The `tracker` SSE section and the tracker slice of GET /api/state.
+ * NOTE: GET /api/tracker returns a BARE TrackerItem[] array (no wrapper).
+ */
+export interface TrackerSnapshot {
+  items: TrackerItem[];
+}
+
+export interface AuditBacklogItem {
+  status: '✅' | '🔵' | '⬜' | '⏸';
+  tag: string; // e.g., "[sec]"
+  title: string;
+}
+
+export interface AuditBacklogTier {
+  tier: 'P0' | 'P1' | 'P2' | 'Needs decision';
+  items: AuditBacklogItem[];
+  done: number;
+  inflight: number;
+  todo: number;
+  total: number;
+}
+
+export interface AuditBacklog {
+  tiers: AuditBacklogTier[];
+}
+
+export interface Message {
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp: string; // ISO 8601
+}
+
+export interface OrchestratorEntry {
+  id?: string;
+  role?: string;
+  age_seconds: number;
+  stale: boolean;
+  updated_at?: string;
+}
+
+export interface OrchestratorStatus {
+  orchestrators: OrchestratorEntry[];
+}
+
+/**
+ * Repo status entry from .watchdog-repos.json (list passthrough, or
+ * {repo, state} pairs when the file holds an object).
+ */
+export interface RepoStatus {
+  repo?: string;
+  state?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * GET /data response AND the `data` SSE section.
+ * Note: `agents` is present on GET /data only; the SSE `data` section
+ * (collectors._snapshot_data) omits it — agents arrive on their own
+ * `agents` SSE section.
+ */
+export interface DashboardData {
+  watchdog: HeartbeatStatus;
+  monitor: HeartbeatStatus;
+  agents?: Agent[];
+  repos: RepoStatus[];
+  events: string[];
+  alerts: Alert;
+  messages: Message[];
+}
+
+/** POST /submit success response. */
+export interface SubmitResponse {
+  ok: boolean;
+}
+
+export interface FullState {
+  data: DashboardData;
+  backlog: AuditBacklog;
+  agents: Agent[];
+  tracker: TrackerSnapshot;
+  status: OrchestratorStatus;
+  cost?: CostSummary;
+}
+
+/**
+ * Cost summary from GET /api/cost.
+ * Mirrors ui/cost.py get_cost_summary() docstring on branch
+ * feat/wave14-u3-cost-collector — verbatim shape, NOT provisional.
+ */
+export interface CostModelStats {
+  runs: number;
+  tokens_in: number;
+  tokens_out: number;
+  verdicts: {
+    OK: number;
+    FAILED: number;
+    EMPTY: number;
+    HUNG: number;
+  };
+}
+
+export interface CostDailyTotal {
+  tokens_in: number;
+  tokens_out: number;
+}
+
+export interface CostOverallScorecard {
+  total_runs: number;
+  ok_count: number;
+  failed_count: number;
+  empty_count: number;
+  hung_count: number;
+  ok_rate: number; // 0.0-1.0
+  failed_rate: number;
+  empty_rate: number;
+  hung_rate: number;
+}
+
+export interface CostEstimate {
+  input_cost: number; // dollars
+  output_cost: number; // dollars
+  total_cost: number; // dollars
+}
+
+export interface CostSummary {
+  models: Record<string, CostModelStats>; // keyed by model id
+  daily_totals: Record<string, CostDailyTotal>; // keyed by "YYYY-MM-DD"
+  overall_scorecard: CostOverallScorecard;
+  skipped_lines: number;
+  has_pricing: boolean;
+  estimates_by_model: Record<string, CostEstimate>; // empty when has_pricing is false
+}
+
+/**
+ * SSE event sections emitted by GET /events.
+ * Initial sections: data, backlog, agents, tracker, status
+ * Added in U3: cost
+ */
+export type SSESection =
+  | 'data'
+  | 'backlog'
+  | 'agents'
+  | 'tracker'
+  | 'status'
+  | 'cost';
+
+export interface SSEConnectionStatus {
+  status: 'live' | 'reconnecting' | 'error';
+  lastError?: string;
+}
