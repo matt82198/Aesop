@@ -11,6 +11,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useHashRoute, type Route } from './lib/useHashRoute';
 import { useSSE } from './lib/useSSE';
+import { HealthHeader } from './components/HealthHeader';
+import { Overview } from './views/Overview';
 import { Cost } from './views/Cost';
 import { TESTIDS } from './test/fixtures';
 
@@ -83,46 +85,42 @@ function Placeholder({ name, testid }: { name: string; testid: string }) {
 export default function App() {
   const route = useHashRoute();
   const sseState = useSSE();
-  const { theme, toggle } = useTheme();
+  const { toggle } = useTheme();
 
   const connection = sseState.connectionStatus;
 
+  const handleRefresh = useCallback(() => {
+    window.location.reload();
+  }, []);
+
   return (
     <>
-      <header className="app-header" data-testid={TESTIDS.healthHeader}>
-        <span className="app-title">Aesop Fleet</span>
-        <nav className="app-nav" aria-label="Views">
-          {NAV_ITEMS.map(({ hash, label }) => (
-            <a key={hash} href={hash} aria-current={route === hash ? 'page' : undefined}>
-              {label}
-            </a>
-          ))}
-        </nav>
-        <button
-          type="button"
-          className="theme-toggle"
-          data-testid={TESTIDS.themeToggle}
-          onClick={toggle}
-          aria-label="Toggle color theme"
-        >
-          {theme === 'dark' ? 'Light theme' : theme === 'light' ? 'Dark theme' : 'Theme'}
-        </button>
-        <span
-          className="sse-status"
-          data-testid={TESTIDS.sseStatus}
-          data-status={connection.status}
-          role="status"
-          aria-live="polite"
-        >
-          {connection.status === 'live'
-            ? 'Live'
-            : connection.status === 'reconnecting'
-              ? 'Reconnecting…'
-              : 'Connection error'}
-        </span>
-      </header>
+      <HealthHeader
+        watchdog={sseState.data?.watchdog ?? null}
+        monitor={sseState.data?.monitor ?? null}
+        orchestrator={sseState.status ?? null}
+        agents={sseState.agents ?? null}
+        alerts={sseState.data?.alerts ?? null}
+        connectionStatus={connection}
+        onThemeToggle={toggle}
+        onRefresh={handleRefresh}
+      />
+      <nav className="app-nav" aria-label="Views">
+        {NAV_ITEMS.map(({ hash, label }) => (
+          <a key={hash} href={hash} aria-current={route === hash ? 'page' : undefined} className="app-nav__link">
+            {label}
+          </a>
+        ))}
+      </nav>
       <main className="app-main">
-        {route === '#/' && <Placeholder name="Overview" testid={TESTIDS.viewOverview} />}
+        {route === '#/' && (
+          <Overview
+            agents={sseState.agents ?? null}
+            alerts={sseState.data?.alerts ?? null}
+            events={sseState.data?.events ?? null}
+            repos={sseState.data?.repos ?? null}
+          />
+        )}
         {route === '#/work' && <Placeholder name="Work" testid={TESTIDS.viewWork} />}
         {route === '#/activity' && <Placeholder name="Activity" testid={TESTIDS.viewActivity} />}
         {route === '#/cost' &&
