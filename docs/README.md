@@ -1,6 +1,6 @@
 # Aesop Documentation Index
 
-Aesop is a fable-fleet orchestration harness for Claude Code. It runs fast, cheap delivery waves: parallel Haiku agents, cost savings 10×, speed 4× faster than serial work.
+Aesop is a fable-fleet orchestration harness for Claude Code. It runs fast, cheap delivery waves: parallel Haiku agents, lower cost via Haiku-first dispatch and faster wall-clock via parallel agents.
 
 **New to Aesop?** Start here: [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md) — a walkthrough of one wave cycle and why it's productive.
 

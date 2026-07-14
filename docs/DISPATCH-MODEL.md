@@ -1,6 +1,6 @@
 # Aesop Dispatch Model — Cost & Orchestration Patterns
 
-**TL;DR**: Spawn 5–8 cheap Haiku subagents in parallel (not serial Opus). Result: **83% cost savings + 4× speed** via parallelism. Rule: subagents ALWAYS Haiku unless scoped work genuinely exceeds its capability (rare).
+**TL;DR**: Spawn 5–8 cheap Haiku subagents in parallel (not serial Opus). Result: **lower cost (Haiku ~1/3 Sonnet) plus a parallel speedup** via parallelism. Rule: subagents ALWAYS Haiku unless scoped work genuinely exceeds its capability (rare).
 
 ---
 
@@ -25,7 +25,7 @@ The tortoise represents deliberate, resourceful thinking; the hare, quick speed.
 1 orchestrator (Opus, 5 min thinking)  = 5 × 60 = 300 tokens
 5 subagents (Haiku, 2 min each)        = 5 × 2 × 20 = 200 tokens
 Total                                   = 500 tokens/session
-= **83% savings** vs all-Opus
+= a large saving vs all-Opus (Haiku is 1/5 the per-token cost of Opus)
 ```
 
 ### Scaling to 10 parallel domains
@@ -34,14 +34,14 @@ Total                                   = 500 tokens/session
 1 orchestrator (Opus, 8 min)       = 480 tokens
 10 subagents (Haiku, 3 min each)   = 600 tokens
 Total                              = 1,080 tokens
-= **90% savings** vs 10 Opus tasks
+= a large saving vs all-Opus (most domains run on Haiku at 1/5 Opus cost)
 ```
 
 ## MAIN RULE: Subagents are ALWAYS the cheap tier
 
 This is **the single most important cost lever** in the entire system. Every subagent spawned must default to Haiku, never Sonnet or Opus. This rule, more than any other, multiplies your savings at scale.
 
-**Why**: Haiku is 1/3 the cost of Sonnet with sufficient capability for scoped domain work. Scaling from 1 subagent to 6–8 in parallel multiplies the per-domain savings — what would cost 10× Opus now costs <1×. Violating this rule (spawning Sonnet/Opus subagents) erases the economic advantage of the entire dispatch model.
+**Why**: Haiku is 1/3 the cost of Sonnet with sufficient capability for scoped domain work. Scaling from 1 subagent to 6–8 in parallel multiplies the per-domain savings — most of the work runs on Haiku at 1/5 the per-token cost of Opus. Violating this rule (spawning Sonnet/Opus subagents) erases the economic advantage of the entire dispatch model.
 
 **The exception**: Only use Sonnet/Opus for a subagent if:
 1. The task genuinely exceeds Haiku capability (rare for scoped domains), **AND**
@@ -83,7 +83,7 @@ Orchestrator → Phase 1
         └─ Haiku-4: Integration test
         
 Orchestrator reassembles + QA
-Total cost: still 1 Opus + 4 Haiku = **90% savings**
+Total cost: 1 Opus orchestrator + 4 Haiku implementers — the four implementers run at 1/5 the per-token cost of Opus
 ```
 
 ### Pattern 3: Hierarchical (supervisor + workers)
@@ -100,7 +100,7 @@ Orchestrator
 │  └─ Haiku-5: config module
 └─ (Sonnet synthesizes reviews into final report)
 
-Cost: 1 Opus + 1 Sonnet + 5 Haiku = ~$0.015 (still 75% savings)
+Cost: 1 Opus + 1 Sonnet + 5 Haiku = ~1/3 the cost of running every domain on Opus
 ```
 
 ## Decision flowchart
@@ -122,7 +122,7 @@ Is this task scoped to <5 min reasoning?
 
 ### ❌ All-Opus fleet
 
-**Cost**: 10× baseline. **Why**: throws CPU power at problems that are scoped.
+**Cost**: higher — Sonnet/Opus per-token rates. **Why**: throws CPU power at problems that are scoped.
 
 **Fix**: Decompose into Haiku-sized tasks.
 
@@ -208,4 +208,4 @@ Surfacing to the user after 3 retries ensures visibility and prevents silent cos
 
 ---
 
-**Summary**: Aesop's dispatch model trades a small amount of orchestration complexity for **10× cost savings** and **4× speed** (via parallelism). It works by keeping subagents small, orchestrator lean, and feedback constant.
+**Summary**: Aesop's dispatch model trades a small amount of orchestration complexity for **lower cost** (Haiku ~1/3 Sonnet) and **parallel speedup** (via parallelism). It works by keeping subagents small, orchestrator lean, and feedback constant.
