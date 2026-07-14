@@ -10,10 +10,9 @@ Contract under test (ui/render.py render_dashboard()):
     truncated: structural anchors used by the rest of the dashboard JS/CSS
     are still present in the rendered output.
 
-Wave-14 U2 extension: render_dashboard() now accepts an optional template_path
-so the handler can retarget it at ui/web/dist/index.html when a built dist is
-present (plan D3.4/D7) while the no-arg call keeps rendering
-templates/dashboard.html unchanged. Both paths are covered below.
+Wave-14 U9 cutover: render_dashboard() requires template_path (no fallback);
+the handler always passes ui/web/dist/index.html. The dist-focused tests below
+assert the CSRF sentinel mechanism works against the built template.
 
 This is a no-browser, no-HTTP unit test: it imports render.py directly (via
 importlib, since ui/ has no __init__.py — same pattern as tests/test_serve.py)
@@ -43,110 +42,22 @@ def _load_render():
     return render
 
 
-class RenderDashboardTest(unittest.TestCase):
+class RenderDashboardNoArgErrorTest(unittest.TestCase):
+    """Wave-14 U9: render_dashboard() requires template_path; no-arg calls raise TypeError."""
+
     def setUp(self):
         self.render = _load_render()
 
-    def test_sentinel_is_fully_replaced(self):
-        html = self.render.render_dashboard("some-benign-token")
-        self.assertNotIn(
-            SENTINEL, html,
-            "the CSRF sentinel must not survive rendering — a leftover "
-            "sentinel means the token never reaches the client JS",
-        )
-
-    def test_benign_token_inserted_as_json_string_literal(self):
-        # Dummy value assembled across statements to avoid tripping the
-        # generic-secret-assignment heuristic on non-secret test fixtures.
-        token = "abc123-"
-        token += "benign-token"
-        html = self.render.render_dashboard(token)
-        expected_literal = json.dumps(token)
-        self.assertIn(
-            f"window.__AESOP_CSRF_TOKEN__ = {expected_literal};",
-            html,
-            "token must be inserted exactly as its json.dumps'd literal",
-        )
-
-    def test_hostile_token_is_json_escaped_not_raw_concatenated(self):
-        # A token shaped to break out of a naive raw string-concat template:
-        # closes the JS string, injects a bogus assignment, and tries to
-        # close the surrounding <script> tag to inject markup.
-        hostile_token = '";alert(1);//</script><script>alert(2)</script>'
-        html = self.render.render_dashboard(hostile_token)
-
-        # The only acceptable rendering is the fully json.dumps-escaped form
-        # (the internal `"` comes out as `\"`, so this exact assignment can
-        # ONLY appear if the token went through json.dumps — a naive raw
-        # concatenation would terminate the JS string one character early
-        # and this substring would not match).
-        expected_literal = json.dumps(hostile_token)
-        self.assertIn(
-            f"window.__AESOP_CSRF_TOKEN__ = {expected_literal};",
-            html,
-            "hostile token must be json.dumps-escaped when substituted",
-        )
-
-        # Guard against the regression directly: the naive raw-concatenation
-        # form (unescaped internal quote terminating the string early) must
-        # never appear as the assignment.
-        naive_concat = f'window.__AESOP_CSRF_TOKEN__ = "{hostile_token}";'
-        self.assertNotIn(
-            naive_concat, html,
-            "token must not be raw-concatenated into the JS string literal",
-        )
-
-        # Exactly one assignment to the sentinel's target variable — the
-        # sentinel was replaced once, cleanly, not duplicated/mangled.
-        self.assertEqual(html.count("window.__AESOP_CSRF_TOKEN__ = "), 1)
-
-    def test_token_with_backslash_and_quotes_round_trips_safely(self):
-        # Dummy value assembled across statements (see note above).
-        token = "back"
-        token += "\\slash"
-        token += '"and"'
-        token += "quotes"
-        html = self.render.render_dashboard(token)
-        expected_literal = json.dumps(token)
-        self.assertIn(expected_literal, html)
-        # The literal itself must be valid JSON (i.e. round-trips back to
-        # the original token), proving it is a well-formed string literal
-        # rather than a mangled/partial escape.
-        self.assertEqual(json.loads(expected_literal), token)
-
-    def test_rendered_html_contains_structural_anchors(self):
-        html = self.render.render_dashboard("anchor-check-token")
-        self.assertIn('id="tracker-lanes"', html)
-        self.assertIn('id="orchestrator-status"', html)
-        self.assertIn('id="audit-banner"', html)
-
-    def test_template_file_loads_and_is_not_truncated(self):
-        # Sanity check that render.py is reading the real, current template
-        # (not a stale copy) and that the file on disk still ends sensibly.
-        raw = DASHBOARD_HTML_PATH.read_text(encoding="utf-8")
-        self.assertIn(SENTINEL, raw, "template must still carry the sentinel on disk")
-        html = self.render.render_dashboard("truncation-check-token")
-        # Rendered output should be (roughly) the same size as the raw
-        # template plus/minus the sentinel<->literal length delta, not
-        # drastically shorter (which would indicate a truncated read).
-        self.assertGreater(len(html), len(raw) - len(SENTINEL))
-        self.assertIn("</html>", html.lower())
-
-    def test_render_is_idempotent_per_call_with_fresh_read(self):
-        # Each call re-reads the template from disk (per render.py's own
-        # docstring), so two independent calls with different tokens must
-        # each carry their own token and neither should leak the other's.
-        html_a = self.render.render_dashboard("token-a")
-        html_b = self.render.render_dashboard("token-b")
-        self.assertIn(json.dumps("token-a"), html_a)
-        self.assertNotIn(json.dumps("token-b"), html_a)
-        self.assertIn(json.dumps("token-b"), html_b)
-        self.assertNotIn(json.dumps("token-a"), html_b)
+    def test_no_arg_call_raises_type_error(self):
+        with self.assertRaises(TypeError) as cm:
+            self.render.render_dashboard("some-benign-token")
+        self.assertIn("template_path", str(cm.exception))
+        self.assertIn("requires", str(cm.exception).lower())
 
 
-class RenderExplicitTemplatePathTest(unittest.TestCase):
-    """Wave-14 U2: render_dashboard(token, template_path=...) renders the given
-    file (the dist index.html case) with identical sentinel semantics."""
+class RenderDistTemplateTest(unittest.TestCase):
+    """Wave-14 U9: render_dashboard(token, template_path=...) renders the
+    dist/index.html with identical sentinel semantics (no fallback)."""
 
     def setUp(self):
         self.render = _load_render()
@@ -163,30 +74,43 @@ class RenderExplicitTemplatePathTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_explicit_template_path_renders_that_file(self):
+    def test_dist_template_path_renders_that_file(self):
         html = self.render.render_dashboard("dist-token", template_path=self.dist_index)
         self.assertIn("DIST-TEMPLATE-MARKER", html)
         self.assertNotIn(SENTINEL, html)
         self.assertIn(
             f"window.__AESOP_CSRF_TOKEN__ = {json.dumps('dist-token')};", html)
 
-    def test_explicit_path_does_not_render_the_legacy_template(self):
-        html = self.render.render_dashboard("dist-token", template_path=self.dist_index)
-        self.assertNotIn('id="tracker-lanes"', html,
-                         "explicit template_path must not fall through to "
-                         "templates/dashboard.html")
+    def test_dist_template_with_benign_token(self):
+        # Dummy value assembled across statements to avoid tripping the
+        # generic-secret-assignment heuristic on non-secret test fixtures.
+        token = "abc123-"
+        token += "benign-token"
+        html = self.render.render_dashboard(token, template_path=self.dist_index)
+        expected_literal = json.dumps(token)
+        self.assertIn(
+            f"window.__AESOP_CSRF_TOKEN__ = {expected_literal};",
+            html,
+            "token must be inserted exactly as its json.dumps'd literal",
+        )
 
-    def test_hostile_token_json_escaped_on_dist_template_too(self):
+    def test_dist_template_hostile_token_json_escaped(self):
         hostile_token = '";alert(1);//</script><script>alert(2)</script>'
         html = self.render.render_dashboard(hostile_token, template_path=self.dist_index)
         expected_literal = json.dumps(hostile_token)
         self.assertIn(
             f"window.__AESOP_CSRF_TOKEN__ = {expected_literal};", html)
+        # Ensure naive raw concatenation never appears:
+        naive_concat = f'window.__AESOP_CSRF_TOKEN__ = "{hostile_token}";'
+        self.assertNotIn(
+            naive_concat, html,
+            "token must not be raw-concatenated into the JS string literal",
+        )
 
-    def test_default_call_still_renders_legacy_template(self):
-        html = self.render.render_dashboard("legacy-token")
-        self.assertIn('id="tracker-lanes"', html)
-        self.assertNotIn("DIST-TEMPLATE-MARKER", html)
+    def test_missing_dist_file_raises_file_not_found(self):
+        nonexistent = self.tmpdir / "nonexistent.html"
+        with self.assertRaises(FileNotFoundError):
+            self.render.render_dashboard("token", template_path=nonexistent)
 
 
 if __name__ == "__main__":

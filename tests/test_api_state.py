@@ -13,9 +13,8 @@ Contract under test (plan D3, unit U2):
                         immutable cache headers. Traversal attempts (../,
                         absolute, URL-encoded) must all be refused (403/404).
   - GET /             — renders dist/index.html through the CSRF sentinel
-                        substitution IF the dist exists, ELSE falls back to
-                        templates/dashboard.html unchanged (keeps main green
-                        before the U9 cutover).
+                        substitution; if the dist is missing, returns a hard
+                        500 with a clear error message (wave-14 U9 cutover).
   - SSE               — "cost" is emitted as a 6th section.
 
 Isolation: every test binds serve.py to a throwaway fixture AESOP_ROOT /
@@ -371,15 +370,16 @@ class TestRootWithDist(ApiStateFixtureCase):
                       html)
 
 
-class TestRootFallback(ApiStateFixtureCase):
-    def test_root_falls_back_to_legacy_template_without_dist(self):
+class TestRootHardErrorWithoutDist(ApiStateFixtureCase):
+    def test_root_returns_500_when_dist_missing(self):
         status, hdrs, body = self._request("GET", "/")
-        self.assertEqual(status, 200)
-        html = body.decode("utf-8")
-        self.assertIn('id="tracker-lanes"', html,
-                      "without a dist, / must keep serving templates/dashboard.html")
-        self.assertNotIn("WAVE14-DIST-MARKER", html)
-        self.assertNotIn("__AESOP_CSRF_SENTINEL__", html)
+        self.assertEqual(status, 500,
+                         "without a dist present, / must return 500 (wave-14 U9 cutover)")
+        error_msg = body.decode("utf-8")
+        self.assertIn("built dashboard missing", error_msg,
+                      "error message must mention the missing dashboard")
+        self.assertIn("npm run build", error_msg,
+                      "error message must guide toward the fix")
 
 
 # ==============================================================================
