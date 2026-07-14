@@ -77,6 +77,20 @@ STATE.md + BUILDLOG.md          Git-committed, survives machine wipes
 
 See [docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md) for cost analysis and parallel patterns.
 
+<!-- SELF-STATS:START -->
+
+## Aesop builds itself
+
+Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel Haiku fleets across ranked backlog items, verifying merges, auditing orchestration health. These stats are the receipts: all numbers computed LIVE from git, verified by anyone who clones.
+
+| Metric | Value |
+| --- | --- |
+| Total Commits | 341 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 66,775 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 242 <!-- metrics-verified: self_stats.py (git log) --> |
+
+<!-- SELF-STATS:END -->
+
 ## Use with Claude Code
 
 If you're using **Claude Code**, invoke `/power` at the start of each session. It loads your orchestrator brain (cardinal rules, domain map, team memory, system state) and outputs a health brief. Setup once:
