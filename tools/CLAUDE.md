@@ -23,6 +23,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates in state directory if missing
 - `fleet_ledger.py` — Append-only ledger of agent runs, resource use, and verdicts; supports harvest (scan tasks) and rotate (archive)
 - `heartbeat.py` — Single-instance loop liveness registry; write beats to state/.heartbeats/<name>, check staleness across fleet
+- `stall_check.py` — Automated silent-hang detector; scans agent transcript mtimes to identify stalled agents, feeds watchdog monitoring
 - `inbox_drain.py` — Drain UI inbox submissions; tracks processed dashboard work items (queue while no session running)
 - `orchestrator_status.py` — Atomic writer for state/orchestrator-status.json (set/clear activity+phase); feeds the dashboard status panel
 
@@ -98,6 +99,20 @@ Fleet-wide heartbeat tracking for monitoring loop freshness. Write heartbeat "be
 
 - `heartbeat.py beat <name> [status] [--state-dir DIR] [--brain]` — write epoch to state/.heartbeats/<name> (or ~/.claude/.heartbeats with --brain)
 - `heartbeat.py check [--max-age SEC] [--state-dir DIR]` — check all beats, exit 0 if all alive
+
+## stall_check.py — Automated silent-hang detector for agent transcripts
+
+Scans agent transcript files (agent-*.jsonl) by mtime to detect stalled/silent-hanging agents.
+
+- `stall_check.py [--transcripts-root DIR] [--threshold-seconds SEC] [--json] [--exit-nonzero-on-stall]`
+
+Options:
+- `--transcripts-root DIR` — Root directory to scan; defaults to AESOP_TRANSCRIPTS_ROOT env var or ~/.claude/projects
+- `--threshold-seconds SEC` — Max age (seconds) for a "fresh" transcript (default: 600); transcripts older are flagged as stalled
+- `--json` — Output as JSON list of {agent_id, age_seconds, stalled, last_mtime} instead of human table
+- `--exit-nonzero-on-stall` — Exit 1 if any agent is stalled (for CI/monitor integration); default always exits 0
+
+Exit: 0 always (or 1 if --exit-nonzero-on-stall + stalls found). Output: human table or JSON; reports "no transcripts found" gracefully.
 
 ## buildlog.py — Uniform BUILDLOG entry appender
 
