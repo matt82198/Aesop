@@ -122,7 +122,7 @@ class TestExtractAgentDispatchPromptSecurity(AgentsFixtureCase):
 class TestExtractAgentDispatchPromptHappyPath(AgentsFixtureCase):
     def test_valid_opaque_id_prefix_matches_full_transcript(self):
         full_id = "abc123def456fedcba9876"
-        transcript = self.transcripts_root / f"{full_id}.output"
+        transcript = self.transcripts_root / f"agent-{full_id}.jsonl"
         lines = [
             json.dumps({"type": "user", "parentUuid": None,
                         "message": {"content": "FIXTURE DISPATCH PROMPT: fix the widget"}}),
