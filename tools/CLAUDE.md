@@ -12,6 +12,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `scanner_selftest.py` — Regression harness for secret_scan.py; validates TP/FP vectors and self-scan cleanliness
 - `prepublish_scan.py` — Pre-publish gate running full git history + staged-changes scans; exit 0 only if CLEAR-TO-PUBLISH
 - `metrics_gate.py` — PR gate for numeric claims in *.md files; verifies hard percentages/multipliers/dollar amounts via source comments
+- `self_stats.py` — Self-building stats counter; computes git-derived metrics (merged PRs, commits, project age, waves, insertions+deletions, files, co-authors) + reads session telemetry from docs/self-stats-data.json; generates README block with verification markers
 
 **Browser-level verification (CI gates)**:
 - `verify_dash.py` — Browser proof for realtime SSE dashboard; validates console errors, backlog rendering, live SSE updates (use `--allow-skip` in browserless environments)
