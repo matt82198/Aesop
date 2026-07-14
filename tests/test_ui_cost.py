@@ -1,0 +1,442 @@
+"""TDD tests for ui/cost.py — ledger parsing and cost aggregation.
+
+Tests the get_cost_summary() function which parses a markdown ledger table
+and returns per-model, per-day, and overall cost/token/verdict aggregations.
+
+Run: python -m unittest tests.test_ui_cost
+     python tests/test_ui_cost.py
+"""
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+UI_DIR = Path(__file__).parent.parent / "ui"
+if str(UI_DIR) not in sys.path:
+    sys.path.insert(0, str(UI_DIR))
+
+import config
+import cost
+
+ENV_KEYS = ("AESOP_ROOT", "AESOP_STATE_ROOT", "AESOP_TRANSCRIPTS_ROOT",
+            "AESOP_UI_COLLECT_INTERVAL", "PORT")
+
+
+class CostIsolationCase(unittest.TestCase):
+    """Base class for cost tests with isolated temp directories."""
+
+    def setUp(self):
+        """Set up isolated temp directories for testing."""
+        self.fixture_root = Path(tempfile.mkdtemp(prefix="aesop-cost-test-"))
+        self.state_dir = self.fixture_root / "state"
+        self.state_dir.mkdir(parents=True)
+        (self.fixture_root / "transcripts").mkdir()
+
+        # Save original env
+        self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
+
+        # Set isolated environment
+        os.environ["AESOP_ROOT"] = str(self.fixture_root)
+        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
+        os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.fixture_root / "transcripts")
+        os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
+
+        # Reload config to pick up new env vars
+        config.reload()
+
+    def tearDown(self):
+        """Restore original env and clean up temp files."""
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        config.reload()
+        shutil.rmtree(self.fixture_root, ignore_errors=True)
+
+    def write_ledger(self, content):
+        """Write a test ledger file to the isolated state dir."""
+        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
+        ledger_file.parent.mkdir(parents=True, exist_ok=True)
+        ledger_file.write_text(content, encoding='utf-8')
+        return ledger_file
+
+    def write_config(self, config_dict):
+        """Write a test aesop.config.json to the isolated fixture root."""
+        config_file = self.fixture_root / "aesop.config.json"
+        config_file.write_text(json.dumps(config_dict), encoding='utf-8')
+        # Reload config so it picks up the new file
+        config.reload()
+
+
+class TestCostSummaryShape(CostIsolationCase):
+    """Test the structure and shape of the CostSummary return value."""
+
+    def test_empty_ledger_returns_documented_shape(self):
+        """When ledger is absent, return an empty summary with documented shape."""
+        summary = cost.get_cost_summary()
+
+        # Verify documented shape
+        self.assertIsInstance(summary, dict)
+        self.assertIn("models", summary)
+        self.assertIn("daily_totals", summary)
+        self.assertIn("overall_scorecard", summary)
+        self.assertIn("skipped_lines", summary)
+        self.assertIn("has_pricing", summary)
+        self.assertIn("estimates_by_model", summary)
+
+        # Verify it's empty
+        self.assertEqual(len(summary["models"]), 0)
+        self.assertEqual(len(summary["daily_totals"]), 0)
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertFalse(summary["has_pricing"])
+        self.assertEqual(len(summary["estimates_by_model"]), 0)
+
+    def test_overall_scorecard_shape(self):
+        """overall_scorecard contains verdict counters and rates."""
+        summary = cost.get_cost_summary()
+        scorecard = summary["overall_scorecard"]
+
+        # Verify shape
+        self.assertIn("total_runs", scorecard)
+        self.assertIn("ok_count", scorecard)
+        self.assertIn("failed_count", scorecard)
+        self.assertIn("empty_count", scorecard)
+        self.assertIn("hung_count", scorecard)
+        self.assertIn("ok_rate", scorecard)
+        self.assertIn("failed_rate", scorecard)
+        self.assertIn("empty_rate", scorecard)
+        self.assertIn("hung_rate", scorecard)
+
+    def test_models_dict_contains_model_entries(self):
+        """When ledger has entries, models dict contains per-model stats."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | OK |
+| 2026-07-11T22:08:22 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | FAILED |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Verify models dict
+        self.assertIn("claude-haiku-4-5-20251001", summary["models"])
+        self.assertIn("claude-opus-4-8", summary["models"])
+
+        # Verify model stats structure
+        haiku_stats = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertIn("runs", haiku_stats)
+        self.assertIn("tokens_in", haiku_stats)
+        self.assertIn("tokens_out", haiku_stats)
+        self.assertIn("verdicts", haiku_stats)
+
+    def test_verdicts_contains_all_verdict_types(self):
+        """Verdicts dict in model stats contains OK/FAILED/EMPTY/HUNG counters."""
+        summary = cost.get_cost_summary()
+        verdicts = summary["overall_scorecard"]
+
+        # All verdict types should be present with numeric counts
+        self.assertIsInstance(verdicts["ok_count"], int)
+        self.assertIsInstance(verdicts["failed_count"], int)
+        self.assertIsInstance(verdicts["empty_count"], int)
+        self.assertIsInstance(verdicts["hung_count"], int)
+
+
+class TestCostParsing(CostIsolationCase):
+    """Test ledger parsing and aggregation logic."""
+
+    def test_parses_valid_ledger_rows(self):
+        """Parse valid markdown table rows and aggregate correctly."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 2)
+        self.assertEqual(haiku["tokens_in"], 16)  # 8 + 8
+        self.assertEqual(haiku["tokens_out"], 302)  # 186 + 116
+        self.assertEqual(haiku["verdicts"]["OK"], 2)
+        self.assertEqual(summary["skipped_lines"], 0)
+
+    def test_aggregates_by_date(self):
+        """Aggregate tokens by ISO date."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T23:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK |
+| 2026-07-12T01:00:00 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 100 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should have two dates
+        self.assertIn("2026-07-11", summary["daily_totals"])
+        self.assertIn("2026-07-12", summary["daily_totals"])
+
+        # Verify totals per day
+        day1 = summary["daily_totals"]["2026-07-11"]
+        self.assertEqual(day1["tokens_in"], 16)  # 8 + 8
+        self.assertEqual(day1["tokens_out"], 302)  # 186 + 116
+
+        day2 = summary["daily_totals"]["2026-07-12"]
+        self.assertEqual(day2["tokens_in"], 8)
+        self.assertEqual(day2["tokens_out"], 100)
+
+    def test_counts_all_verdict_types(self):
+        """Count OK, FAILED, EMPTY, and HUNG verdicts."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | FAILED |
+| 2026-07-11T22:08:22 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 1 | EMPTY |
+| 2026-07-11T22:08:23 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 1 | HUNG |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        scorecard = summary["overall_scorecard"]
+        self.assertEqual(scorecard["total_runs"], 4)
+        self.assertEqual(scorecard["ok_count"], 1)
+        self.assertEqual(scorecard["failed_count"], 1)
+        self.assertEqual(scorecard["empty_count"], 1)
+        self.assertEqual(scorecard["hung_count"], 1)
+
+    def test_calculates_success_rate(self):
+        """Calculate success/failure rates."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK |
+| 2026-07-11T22:08:22 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 1 | FAILED |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        scorecard = summary["overall_scorecard"]
+        self.assertAlmostEqual(scorecard["ok_rate"], 2.0 / 3.0, places=2)
+        self.assertAlmostEqual(scorecard["failed_rate"], 1.0 / 3.0, places=2)
+
+    def test_skips_malformed_lines(self):
+        """Skip malformed lines and count them."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| this is not a valid row at all |
+| 2026-07-11T22:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK |
+| 2026-07-11T22:08:22 | broken | incomplete |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should have parsed only the 2 valid lines
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 2)
+        # Should count the 2 malformed lines (separator lines not counted)
+        self.assertEqual(summary["skipped_lines"], 2)
+
+    def test_handles_missing_ledger_file(self):
+        """Gracefully handle missing ledger file."""
+        # Don't write any ledger file
+        summary = cost.get_cost_summary()
+
+        # Should return empty summary
+        self.assertEqual(len(summary["models"]), 0)
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 0)
+
+    def test_handles_empty_ledger_file(self):
+        """Gracefully handle empty ledger file."""
+        self.write_ledger("")
+        summary = cost.get_cost_summary()
+
+        # Should return empty summary
+        self.assertEqual(len(summary["models"]), 0)
+        self.assertEqual(summary["skipped_lines"], 0)
+
+    def test_handles_header_separator_lines(self):
+        """Skip markdown table header separator lines."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should have parsed only the 2 data rows
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 2)
+        # Separator lines are silently ignored, not counted as skipped (only malformed lines count)
+        self.assertEqual(summary["skipped_lines"], 0)
+
+
+class TestPricingIntegration(CostIsolationCase):
+    """Test pricing map loading from config and cost estimation."""
+
+    def test_no_estimates_without_pricing_config(self):
+        """When no pricing in config, has_pricing is False and no estimates."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+"""
+        self.write_ledger(ledger)
+        self.write_config({})
+        summary = cost.get_cost_summary()
+
+        self.assertFalse(summary["has_pricing"])
+        self.assertEqual(len(summary["estimates_by_model"]), 0)
+
+    def test_loads_pricing_from_config(self):
+        """Load pricing map from aesop.config.json."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+"""
+        self.write_ledger(ledger)
+        self.write_config({
+            "pricing": {
+                "claude-haiku-4-5-20251001": {
+                    "input_per_mtok": 0.80,
+                    "output_per_mtok": 2.40
+                }
+            }
+        })
+        summary = cost.get_cost_summary()
+
+        self.assertTrue(summary["has_pricing"])
+        self.assertIn("claude-haiku-4-5-20251001", summary["estimates_by_model"])
+
+    def test_calculates_costs_correctly(self):
+        """Calculate estimated costs from tokens and pricing."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+"""
+        self.write_ledger(ledger)
+        # haiku: input_per_mtok=0.80, output_per_mtok=2.40
+        # 8 tokens in: 8 / 1_000_000 * 0.80 = 0.0000064
+        # 186 tokens out: 186 / 1_000_000 * 2.40 = 0.0004464
+        self.write_config({
+            "pricing": {
+                "claude-haiku-4-5-20251001": {
+                    "input_per_mtok": 0.80,
+                    "output_per_mtok": 2.40
+                }
+            }
+        })
+        summary = cost.get_cost_summary()
+
+        estimate = summary["estimates_by_model"]["claude-haiku-4-5-20251001"]
+        self.assertIsInstance(estimate, dict)
+        self.assertIn("input_cost", estimate)
+        self.assertIn("output_cost", estimate)
+        self.assertIn("total_cost", estimate)
+        # Verify calculation: 8 * 0.80 + 186 * 2.40 = 6.4 + 446.4 = 452.8 (in millicents per million tokens)
+        # which is 0.0000064 + 0.0004464 = 0.0005128 dollars
+        expected_total = (8 * 0.80 + 186 * 2.40) / 1_000_000
+        self.assertAlmostEqual(estimate["total_cost"], expected_total, places=10)
+
+    def test_handles_missing_model_in_pricing(self):
+        """Gracefully handle model not in pricing map."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | OK |
+"""
+        self.write_ledger(ledger)
+        # Only define pricing for haiku, not opus
+        self.write_config({
+            "pricing": {
+                "claude-haiku-4-5-20251001": {
+                    "input_per_mtok": 0.80,
+                    "output_per_mtok": 2.40
+                }
+            }
+        })
+        summary = cost.get_cost_summary()
+
+        self.assertTrue(summary["has_pricing"])
+        # Should have estimate for haiku
+        self.assertIn("claude-haiku-4-5-20251001", summary["estimates_by_model"])
+        # Should NOT have estimate for opus
+        self.assertNotIn("claude-opus-4-8", summary["estimates_by_model"])
+
+    def test_utf8_encoding_explicit(self):
+        """Ensure ledger and config are read with explicit UTF-8 encoding."""
+        # Create ledger with UTF-8 content
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should parse without errors
+        self.assertEqual(len(summary["models"]), 1)
+
+
+class TestConfigReloadAtCallTime(CostIsolationCase):
+    """Test that config is read at call time, not import time."""
+
+    def test_config_read_at_call_time(self):
+        """Config paths are read at call time, so isolation works."""
+        # First call without ledger
+        summary1 = cost.get_cost_summary()
+        self.assertEqual(len(summary1["models"]), 0)
+
+        # Now write a ledger
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+"""
+        self.write_ledger(ledger)
+
+        # Second call should see the ledger (because config is read at call time)
+        summary2 = cost.get_cost_summary()
+        self.assertEqual(len(summary2["models"]), 1)
+        self.assertIn("claude-haiku-4-5-20251001", summary2["models"])
+
+
+class TestLargeScaleData(CostIsolationCase):
+    """Test parsing and aggregation with larger datasets."""
+
+    def test_multiple_models(self):
+        """Aggregate data across multiple models correctly."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | OK |
+| 2026-07-11T22:08:22 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK |
+| 2026-07-11T22:08:23 | Agent | claude-opus-4-8 | 0 | 2 | 1021 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Verify both models present
+        self.assertEqual(len(summary["models"]), 2)
+
+        # Verify haiku aggregation
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 2)
+        self.assertEqual(haiku["tokens_in"], 16)
+        self.assertEqual(haiku["tokens_out"], 302)
+
+        # Verify opus aggregation
+        opus = summary["models"]["claude-opus-4-8"]
+        self.assertEqual(opus["runs"], 2)
+        self.assertEqual(opus["tokens_in"], 4)
+        self.assertEqual(opus["tokens_out"], 1024)
+
+    def test_daily_aggregation_multiple_days(self):
+        """Aggregate tokens across multiple days."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-12T01:00:00 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 100 | OK |
+| 2026-07-13T10:00:00 | Agent | claude-opus-4-8 | 0 | 2 | 1000 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        self.assertEqual(len(summary["daily_totals"]), 3)
+        self.assertIn("2026-07-11", summary["daily_totals"])
+        self.assertIn("2026-07-12", summary["daily_totals"])
+        self.assertIn("2026-07-13", summary["daily_totals"])
+
+
+if __name__ == "__main__":
+    unittest.main()
