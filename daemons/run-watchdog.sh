@@ -96,6 +96,7 @@ if [ "$MODE" = "--once" ]; then
     echo "$err_msg" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
     echo "[ERROR: exit $cmd_exit]" >&2
   fi
+  python "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
   release_lock "$LOCK_DIR"
   exit $cmd_exit
 fi
@@ -113,5 +114,6 @@ while true; do
     out=$(echo "$full_out" | tail -2)
     printf '%s  cycle #%d [ERROR: exit %d]\n%s\n' "$(date '+%H:%M:%S')" "$n" "$cmd_exit" "$out"
   fi
+  python "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
   sleep 150
 done
