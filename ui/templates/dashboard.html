@@ -29,6 +29,7 @@
         .status-alive { color: #0a0; }
         .status-stale { color: #f44; }
         .status-unknown { color: #999; }
+        .status-not-running { color: #f80; }
 
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
         @media (max-width: 1200px) { .grid { grid-template-columns: 1fr; } }
@@ -42,6 +43,7 @@
         /* Agent row expand/collapse */
         .agent-row { cursor: pointer; padding: 8px; margin-bottom: 4px; background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 3px; transition: all 0.2s ease; display: flex; align-items: center; gap: 8px; }
         .agent-row:hover { background: #151515; border-color: #444; }
+        .agent-row:focus { outline: 2px solid #8ac; outline-offset: 0px; }
         .agent-row.expanded { background: #1a1a1a; border-color: #8ac; }
         .agent-status-icon { font-size: 12px; width: 14px; }
         .agent-row-header { flex: 1; font-size: 12px; display: flex; gap: 12px; align-items: center; }
@@ -54,9 +56,9 @@
 
         .agent-details { display: none; margin-top: 8px; padding: 12px; background: #0f0f0f; border-left: 3px solid #8ac; border-radius: 2px; max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
         .agent-row.expanded .agent-details { display: block; max-height: 600px; }
-        .detail-row { margin-bottom: 8px; font-size: 11px; }
-        .detail-label { color: #8ac; font-weight: bold; display: inline-block; width: 100px; }
-        .detail-value { color: #ccc; word-break: break-all; }
+        .agent-detail-row { margin-bottom: 8px; font-size: 11px; }
+        .agent-detail-label { color: #8ac; font-weight: bold; display: inline-block; width: 100px; }
+        .agent-detail-value { color: #ccc; word-break: break-all; }
         .dispatch-prompt { background: #0a0a0a; border: 1px solid #333; border-radius: 2px; padding: 8px; margin-top: 6px; max-height: 300px; overflow-y: auto; font-size: 11px; color: #ccc; font-family: 'Monaco', 'Menlo', monospace; white-space: pre-wrap; word-wrap: break-word; }
 
         .item { padding: 8px 0; font-size: 12px; border-bottom: 1px solid #2a2a2a; }
@@ -125,6 +127,9 @@
         .fade-in { animation: fadeIn 0.3s ease-in; }
         @keyframes fadeIn { from { opacity: 0.5; } to { opacity: 1; } }
 
+        /* Accessible text hidden from view but available to screen readers */
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
+
         /* Orchestrator status banner */
         #orchestrator-banner { margin-bottom: 16px; padding: 12px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; }
         .status-none { color: #999; }
@@ -134,24 +139,26 @@
         .audit-banner { background: #1a1408; border: 1px solid #f80; border-radius: 4px; padding: 12px; margin: 12px 0; }
         .audit-banner-title { color: #f80; font-weight: bold; font-size: 12px; margin-bottom: 6px; }
         .audit-ascii { font-family: 'Monaco', 'Menlo', monospace; font-size: 11px; color: #8ac; line-height: 1.3; white-space: pre; margin: 6px 0; }
-        .audit-marquee { animation: marqueeAnim 2s linear infinite; }
-        @keyframes marqueeAnim { 0% { content: '░▒▓'; } 33% { content: '▒▓░'; } 66% { content: '▓░▒'; } }
+        .audit-marquee { display: inline-block; animation: marqueeAnim 1.2s steps(3) infinite; }
+        @keyframes marqueeAnim { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
 
         /* Tracker lanes */
         .tracker-lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        @media (max-width: 900px) { .tracker-lanes { grid-template-columns: 1fr; } }
         .tracker-lane { background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 4px; padding: 12px; }
         .lane-header { font-size: 12px; font-weight: bold; color: #8ac; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
         .lane-count { font-size: 11px; color: #666; }
         .lane-items { display: flex; flex-direction: column; gap: 8px; }
         .tracker-item { background: #1a1a1a; border: 1px solid #333; border-radius: 3px; padding: 10px; cursor: pointer; transition: all 0.2s ease; }
         .tracker-item:hover { border-color: #8ac; background: #151515; }
+        .tracker-item:focus { outline: 2px solid #8ac; outline-offset: 0px; }
         .tracker-item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
         .tracker-item-title { flex: 1; font-size: 12px; font-weight: bold; color: #e0e0e0; word-break: break-word; }
         .priority-chip { display: inline-block; padding: 2px 6px; border-radius: 2px; font-size: 10px; font-weight: bold; text-transform: uppercase; }
-        .priority-p0 { background: #f44; color: #fff; }
+        .priority-p0 { background: #c00; color: #fff; }
         .priority-p1 { background: #f80; color: #000; }
         .priority-p2 { background: #88f; color: #000; }
-        .priority-p3 { background: #666; color: #bbb; }
+        .priority-p3 { background: #333; color: #ddd; }
         .tracker-item-tags { font-size: 10px; color: #8ac; margin-bottom: 6px; }
         .tag { display: inline-block; margin-right: 4px; padding: 1px 3px; background: #0a0a0a; border: 1px solid #8ac; border-radius: 2px; }
         .tracker-item-details { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a2a2a; font-size: 11px; color: #ccc; }
@@ -186,9 +193,10 @@
 
         <div id="orchestrator-banner" style="display: none;">
             <div class="header-label">Orchestrator Status</div>
-            <div id="orchestrator-status" class="status-none">—</div>
+            <div id="orchestrator-status" class="status-none" role="status" aria-live="polite">—</div>
         </div>
-        <div id="audit-banner" class="audit-banner" style="display: none;" aria-hidden="true">
+        <div id="audit-banner" class="audit-banner" style="display: none;">
+            <div class="sr-only" id="audit-status-label" role="status" aria-live="assertive" aria-atomic="true">Audit cycle running</div>
             <div class="audit-banner-title">AUDIT CYCLE RUNNING</div>
             <pre class="audit-ascii">   .-.--.        ___
   ( o___ )----- (o,o)
@@ -199,24 +207,24 @@
             <div class="header-item">
                 <div class="header-label">Watchdog Status</div>
                 <div class="header-value" id="watchdog-status">
-                    <span id="watchdog-alive" class="status-unknown">—</span>
+                    <span id="watchdog-alive" class="status-unknown" role="status" aria-live="polite">—</span>
                     <span id="watchdog-age" style="color: #999; margin-left: 8px;">—</span>
                 </div>
             </div>
             <div class="header-item">
                 <div class="header-label">Monitor Status</div>
                 <div class="header-value" id="monitor-status">
-                    <span id="monitor-alive" class="status-unknown">—</span>
+                    <span id="monitor-alive" class="status-unknown" role="status" aria-live="polite">—</span>
                     <span id="monitor-age" style="color: #999; margin-left: 8px;">—</span>
                 </div>
             </div>
             <div class="header-item">
                 <div class="header-label">Security Alerts</div>
-                <div class="header-value" id="alert-count" style="color: #999;">—</div>
+                <div class="header-value" id="alert-count" style="color: #999;" role="status" aria-live="assertive">—</div>
             </div>
             <div class="header-item">
                 <div class="header-label">Running Agents</div>
-                <div class="header-value" id="running-count" style="color: #999;">—</div>
+                <div class="header-value" id="running-count" style="color: #999; font-size: 18px; font-weight: 900;" role="status" aria-live="polite">—</div>
             </div>
             <div class="header-item" style="flex: 0 0 auto; text-align: right;">
                 <div class="header-label">Live</div>
@@ -232,14 +240,14 @@
             <div class="panel">
                 <div class="panel-title">
                     <span class="panel-title-emoji">⚡</span>
-                    <span>Fleet Agents (<span id="running-agents-count">0</span> active)</span>
+                    <span>Fleet Agents (<span id="running-agents-count" role="status" aria-live="polite">0</span> active)</span>
                 </div>
-                <div id="agents-list" class="loading">—</div>
+                <div id="agents-list" class="loading" role="status" aria-live="polite" aria-atomic="false">—</div>
             </div>
 
             <div class="alerts-box">
                 <div class="panel-title">Security Alerts (Unreviewed)</div>
-                <div id="alerts-list" class="alert-none">—</div>
+                <div id="alerts-list" class="alert-none" role="status" aria-live="assertive" aria-atomic="false">—</div>
             </div>
         </div>
 
@@ -274,7 +282,7 @@
         </div>
 
         <div id="tracker-container" class="loading" style="margin-bottom: 20px;">
-            <div class="tracker-lanes" id="tracker-lanes">—</div>
+            <div class="tracker-lanes" id="tracker-lanes" role="status" aria-live="polite" aria-atomic="false">—</div>
         </div>
 
         <div class="panel" style="margin-bottom: 20px;">
@@ -383,17 +391,26 @@
             return 'low';
         }
 
+        function normalizeStatusClass(status) {
+            if (!status) return 'unknown';
+            const s = status.toLowerCase().trim();
+            if (s.includes('alive') || s.includes('running')) return 'alive';
+            if (s.includes('stale')) return 'stale';
+            if (s.includes('not running')) return 'not-running';
+            return 'unknown';
+        }
+
         function patchHeader(data) {
             const watchdog = data.watchdog || {};
             const watchdogAlive = document.getElementById('watchdog-alive');
             watchdogAlive.textContent = watchdog.alive || '—';
-            watchdogAlive.className = 'status-' + (watchdog.alive || 'unknown').toLowerCase();
+            watchdogAlive.className = 'status-' + normalizeStatusClass(watchdog.alive);
             document.getElementById('watchdog-age').textContent = watchdog.age >= 0 ? watchdog.age + 's' : '—';
 
             const monitor = data.monitor || {};
             const monitorAlive = document.getElementById('monitor-alive');
             monitorAlive.textContent = monitor.alive || '—';
-            monitorAlive.className = 'status-' + (monitor.alive || 'unknown').toLowerCase();
+            monitorAlive.className = 'status-' + normalizeStatusClass(monitor.alive);
             document.getElementById('monitor-age').textContent = monitor.age >= 0 ? monitor.age + 's' : '—';
 
             // Alert count: color scales with severity
@@ -437,13 +454,13 @@
                 let rowEl = detailsDiv.querySelector(`[data-detail-label="${label}"]`);
                 if (!rowEl) {
                     rowEl = document.createElement('div');
-                    rowEl.className = 'detail-row';
+                    rowEl.className = 'agent-detail-row';
                     rowEl.dataset.detailLabel = label;
                     const labelEl = document.createElement('span');
-                    labelEl.className = 'detail-label';
+                    labelEl.className = 'agent-detail-label';
                     labelEl.textContent = label;
                     const valueEl = document.createElement('span');
-                    valueEl.className = 'detail-value';
+                    valueEl.className = 'agent-detail-value';
                     valueEl.textContent = value;
                     rowEl.appendChild(labelEl);
                     rowEl.appendChild(document.createTextNode(' '));
@@ -451,7 +468,7 @@
                     detailsDiv.appendChild(rowEl);
                 } else {
                     // Update value only if it changed
-                    const valueEl = rowEl.querySelector('.detail-value');
+                    const valueEl = rowEl.querySelector('.agent-detail-value');
                     if (valueEl && valueEl.textContent !== value) {
                         valueEl.textContent = value;
                     }
@@ -462,10 +479,10 @@
             let promptLabelRow = detailsDiv.querySelector('[data-detail-label="Prompt:"]');
             if (!promptLabelRow) {
                 promptLabelRow = document.createElement('div');
-                promptLabelRow.className = 'detail-row';
+                promptLabelRow.className = 'agent-detail-row';
                 promptLabelRow.dataset.detailLabel = 'Prompt:';
                 const promptLabel = document.createElement('span');
-                promptLabel.className = 'detail-label';
+                promptLabel.className = 'agent-detail-label';
                 promptLabel.textContent = 'Prompt:';
                 promptLabelRow.appendChild(promptLabel);
                 detailsDiv.appendChild(promptLabelRow);
@@ -513,6 +530,8 @@
             const row = document.createElement('div');
             row.className = 'agent-row';
             row.dataset.agentId = a.id;
+            row.tabIndex = 0;
+            row.role = 'button';
             row.innerHTML = `
                 <span class="agent-status-icon"></span>
                 <div class="agent-row-header">
@@ -574,9 +593,7 @@
 
         // Event delegation on the stable container: attached once, works for
         // every row (past, present, and future) without re-binding per row.
-        document.getElementById('agents-list').addEventListener('click', function (e) {
-            const row = e.target.closest('.agent-row');
-            if (!row || !this.contains(row)) return;
+        function toggleAgentExpand(row) {
             row.classList.toggle('expanded');
             if (row.classList.contains('expanded')) {
                 const agent = latestAgents.find(a => a.id === row.dataset.agentId);
@@ -586,6 +603,20 @@
                     row.querySelector('.agent-details').textContent = 'Agent details not found';
                 }
             }
+        }
+
+        document.getElementById('agents-list').addEventListener('click', function (e) {
+            const row = e.target.closest('.agent-row');
+            if (!row || !this.contains(row)) return;
+            toggleAgentExpand(row);
+        });
+
+        document.getElementById('agents-list').addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const row = e.target.closest('.agent-row');
+            if (!row || !this.contains(row)) return;
+            e.preventDefault();
+            toggleAgentExpand(row);
         });
 
         // ---- repos / events / alerts / messages: presentational lists,
@@ -602,7 +633,7 @@
                 }).join('');
             } else {
                 reposList.textContent = '(no repos)';
-                reposList.style.color = '#666';
+                reposList.style.color = '#aaaaaa';
             }
         }
 
@@ -877,8 +908,19 @@
 
         function setupTrackerEventHandlers() {
             document.querySelectorAll('.tracker-item').forEach(row => {
+                row.tabIndex = 0;
+                row.role = 'button';
+
                 row.addEventListener('click', function(e) {
                     if (e.target.closest('.tracker-action-btn')) return;
+                    this.classList.toggle('expanded');
+                    const details = this.querySelector('.tracker-item-details');
+                    if (details) details.style.display = this.classList.contains('expanded') ? 'block' : 'none';
+                });
+
+                row.addEventListener('keydown', function(e) {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
                     this.classList.toggle('expanded');
                     const details = this.querySelector('.tracker-item-details');
                     if (details) details.style.display = this.classList.contains('expanded') ? 'block' : 'none';
