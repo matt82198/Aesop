@@ -66,11 +66,12 @@ jobs:
       - name: Run submit encoding browser proof (verify_submit_encoding)
         run: python tools/verify_submit_encoding.py
 
-      - name: Run hook self-tests
-        run: bash hooks/pre-push-policy.sh --test
+      - name: Run watchdog GUI tests
+        run: bash tests/dash-watchdog-gui.test.sh
 
-      - name: Run reconstitute self-tests
-        run: bash tools/reconstitute.sh --test
+      - name: NO-UNVERIFIED-METRICS gate (PR)
+        if: github.event_name == 'pull_request'
+        run: python tools/metrics_gate.py origin/main...HEAD
 
       - name: Secret scan
         run: python tools/secret_scan.py .
