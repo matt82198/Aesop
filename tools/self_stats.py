@@ -49,9 +49,11 @@ class GitStats:
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=check,
             )
-            return result.stdout.strip()
+            return (result.stdout or "").strip()
         except FileNotFoundError:
             return ""
 
@@ -98,18 +100,16 @@ class GitStats:
             return self._project_age_days
 
         try:
-            # Get timestamp of first commit
+            # Get timestamp of the earliest commit (root) — --reverse lists
+            # oldest first, so the first line is the project's birth.
             output = self._run_git(
-                "log", "--format=%cI", "--follow", "--diff-filter=A",
-                check=False
+                "log", "--reverse", "--format=%cI", check=False
             )
             if not output:
                 self._project_age_days = None
                 return None
 
-            # Take last line (earliest commit)
-            lines = output.split("\n")
-            first_commit_iso = lines[-1] if lines else None
+            first_commit_iso = output.split("\n", 1)[0].strip()
             if not first_commit_iso:
                 self._project_age_days = None
                 return None
