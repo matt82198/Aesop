@@ -180,10 +180,20 @@ class TestSSERealtime(EnvFixtureCase):
             super().tearDown()
 
     def _connect_events(self):
-        con = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
-        con.request("GET", "/events")  # deliberately NO token header
-        resp = con.getresponse()
-        return con, resp
+        # Retry transient Windows socket aborts (WSAECONNABORTED / reset) on connect.
+        last = None
+        for _ in range(3):
+            con = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
+            try:
+                con.request("GET", "/events")  # deliberately NO token header
+                resp = con.getresponse()
+                return con, resp
+            except (ConnectionAbortedError, ConnectionResetError,
+                    http.client.RemoteDisconnected) as e:
+                last = e
+                con.close()
+                continue
+        raise last
 
     def test_initial_snapshot_then_live_backlog_update(self):
         con, resp = self._connect_events()
