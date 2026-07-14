@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useHashRoute, type Route } from './lib/useHashRoute';
 import { useSSE } from './lib/useSSE';
+import { Cost } from './views/Cost';
 import { TESTIDS } from './test/fixtures';
 
 const THEME_STORAGE_KEY = 'aesop-theme';
@@ -81,10 +82,10 @@ function Placeholder({ name, testid }: { name: string; testid: string }) {
 
 export default function App() {
   const route = useHashRoute();
-  const sse = useSSE();
+  const sseState = useSSE();
   const { theme, toggle } = useTheme();
 
-  const connection = sse.connectionStatus;
+  const connection = sseState.connectionStatus;
 
   return (
     <>
@@ -124,7 +125,8 @@ export default function App() {
         {route === '#/' && <Placeholder name="Overview" testid={TESTIDS.viewOverview} />}
         {route === '#/work' && <Placeholder name="Work" testid={TESTIDS.viewWork} />}
         {route === '#/activity' && <Placeholder name="Activity" testid={TESTIDS.viewActivity} />}
-        {route === '#/cost' && <Placeholder name="Cost" testid={TESTIDS.viewCost} />}
+        {route === '#/cost' &&
+          (sseState.cost ? <Cost cost={sseState.cost} /> : <Placeholder name="Cost" testid={TESTIDS.viewCost} />)}
       </main>
     </>
   );
