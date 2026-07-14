@@ -52,13 +52,17 @@ _ASSET_MIME = {
 def _is_local_origin(origin):
     """True if an Origin header value is on the local allowlist.
 
-    Keep in sync with csrf.validate_csrf_request(): same three local forms
-    (http://127.0.0.1:<port>, http://localhost:<port>, http://[::1]:<port>).
+    Keep in sync with csrf.validate_csrf_request(): same six local forms
+    (http[s]://127.0.0.1:<port>, http[s]://localhost:<port>, http[s]://[::1]:<port>).
+    Both http:// and https:// schemes are accepted for the same loopback hosts.
     """
     return bool(origin) and (
         origin.startswith("http://127.0.0.1:") or
+        origin.startswith("https://127.0.0.1:") or
         origin.startswith("http://localhost:") or
-        origin.startswith("http://[::1]:")
+        origin.startswith("https://localhost:") or
+        origin.startswith("http://[::1]:") or
+        origin.startswith("https://[::1]:")
     )
 
 

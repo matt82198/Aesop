@@ -102,7 +102,7 @@ def validate_csrf_request(headers):
 
     Performs two checks:
     1. Origin/Referer validation: if Origin or Referer header is present, must be local
-       (http://127.0.0.1:<port>, http://localhost:<port>)
+       (http[s]://127.0.0.1:<port>, http[s]://localhost:<port>, http[s]://[::1]:<port>)
     2. X-Aesop-Token validation: must match SESSION_TOKEN
 
     Args:
@@ -120,11 +120,15 @@ def validate_csrf_request(headers):
     # If Origin or Referer is present, validate it's local
     if origin or referer:
         check_value = origin or referer
-        # Check if it's a local origin: http://127.0.0.1:<PORT> or http://localhost:<PORT>
+        # Check if it's a local origin: http[s]://127.0.0.1:<PORT>, http[s]://localhost:<PORT>,
+        # or http[s]://[::1]:<PORT> (both http:// and https:// schemes accepted for same hosts)
         is_local = (
             check_value.startswith("http://127.0.0.1:") or
+            check_value.startswith("https://127.0.0.1:") or
             check_value.startswith("http://localhost:") or
-            check_value.startswith("http://[::1]:")  # IPv6 localhost
+            check_value.startswith("https://localhost:") or
+            check_value.startswith("http://[::1]:") or  # IPv6 localhost
+            check_value.startswith("https://[::1]:")  # IPv6 localhost HTTPS
         )
         if not is_local:
             return (False, "Foreign Origin/Referer rejected")
