@@ -172,8 +172,11 @@ class TestInboxSymlinkProtection(Wave8BaseTestCase):
 
     def test_submit_with_symlink_inbox_is_rejected(self):
         """POST /submit when ui-inbox.md is a symlink must be rejected."""
-        # Create a target file and symlink ui-inbox.md to it
-        inbox_path = self.fixture_root / "ui-inbox.md"
+        # Symlink the ACTUAL inbox path the handler writes (config.INBOX_FILE =
+        # STATE_DIR/ui-inbox.md), not fixture_root/ui-inbox.md — otherwise the
+        # handler writes a real file elsewhere and the guard is never exercised.
+        inbox_path = Path(self.serve.INBOX_FILE)
+        inbox_path.parent.mkdir(parents=True, exist_ok=True)
         target_path = self.fixture_root / "target.txt"
 
         try:
