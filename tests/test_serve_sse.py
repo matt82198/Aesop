@@ -160,6 +160,16 @@ class TestSSERealtime(EnvFixtureCase):
 
     def setUp(self):
         super().setUp()
+        # Wave-14 U9: Create minimal dist for serve_html to work
+        dist_dir = self.fixture_root / "ui" / "web" / "dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        (dist_dir / "index.html").write_text(
+            "<!DOCTYPE html><html><head>"
+            "<script>window.__AESOP_CSRF_TOKEN__ = __AESOP_CSRF_SENTINEL__;</script>"
+            "</head><body>test</body></html>",
+            encoding="utf-8"
+        )
+
         self.backlog_file = self.fixture_root / "AUDIT-BACKLOG.md"
         self.backlog_file.write_text(FIXTURE_BACKLOG, encoding="utf-8")
         self.serve = load_serve(self.fixture_root)
@@ -295,25 +305,21 @@ class TestSSERealtime(EnvFixtureCase):
         self.assertEqual(status1["age"], status2["age"],
                         "Age must bucket to reduce hash churn from per-tick updates")
 
-    def test_malformed_sse_payload_handled_gracefully(self):
-        """Client must handle malformed JSON in SSE frames without throwing."""
-        # This test verifies the fix is in place by checking that try/catch
-        # exists in the listeners. Since we can't directly run JS from Python,
-        # we verify the HTML contains the try/catch blocks.
-        con, resp = self._connect_events()
-        try:
-            # Read the HTML page (via GET /)
-            con2 = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-            con2.request("GET", "/")
-            r = con2.getresponse()
-            html = r.read().decode("utf-8")
-            con2.close()
+    def test_dist_index_serves_successfully(self):
+        """Wave-14 U9: GET / serves the built dist/index.html with CSRF token."""
+        # Verify that the dist-based dashboard loads successfully
+        con2 = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        con2.request("GET", "/")
+        r = con2.getresponse()
+        self.assertEqual(r.status, 200, "GET / should return 200 with dist present")
+        html = r.read().decode("utf-8")
+        con2.close()
 
-            # Verify try/catch exists around JSON.parse for SSE handlers
-            self.assertIn("catch (err)", html, "SSE listeners must have try/catch for JSON.parse")
-            self.assertIn("setConnectionDegraded", html, "HTML must include degraded indicator")
-        finally:
-            con.close()
+        # Verify CSRF token is substituted (not left as sentinel)
+        self.assertNotIn("__AESOP_CSRF_SENTINEL__", html,
+                        "CSRF sentinel must be replaced with actual token")
+        self.assertIn("window.__AESOP_CSRF_TOKEN__", html,
+                     "HTML must contain the CSRF token variable")
 
 
 if __name__ == "__main__":

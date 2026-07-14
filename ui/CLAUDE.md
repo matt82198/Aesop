@@ -2,18 +2,33 @@
 
 **Purpose**: Stdlib-only local observability dashboard. Serves a dark-theme HTML dashboard on a configurable port (realtime via Server-Sent Events), enabling real-time fleet monitoring without external dependencies.
 
-## Files (wave-9 split: serve.py monolith decomposed into focused modules)
+## Files (wave-14 U9 cutover: new React+Vite app structure)
 
+**Backend (Python, unchanged from wave-9 split)**:
 - **serve.py** — Thin (~65-line) entry point + composition layer. Wires the sibling modules, calls `config.reload()` / `csrf.init()` / `sse.reset_state()`, and re-exports their symbols so `serve.X` keeps resolving for the test suite (which loads serve.py by path) and for `python ui/serve.py`.
-- **config.py** — Path / env / `aesop.config.json` resolution. `reload()` recomputes all path globals from the current environment. **Load-bearing rule: every other module reads `config.X` at call time (`import config`), never `from config import <path>` — a frozen import would go stale after reload() (breaks test-fixture isolation).**
+- **config.py** — Path / env / `aesop.config.json` resolution. `reload()` recomputes all path globals from the current environment. **Load-bearing rule: every other module reads `config.X` at call time (`import config`), never `from config import <path>` — a frozen import would go stale after reload() (breaks test-fixture isolation).** Added in wave-14: `WEB_DIST` path pointing to `ui/web/dist/`.
 - **csrf.py** — Session-token generation (atomic O_EXCL 0600) + `validate_csrf_request()`; `init()` sets `SESSION_TOKEN`.
 - **collectors.py** — Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD, and SSE section snapshots (incl. `read`-style tracker/orchestrator-status snapshots + inbox drain).
 - **agents.py** — Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`) and path-traversal-safe agent-id handling (`_AGENT_ID_FORBIDDEN`).
-- **sse.py** — SSE client registry, bounded broadcast, hash-gated `_maybe_emit`, and the background `collector_loop`. `reset_state()` restores per-import collector isolation (the `sse` module is cached across test re-imports).
-- **render.py** — Renders `templates/dashboard.html`, substituting the CSRF token via a unique sentinel (no `.format`/% — the CSS/JS is full of `{}`/`%`).
-- **handler.py** — `DashboardHandler` (HTTP routing + all GET/POST endpoints incl. /api/tracker) and `run_server()`. Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
-- **templates/dashboard.html** — The dashboard HTML/CSS/JS (extracted from the serve.py string), incl. tracker panel + orchestrator-status panel + audit-cycle ASCII banner.
-- **README.md** — User guide and configuration reference.
+- **sse.py** — SSE client registry, bounded broadcast, hash-gated `_maybe_emit`, and the background `collector_loop`. `reset_state()` restores per-import collector isolation (the `sse` module is cached across test re-imports). Extended in wave-14: emits "cost" as a 6th SSE section.
+- **render.py** — Renders `ui/web/dist/index.html` (wave-14 U9 cutover: no fallback), substituting the CSRF token via a unique sentinel (the sentinel persists through Vite's build). Requires `template_path` parameter; legacy fallback removed.
+- **handler.py** — `DashboardHandler` (HTTP routing + all GET/POST endpoints incl. /api/tracker) and `run_server()`. Wave-14 additions: static serving (`GET /assets/*` from `ui/web/dist/assets/`), `/api/state` consolidated snapshot, `/api/session` for Vite dev server, `/api/cost` scorecard. Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
+- **cost.py** — Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model and per-day aggregates, verdict scorecards, and optional dollar estimates (only if `aesop.config.json` supplies `pricing` map).
+
+**Frontend (React 18 + Vite + TypeScript, wave-14 U1–U8)**:
+- **ui/web/** — Complete React application (TypeScript, Vite, TypeScript strict mode).
+  - **src/main.tsx** — Vite entry point; renders `<App />` to `#root`.
+  - **src/App.tsx** — App shell: header + hash-routed view slots (/#/, /#/work, /#/activity, /#/cost).
+  - **src/styles/tokens.css** + **src/styles/global.css** — Design tokens (light/dark color palettes, spacing, typography) + base resets.
+  - **src/views/** — Page-level components (Overview, Work, Activity, Cost) with SSE bindings.
+  - **src/components/** — Reusable UI components (HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, etc.).
+  - **src/lib/api.ts** — Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
+  - **src/lib/useSSE.ts** — EventSource hook with reconnect logic, per-section state, connection status.
+  - **src/lib/types.ts** — TypeScript types for all API payloads (contract with backend).
+  - **src/lib/sanitizeUrl.ts** — XSS-safe URL parsing (PR links inert on bad schemes).
+  - **vite.config.ts** — Vite config with API proxy for `/data`, `/api`, `/events`, `/agent`, `/submit` to :8770.
+  - **dist/** — Built static files (committed to git; served by Python handler). Filenames are content-hashed by Vite.
+- **README.md** — User guide and configuration reference (updated for wave-14).
 
 ## API Package (ui/api/)
 
@@ -62,18 +77,35 @@ Configuration is resolved in this order (first match wins):
 - CLI tools read token from `state/.ui-session-token` (0600) to submit to /submit endpoint
 - Legitimate browser clients: token injected into HTML template, sent by JavaScript
 
+## API Endpoints (wave-14 wave additions)
+
+**Read-only (no CSRF required)**:
+- `GET /` — Renders `ui/web/dist/index.html` with CSRF token substituted (hard 500 if dist missing).
+- `GET /assets/*` — Static files from `ui/web/dist/assets/` (content-hashed, immutable cache headers, path-traversal-safe).
+- `GET /api/state` — Consolidated first-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip (reuses latest snapshots).
+- `GET /api/session` — Returns `{token}` for Vite dev server; Origin-checked fail-closed (only local origins).
+- `GET /api/cost` — Cost/scorecard summary from `state/ledger/OUTCOMES-LEDGER.md` (per-model, per-day, verdicts, optional pricing estimates).
+- `GET /events` — Server-Sent Events stream (read-only, no CSRF).
+
+**Mutations (CSRF-gated)**:
+- `POST /submit` — Append to inbox.
+- `POST /api/tracker`, `POST /api/tracker/<id>` — Tracker CRUD.
+
 ## Server-Sent Events (SSE) Model
 
 **Realtime streaming via GET /events**:
 - ThreadingHTTPServer required (SSE holds one connection per client)
-- Streams JSON frames: `event: data|backlog|agents` / `data: <json>`
+- Streams JSON frames: `event: <section>` / `data: <json>`
 - Keepalive comment-line (`: keepalive`) sent every ~15s to prevent timeout
 - Read-only stream; no mutations
 
-**Sections emitted** (only on content change):
+**Sections emitted** (only on content change, in order):
 1. **data** — heartbeat status, daemon state, log tail
 2. **backlog** — AUDIT-BACKLOG.md parsed into tier buckets (P0/P1/P2/Needs decision)
 3. **agents** — fleet agent activity (from Claude transcripts directory)
+4. **tracker** — tracker items (CRUD mutations reflected in realtime)
+5. **status** — orchestrator phase + activity
+6. **cost** — cost/scorecard summary (wave-14 addition)
 
 ## Background Collector Thread
 
