@@ -1,6 +1,8 @@
 # Durable Checkpointing & State Management
 
-For any long-running or multi-agent effort, maintain authoritative handoff files that survive context loss, wipes, and session interruptions. This guide covers the STATE.md / BUILDLOG.md lifecycle and recovery patterns.
+**TL;DR**: Maintain STATE.md (intent, phase, NEXT STEPS) + BUILDLOG.md (append-only progress log). On resume after context loss, read both, verify from disk, then proceed. Survives session wipes, enables rapid context handoff, and keeps orchestrator cheap (no re-reading full history).
+
+---
 
 ## STATE.md: Authoritative intent & decisions
 

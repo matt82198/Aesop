@@ -1,10 +1,18 @@
 # Aesop Documentation Index
 
-Aesop ships five behavior-as-code pillars: **onboarding templates**, **policy hooks**, **behavioral PRs**, **forensics**, and **restore**. Each pillar has a runnable artifact in the repo plus a guide explaining its principles and usage.
+Aesop is a fable-fleet orchestration harness for Claude Code. It runs fast, cheap delivery waves: parallel Haiku agents, lower cost via Haiku-first dispatch and faster wall-clock via parallel agents.
+
+**New to Aesop?** Start here: [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md) — a walkthrough of one wave cycle and why it's productive.
+
+For deeper governance + operational rules, see the reference docs below.
 
 ---
 
-## Core Governance & Rules
+## Quick Start
+
+- [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md) — Concrete walkthrough of one `/buildsystem` wave (rank → fan out → verify → merge → close)
+
+## Core Governance & Rules (Reference)
 
 - [CARDINAL-RULES.md](CARDINAL-RULES.md) — Foundational operational principles (dispatch model, cost, subagent discipline, retry caps)
 - [RELIABILITY.md](RELIABILITY.md) — Reliability core: never wait, inputs always produce outputs, pride bar for completion
