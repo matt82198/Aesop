@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 // Configuration: env var > config file > built-in default
 // Helper: load aesop.config.json if it exists
@@ -23,20 +24,37 @@ function loadConfigFile(aesopRoot) {
   return {};
 }
 
+// Helper: expand ~ and environment variables in paths for portability
+function expandPath(pathStr) {
+  if (!pathStr) return pathStr;
+  // Expand ~ to home directory
+  if (pathStr.startsWith('~')) {
+    return path.join(os.homedir(), pathStr.slice(1));
+  }
+  // Expand environment variables like $VAR or %VAR%
+  return pathStr.replace(/\$\{?([A-Z_]+)\}?/gi, (match, varName) => {
+    return process.env[varName] || match;
+  });
+}
+
 const AESOP_ROOT = process.env.AESOP_ROOT || path.join(process.env.HOME || '.', 'aesop');
 const config = loadConfigFile(AESOP_ROOT);
 
 const TRANSCRIPTS_ROOT = path.resolve(
-  process.env.AESOP_TRANSCRIPTS_ROOT ||
-  config.transcripts_root ||
-  path.join(process.env.HOME || '.', '.claude', 'projects')
+  expandPath(
+    process.env.AESOP_TRANSCRIPTS_ROOT ||
+    config.transcripts_root ||
+    path.join(process.env.HOME || '.', '.claude', 'projects')
+  )
 );
 
 // Resolve state_root: env var > config > default
 const STATE_ROOT = path.resolve(
-  process.env.AESOP_STATE_ROOT ||
-  config.state_root ||
-  path.join(AESOP_ROOT, 'state')
+  expandPath(
+    process.env.AESOP_STATE_ROOT ||
+    config.state_root ||
+    path.join(AESOP_ROOT, 'state')
+  )
 );
 const ALERTS_LOG = path.join(STATE_ROOT, 'SECURITY-ALERTS.log');
 

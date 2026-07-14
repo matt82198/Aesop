@@ -39,8 +39,12 @@ Examples:
   npx @matt82198/aesop my-fleet                             # Creates ./my-fleet/ with template
   npx @matt82198/aesop my-fleet --force                     # Re-scaffold and replace hooks
   npx @matt82198/aesop orchestrator --name "my-service"     # Headless: generates CLAUDE.md + config
-  npx @matt82198/aesop orchestrator --name "api" \\
-    --domains "server,worker" --repos "/path/to/api"        # Full headless with domains and repos
+
+  Full headless with domains and repos (POSIX):
+    npx @matt82198/aesop orchestrator --name "api" --domains "server,worker" --repos "/path/to/api"
+
+  Full headless with domains and repos (PowerShell):
+    npx @matt82198/aesop orchestrator --name "api" --domains "server,worker" --repos "C:\path\to\api"
 
 After scaffolding with --name, cd into the directory and:
   1. Review CLAUDE.md (pre-filled with your project info)
@@ -242,9 +246,10 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr) {
 
   // Update with provided values
   exampleConfig.aesop_root = targetDir;
-  exampleConfig.brain_root = path.join(os.homedir(), '.claude');
-  exampleConfig.scripts_root = path.join(os.homedir(), 'scripts');
-  exampleConfig.temp_root = path.join(os.tmpdir());
+  exampleConfig.brain_root = '~/.claude';
+  exampleConfig.scripts_root = '~/scripts';
+  exampleConfig.temp_root = '~/.aesop-temp';
+  exampleConfig._generated_note = 'This config uses portable ~ paths which expand at runtime on all platforms. Config loaders in ui/config.py (Python) and monitor/collect-signals.mjs (Node.js) automatically expand ~ paths to your home directory.';
 
   // Parse repos if provided
   if (reposStr) {
