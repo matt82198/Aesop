@@ -3,6 +3,7 @@
 import http.server
 import json
 import queue
+import socketserver
 import sys
 import threading
 import urllib.parse
@@ -599,6 +600,39 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
+
+class QuietThreadingHTTPServer(http.server.ThreadingHTTPServer):
+    """ThreadingHTTPServer that suppresses expected socket disconnect exceptions.
+
+    During normal operation and especially during shutdown, ThreadingHTTPServer may
+    encounter ConnectionAbortedError (WinError 10053) or ConnectionResetError
+    (WinError 10054) when clients disconnect abruptly. These are expected, not errors,
+    and clutter stderr with tracebacks.
+
+    This server overrides handle_error() to suppress only these two exception types
+    while still reporting all other exceptions (real bugs, timeouts, etc.).
+    """
+
+    def handle_error(self, request, client_address):
+        """Suppress client disconnect exceptions; report all others.
+
+        Args:
+            request: The socket request object
+            client_address: The client address tuple
+        """
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+        # Suppress only the two disconnect exception types that occur during
+        # normal client aborts (especially on shutdown). All other exceptions
+        # (real bugs, timeouts, etc.) still get logged via super().
+        if exc_type in (ConnectionAbortedError, ConnectionResetError):
+            # Expected client disconnect; silent is correct.
+            return
+
+        # All other exceptions get the default handler (logged to stderr)
+        super().handle_error(request, client_address)
+
+
 def run_server():
     """Start the HTTP server.
 
@@ -606,9 +640,11 @@ def run_server():
     connection open for the life of the client, so a single-threaded server would
     wedge every other request (including the initial page load and /submit)
     behind that one held connection.
+
+    Uses QuietThreadingHTTPServer to suppress expected socket disconnect exceptions.
     """
     addr = ("127.0.0.1", config.PORT)
-    httpd = http.server.ThreadingHTTPServer(addr, DashboardHandler)
+    httpd = QuietThreadingHTTPServer(addr, DashboardHandler)
     httpd.daemon_threads = True
     sse.start_collector_thread()
     print(f"Dashboard: http://localhost:{config.PORT}")
