@@ -93,6 +93,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_agent()
         elif self.path == "/events":
             self.serve_events()
+        elif self.path == "/favicon.ico":
+            # Browsers auto-request this; answer 204 so it never 404s (keeps the
+            # console clean — the dashboard ships no favicon asset).
+            self.send_response(204)
+            self.end_headers()
         else:
             self.send_error(404)
 
