@@ -10,6 +10,11 @@ Contract under test (ui/render.py render_dashboard()):
     truncated: structural anchors used by the rest of the dashboard JS/CSS
     are still present in the rendered output.
 
+Wave-14 U2 extension: render_dashboard() now accepts an optional template_path
+so the handler can retarget it at ui/web/dist/index.html when a built dist is
+present (plan D3.4/D7) while the no-arg call keeps rendering
+templates/dashboard.html unchanged. Both paths are covered below.
+
 This is a no-browser, no-HTTP unit test: it imports render.py directly (via
 importlib, since ui/ has no __init__.py — same pattern as tests/test_serve.py)
 and calls render_dashboard() as a plain function.
@@ -18,6 +23,8 @@ Run: python -m pytest tests/test_render.py -q
 """
 import importlib.util
 import json
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -135,6 +142,51 @@ class RenderDashboardTest(unittest.TestCase):
         self.assertNotIn(json.dumps("token-b"), html_a)
         self.assertIn(json.dumps("token-b"), html_b)
         self.assertNotIn(json.dumps("token-a"), html_b)
+
+
+class RenderExplicitTemplatePathTest(unittest.TestCase):
+    """Wave-14 U2: render_dashboard(token, template_path=...) renders the given
+    file (the dist index.html case) with identical sentinel semantics."""
+
+    def setUp(self):
+        self.render = _load_render()
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="aesop-render-dist-test-"))
+        self.dist_index = self.tmpdir / "index.html"
+        self.dist_index.write_text(
+            "<!doctype html>\n<html><head>\n"
+            "<script>window.__AESOP_CSRF_TOKEN__ = __AESOP_CSRF_SENTINEL__;"
+            "</script>\n</head><body><div id=\"root\">DIST-TEMPLATE-MARKER"
+            "</div></body></html>\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_explicit_template_path_renders_that_file(self):
+        html = self.render.render_dashboard("dist-token", template_path=self.dist_index)
+        self.assertIn("DIST-TEMPLATE-MARKER", html)
+        self.assertNotIn(SENTINEL, html)
+        self.assertIn(
+            f"window.__AESOP_CSRF_TOKEN__ = {json.dumps('dist-token')};", html)
+
+    def test_explicit_path_does_not_render_the_legacy_template(self):
+        html = self.render.render_dashboard("dist-token", template_path=self.dist_index)
+        self.assertNotIn('id="tracker-lanes"', html,
+                         "explicit template_path must not fall through to "
+                         "templates/dashboard.html")
+
+    def test_hostile_token_json_escaped_on_dist_template_too(self):
+        hostile_token = '";alert(1);//</script><script>alert(2)</script>'
+        html = self.render.render_dashboard(hostile_token, template_path=self.dist_index)
+        expected_literal = json.dumps(hostile_token)
+        self.assertIn(
+            f"window.__AESOP_CSRF_TOKEN__ = {expected_literal};", html)
+
+    def test_default_call_still_renders_legacy_template(self):
+        html = self.render.render_dashboard("legacy-token")
+        self.assertIn('id="tracker-lanes"', html)
+        self.assertNotIn("DIST-TEMPLATE-MARKER", html)
 
 
 if __name__ == "__main__":
