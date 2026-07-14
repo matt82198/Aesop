@@ -35,11 +35,14 @@ def append_to_inbox(text):
     """
     inbox_content = f"- [{datetime.now().isoformat()}] {text}\n"
 
-    if config.INBOX_FILE.exists():
-        # Security: reject symlinks (TOCTOU defense)
-        if os.path.islink(str(config.INBOX_FILE)):
-            return False, (400, {"error": "Inbox file is a symlink (rejected for security)"})
-    else:
+    # Security: reject symlinks (TOCTOU defense) FIRST — check islink independent
+    # of exists(). Path.exists() follows the link, so a DANGLING symlink (target
+    # not yet created) returns False and would otherwise skip this check, then
+    # open(...,'w') would follow the link and create the attacker's target.
+    if os.path.islink(str(config.INBOX_FILE)):
+        return False, (400, {"error": "Inbox file is a symlink (rejected for security)"})
+
+    if not config.INBOX_FILE.exists():
         config.INBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
         # Must match the encoding (utf-8) AND newline convention (LF) of the
         # append below -- text-mode write_text() with no encoding= falls back
