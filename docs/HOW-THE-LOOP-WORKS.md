@@ -155,6 +155,16 @@ If an agent hangs 3 times on the same task:
 
 ---
 
+## About /buildsystem and /power Skills
+
+**Important**: The `/buildsystem` and `/power` skills are **orchestrator-brain skills** installed to `~/.claude/skills/`, not files inside the aesop template. They are invoked via Claude Code as slash commands.
+
+- **Location**: `~/.claude/skills/buildsystem/` and `~/.claude/skills/power/` on your workstation.
+- **Template copy**: The aesop repo contains skill definitions in `skills/` for reference and setup (copy these to `~/.claude/skills/` on first use).
+- **Invocation**: In Claude Code, type `/power` to prime your orchestrator brain, or `/buildsystem` to start a wave cycle.
+
+See [skills/power/SKILL.md](../skills/power/SKILL.md) for detailed setup instructions.
+
 ## Next Steps
 
 1. Run `/buildsystem` to start a wave (orchestrator handles the flow)
