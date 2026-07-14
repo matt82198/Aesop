@@ -16,6 +16,9 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `verify_dash.py` — Browser proof for realtime SSE dashboard; validates console errors, backlog rendering, live SSE updates (use `--allow-skip` in browserless environments)
 - `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap; validates encoding on Windows and real CSRF flow (use `--allow-skip` in browserless environments)
 
+**CI/merge operations**:
+- `ci_merge_wait.py` — CI-gated merge helper; polls gh pr view until checks conclude (SUCCESS/FAILURE), then merges ONLY if SUCCESS (structurally unreachable otherwise)
+
 **Orchestration infrastructure**:
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject); uses fail-closed locking for atomic state updates
 - `power_selftest.py` — Health check harness for /power bootstrap; validates hooks, brain, heartbeats, decisions, and scanner
@@ -145,6 +148,22 @@ Manages orchestrator heartbeat and activity tracking for SSE status section and 
 - `python orchestrator_status.py clear` — remove status file
 
 Writes `state/orchestrator-status.json` atomically (temp+replace). Forward-compatible with bare-object → list normalization in serve.py. Exit: 0=success, 1=error.
+
+## ci_merge_wait.py — CI-gated merge helper
+
+Polls gh pr view until all status checks conclude (SUCCESS/FAILURE), then merges ONLY if all checks pass. The `gh pr merge` call is STRUCTURALLY UNREACHABLE unless CI status is SUCCESS — this prevents merge-on-CI-failure edge cases (e.g., wave-7 PR #80).
+
+- `python ci_merge_wait.py <PR-number> [--timeout SECONDS] [--poll SECONDS] [--merge-method merge|squash|rebase]`
+
+Exit codes:
+- 0 = PR merged successfully
+- 2 = CI checks failed (do NOT merge, prints which check failed)
+- 3 = Timeout waiting for CI to conclude
+- 4 = PR not mergeable or has merge conflicts
+
+Requires: `gh` CLI available on PATH. Gracefully exits with error if gh is missing.
+
+Implementation note: This is the reusable form of the orchestrator's merge-gating discipline (buildsystem Phase 1). Core invariant: the merge call is STRUCTURALLY UNREACHABLE on any status other than SUCCESS.
 
 ## Invariants
 
