@@ -44,5 +44,12 @@
   },
   "cardinal_rules": {
     "subagent_model": "haiku"
+  },
+  "alerts": {
+    "_comment": "Slack/Discord webhook integration for fleet alerts (NEW wave-14). webhook_url: null (default) disables alerts (feature opt-in). Provider: 'slack' (block-kit) or 'discord' (embeds). min_severity: filter by HIGH/CRITICAL/etc. heartbeat_stall_s: alert if watchdog heartbeat older than N seconds (null = skip). NEVER commit a real webhook URL to version control — retrieve from your Slack/Discord workspace settings at runtime.",
+    "webhook_url": null,
+    "provider": "slack",
+    "min_severity": "HIGH",
+    "heartbeat_stall_s": 600
   }
 }
