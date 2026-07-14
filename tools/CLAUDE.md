@@ -20,6 +20,9 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 **CI/merge operations**:
 - `ci_merge_wait.py` — CI-gated merge helper; polls gh pr view until checks conclude (SUCCESS/FAILURE), then merges ONLY if SUCCESS (structurally unreachable otherwise)
 
+**Alerting**:
+- `alert_bridge.py` — Slack/Discord webhook bridge; scans SECURITY-ALERTS.log (>= min_severity) + heartbeat staleness, POSTs opt-in (cursor-idempotent, webhook URL masked). Called per-cycle by run-watchdog.sh.
+
 **Orchestration infrastructure**:
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject); uses fail-closed locking for atomic state updates
 - `power_selftest.py` — Health check harness for /power bootstrap; validates hooks, brain, heartbeats, decisions, and scanner
