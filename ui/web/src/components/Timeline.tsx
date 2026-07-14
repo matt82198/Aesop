@@ -65,9 +65,9 @@ export default function Timeline({ agents }: Props) {
       <h3 className={styles.title}>Agent Timeline</h3>
       <div className={styles.timelineContent}>
         {agents.map((agent) => {
-          const barWidth = computeBarWidth(agent.startedAt, agent.lastActivity, agent.runtimeSeconds);
+          const barWidth = computeBarWidth(agent.startedAt, agent.lastActivity, agent.runtimeSeconds ?? 0);
           const statusClass = getStatusClass(agent.status);
-          const duration = formatAge(agent.runtimeSeconds);
+          const duration = formatAge(agent.runtimeSeconds ?? 0);
 
           return (
             <div key={agent.id} className={styles.row}>

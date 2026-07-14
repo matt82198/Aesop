@@ -11,6 +11,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `secret_scan.py` — Pre-push secret/credential detection gate; scans staged, history, or paths by regex + filename patterns
 - `scanner_selftest.py` — Regression harness for secret_scan.py; validates TP/FP vectors and self-scan cleanliness
 - `prepublish_scan.py` — Pre-publish gate running full git history + staged-changes scans; exit 0 only if CLEAR-TO-PUBLISH
+- `metrics_gate.py` — PR gate for numeric claims in *.md files; verifies hard percentages/multipliers/dollar amounts via source comments
 
 **Browser-level verification (CI gates)**:
 - `verify_dash.py` — Browser proof for realtime SSE dashboard; validates console errors, backlog rendering, live SSE updates (use `--allow-skip` in browserless environments)
@@ -19,6 +20,9 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 **CI/merge operations**:
 - `ci_merge_wait.py` — CI-gated merge helper; polls gh pr view until checks conclude (SUCCESS/FAILURE), then merges ONLY if SUCCESS (structurally unreachable otherwise)
 - `metrics_gate.py` — NO-UNVERIFIED-METRICS gate; scans git diff for hard numeric claims (%, multipliers, $) in markdown that lack verification comments
+
+**Alerting**:
+- `alert_bridge.py` — Slack/Discord webhook bridge; scans SECURITY-ALERTS.log (>= min_severity) + heartbeat staleness, POSTs opt-in (cursor-idempotent, webhook URL masked). Called per-cycle by run-watchdog.sh.
 
 **Orchestration infrastructure**:
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject); uses fail-closed locking for atomic state updates

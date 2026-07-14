@@ -57,6 +57,14 @@ def build_fixture(root: Path):
     (root / "state").mkdir(exist_ok=True)
     (root / "transcripts").mkdir(exist_ok=True)
     (root / "dash").mkdir(exist_ok=True)
+
+    # Copy ui/web/dist from the real repo so the server can serve the built React app
+    repo = Path(__file__).resolve().parent.parent
+    real_dist = repo / "ui" / "web" / "dist"
+    if real_dist.is_dir():
+        fixture_dist = root / "ui" / "web" / "dist"
+        shutil.copytree(real_dist, fixture_dist)
+
     (root / "AUDIT-BACKLOG.md").write_text(
         "# Audit backlog — verify_submit_encoding fixture\n\n## Landing log\n- fixture\n",
         encoding="utf-8",
@@ -142,11 +150,11 @@ def main():
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{port}/", wait_until="domcontentloaded")
 
-            # Drive the real /submit flow: #inbox-input -> #inbox-button, real
+            # Drive the real /submit flow: inbox-input -> inbox-submit, real
             # CSRF token (window.__AESOP_CSRF_TOKEN__ injected server-side).
-            page.wait_for_selector("#inbox-input", timeout=8000)
-            page.fill("#inbox-input", MARKER)
-            page.click("#inbox-button")
+            page.wait_for_selector("[data-testid='inbox-input']", timeout=8000)
+            page.fill("[data-testid='inbox-input']", MARKER)
+            page.click("[data-testid='inbox-submit']")
 
             # Wait for the inbox file to land on disk (async POST).
             for _ in range(50):

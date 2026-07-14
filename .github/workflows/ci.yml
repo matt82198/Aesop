@@ -49,6 +49,22 @@ jobs:
       - name: Run Python tests
         run: npm run test:py
 
+      - name: Build React dashboard (ui/web/)
+        run: |
+          cd ui/web
+          npm ci
+          npm run build
+
+      - name: Dist drift gate (committed ui/web/dist must match fresh build)
+        run: |
+          cd ui/web
+          git diff --exit-code -- dist/
+
+      - name: Run React component tests (vitest)
+        run: |
+          cd ui/web
+          npx vitest run
+
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
