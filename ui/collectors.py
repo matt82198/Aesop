@@ -418,9 +418,55 @@ def get_tracker_items(status=None, priority=None):
 
     return items
 
+# --- Event-sourced tracker backing (state_store) -----------------------------
+# The event log is the write-authority + audit trail; tracker.json is kept as
+# the rendered export that reads/SSE/UI consume. Each mutation appends an event
+# and re-renders the file (atomic os.replace via save_tracker), replacing the
+# old load->mutate->save read-modify-write that raced under concurrent writers.
+# The live read path (load_tracker / get_tracker_items / SSE snapshot) is
+# unchanged: it still reads tracker.json, which every write keeps current.
+
+def _tracker_api():
+    """Return a StateAPI over state/tracker_events.db (lazy import; call-time paths)."""
+    try:
+        from state_store import StateAPI
+    except ImportError:
+        from pathlib import Path as _Path
+        root = str(_Path(__file__).resolve().parents[1])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from state_store import StateAPI
+    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return StateAPI(str(config.STATE_DIR / "tracker_events.db"))
+
+
+def _ensure_tracker_migrated(api):
+    """Backfill the event log from the existing tracker.json once (idempotent)."""
+    if api.get("tracker"):
+        return
+    if config.TRACKER_FILE.exists():
+        try:
+            data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
+        except Exception:
+            data = {"items": []}
+        for item in data.get("items", []):
+            if isinstance(item, dict) and item.get("id"):
+                api.append("tracker", "item_created", item, "migration")
+
+
+def _tracker_items_by_id(api):
+    return {it["id"]: it for it in api.project("tracker")["items"]}
+
+
+def _render_tracker(api):
+    """Materialize the projection back to tracker.json (atomic)."""
+    save_tracker(api.project("tracker"))
+
+
 def create_tracker_item(data):
-    """Create a new tracker item."""
-    tracker = load_tracker()
+    """Create a new tracker item (event-sourced; tracker.json re-rendered)."""
+    api = _tracker_api()
+    _ensure_tracker_migrated(api)
 
     item = {
         "id": secrets.token_hex(6),
@@ -436,39 +482,43 @@ def create_tracker_item(data):
         "completed_at": None
     }
 
-    tracker["items"].append(item)
-    save_tracker(tracker)
+    api.append("tracker", "item_created", item, item["source"])
+    _render_tracker(api)
     return item
 
 def update_tracker_item(item_id, update_data):
-    """Update a tracker item by id."""
-    tracker = load_tracker()
+    """Update a tracker item by id (event-sourced)."""
+    api = _tracker_api()
+    _ensure_tracker_migrated(api)
 
-    item = next((i for i in tracker["items"] if i["id"] == item_id), None)
-    if not item:
+    current = _tracker_items_by_id(api)
+    if item_id not in current:
         raise Exception(f"404 Item not found: {item_id}")
 
+    patch = {"id": item_id}
     for key in ["status", "lane", "priority", "notes", "pr_link", "tags"]:
         if key in update_data:
-            item[key] = update_data[key]
+            patch[key] = update_data[key]
 
-    if update_data.get("status") == "done" and not item.get("completed_at"):
-        item["completed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if update_data.get("status") == "done" and not current[item_id].get("completed_at"):
+        patch["completed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    save_tracker(tracker)
-    return item
+    api.append("tracker", "item_updated", patch, "api")
+    _render_tracker(api)
+    return _tracker_items_by_id(api)[item_id]
 
 def delete_tracker_item(item_id):
-    """Soft-delete a tracker item (mark as archived)."""
-    tracker = load_tracker()
+    """Soft-delete a tracker item (mark as archived; event-sourced)."""
+    api = _tracker_api()
+    _ensure_tracker_migrated(api)
 
-    item = next((i for i in tracker["items"] if i["id"] == item_id), None)
-    if not item:
+    current = _tracker_items_by_id(api)
+    if item_id not in current:
         raise Exception(f"404 Item not found: {item_id}")
 
-    item["status"] = "archived"
-    save_tracker(tracker)
-    return item
+    api.append("tracker", "item_archived", {"id": item_id}, "api")
+    _render_tracker(api)
+    return _tracker_items_by_id(api)[item_id]
 
 def _snapshot_data():
     """Everything the 'data' SSE section covers (header, repos, events, alerts, messages)."""
