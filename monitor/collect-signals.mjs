@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { acquireLock, releaseLock } from '../tools/lock.mjs';
 
@@ -473,8 +473,15 @@ function performAutoLogRotation(logFiles, actionsLogPath) {
 
     try {
       // Invoke rotate_logs.py with thresholds from config
-      const cmd = `python "${rotateLogsPy}" "${logPath}" --max-lines ${logThresholds.maxLines} --max-bytes ${Math.floor(logThresholds.maxKb * 1024)}`;
-      execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] });
+      // Use execFileSync instead of execSync for command injection protection (no shell)
+      execFileSync('python', [
+        rotateLogsPy,
+        logPath,
+        '--max-lines',
+        String(logThresholds.maxLines),
+        '--max-bytes',
+        String(Math.floor(logThresholds.maxKb * 1024)),
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
       rotatedLogs.push(log.name);
 
       // Log the AUTO action
