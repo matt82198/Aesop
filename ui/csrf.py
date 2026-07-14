@@ -11,6 +11,7 @@ config.reload() is called (e.g., between test fixtures).
 """
 import os
 import secrets
+import sys
 from pathlib import Path
 
 # Must import config module, never "from config import <paths>"
@@ -57,8 +58,8 @@ def _generate_session_token():
             token = token_file.read_text().strip()
             if token and len(token) >= 32:
                 return token
-        except:
-            pass
+        except Exception as e:
+            print(f"[csrf] Failed to read token file: {e}", file=sys.stderr)
 
     # Generate new token: 32 random bytes → 43-char base64-like string
     token = secrets.token_urlsafe(32)
@@ -87,8 +88,8 @@ def _generate_session_token():
                 token = token_file.read_text().strip()
                 if token and len(token) >= 32:
                     return token
-            except:
-                pass
+            except Exception as e:
+                print(f"[csrf] Failed to read existing token file: {e}", file=sys.stderr)
             # If we can't read the existing file, fall back to in-memory token
     except Exception:
         pass  # Fail-open: token exists in memory even if file write fails
