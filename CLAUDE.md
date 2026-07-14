@@ -8,6 +8,7 @@
 - **daemons/** — Watchdog daemon (repo backup, secret-scan gate, heartbeat) — see daemons/CLAUDE.md
 - **dash/** — TUI dashboard (watchdog-gui.sh, real-time fleet status) — see dash/CLAUDE.md
 - **monitor/** — Orchestration monitor (collect-signals.mjs, CHARTER.md, AUTO/PROPOSE logic) — see monitor/CLAUDE.md
+- **mcp/** — Read-only MCP server (fleet status, agents, tracker, costs) — see mcp/CLAUDE.md
 - **tools/** — Build utilities (secret_scan.py, agent-forensics.sh, launch_tui.py, power_selftest.py, inbox_drain.py) — see tools/CLAUDE.md
 - **hooks/** — Git pre-push policy enforcement (branch protection, secret scanning) — see hooks/CLAUDE.md
 - **bin/** — CLI scaffolder (Node.js entry point for aesop template) — see bin/CLAUDE.md
