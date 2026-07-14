@@ -27,15 +27,23 @@ def render_dashboard(session_token, template_path=None):
 
     Args:
         session_token: the per-session CSRF token to inject.
-        template_path: optional path to an alternate sentinel-carrying template
-            (the wave-14 built app's dist/index.html). Defaults to the legacy
-            templates/dashboard.html when omitted.
+        template_path: path to the template file carrying the CSRF sentinel
+            (wave-14 U9 cutover: dist/index.html is always required; no
+            fallback to templates/dashboard.html).
 
     Reads the template fresh each call (cheap; keeps edits live in dev). The
     token is inserted as a JS string literal via json.dumps so it is always a
     valid, properly-quoted value.
+
+    Raises:
+        TypeError: if template_path is None (legacy fallback removed at U9).
+        FileNotFoundError: if the template file does not exist.
     """
-    path = template_path if template_path is not None else _DASHBOARD_HTML
-    with open(path, encoding="utf-8") as f:
+    if template_path is None:
+        raise TypeError(
+            "render_dashboard() requires template_path after wave-14 U9 cutover; "
+            "legacy fallback to templates/dashboard.html has been removed"
+        )
+    with open(template_path, encoding="utf-8") as f:
         html = f.read()
     return html.replace(_CSRF_SENTINEL, json.dumps(session_token))
