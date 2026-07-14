@@ -15,6 +15,16 @@
 - **templates/dashboard.html** — The dashboard HTML/CSS/JS (extracted from the serve.py string), incl. tracker panel + orchestrator-status panel + audit-cycle ASCII banner.
 - **README.md** — User guide and configuration reference.
 
+## API Package (ui/api/)
+
+Shared mutation-request validation and domain-logic handlers (wave-10 split from handler.py). Every mutating endpoint (`/submit`, `POST /api/tracker`, `POST /api/tracker/<id>`) gates requests identically: CSRF token validation, Content-Length bounds-check, then JSON decode. This module centralizes those gates so they are directly unit-testable without HTTP coupling.
+
+- **__init__.py** — Shared mutation gate (`validate_mutation()`). Performs CSRF validation + Content-Length bounds-check (10 KB cap) + JSON decode. Returns `(True, parsed_json)` on success or `(False, (status_code, error_dict))` on gate failure. **Load-bearing rule**: callers must bound the socket read using the same Content-Length header before invoking, to prevent DoS; MAX_BODY_BYTES is re-derived here for validation but socket read is caller's responsibility.
+- **submit.py** — Inbox-append logic (`append_to_inbox(text)`). Appends one timestamped line to `config.INBOX_FILE`, rejects symlinks (TOCTOU defense), creates file with header if missing.
+- **tracker.py** — Tracker CRUD handlers (`list_items()`, `create()`, `update()`, `delete()`). Calls `collectors` tracker functions; returns `(status_code, response_dict)` for direct HTTP response writing. **Load-bearing**: all tracker mutations pass through `validate_mutation()` in create; update/delete check CSRF via `csrf.validate_csrf_request()` performed by caller before path is parsed.
+
+**Key invariant**: All three modules read `config.X` live via `import config` at call time, never `from config import X`. A frozen import goes stale after `config.reload()` (breaks test-fixture isolation). See ui/CLAUDE.md "load-bearing rule" note above.
+
 ## Configuration & Path Precedence
 
 Configuration is resolved in this order (first match wins):

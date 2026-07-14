@@ -8,40 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Work-item Tracker**: 4-lane kanban dashboard (proposed | ranked | in-progress | done) with full CRUD API and SSE updates, priority chips (P0-P3), expandable item details, and archive support.
-- **Orchestrator Status Panel**: Real-time activity, phase, and age display for orchestrators with stale detection (>30m).
-- **ASCII Banner**: Animated audit-phase indicator (tortoise + magnifying glass) in dashboard.
-- **UI Module Refactoring**: Split monolithic `serve.py` into focused modules (`config.py`, `csrf.py`, `render.py`, `handler.py`, `collectors.py`, `agents.py`, `sse.py`) with templates in `ui/templates/`.
-
-### Improved
-- **Security Hardening**: CSRF protection on `/api/tracker create`, XSS whitelist for tracker `pr_link` (http/https only, blocks `javascript:`), fail-closed lock acquisition with PID liveness verification.
-- **Stability**: Fixed SSE exception handling, timezone-aware datetime collection, stale lock timestamp spoofing prevention.
-- **Lock Robustness**: Verify owner PID liveness before breaking stale locks; exponential backoff on acquisition.
+- **Stall Detection** (wave-12): `tools/stall_check.py` silent-hang detection for the agent watchdog.
+- **CI-Gated Merge Helper** (wave-12): `tools/ci_merge_wait.py` awaits CI success before merge.
 
 ### Fixed
-- Tracker render lanes when empty; CSRF token handling on add-item form.
-- Orchestrator status encoding (cp1252 byte handling).
-- SSE undefined exception binding in broadcast cleanup.
-- Collector timezone awareness and import hygiene.
+- **Wave-12 Stability**: Swallowed failures now loud; `sse.reset_state()` locked for concurrent test isolation; tracker writes in tempdir; symlink/path-injection guards in rotate-logs.
+- **Wave-11 Security**: Dangling symlink inbox rejection; real handler exercise over HTTP; staged merge tier + model policy hook.
+
+## [Wave-10] - 2026-07-10
+
+### Added
+- **UI API Package** (`ui/api/`): Extracted mutation-gate helpers (`validate_mutation()`, `append_to_inbox()`, tracker CRUD handlers) from monolithic handler.py for direct unit testing.
+- **Work-item Tracker**: 4-lane kanban (proposed | ranked | in-progress | done) with full CRUD API and SSE updates, priority chips (P0-P3), expandable item details.
+- **Orchestrator Status Panel**: Real-time activity, phase, age display with stale detection (>30m).
+- **Dashboard ASCII Banner**: Animated audit-phase indicator (tortoise + magnifying glass).
+- **UI Module Refactoring**: Split monolithic `serve.py` → focused modules (`config.py`, `csrf.py`, `render.py`, `handler.py`, `collectors.py`, `agents.py`, `sse.py`).
+
+### Improved
+- **Security**: CSRF on /api/tracker create; XSS whitelist for pr_link (http/https only, blocks javascript:); fail-closed lock with PID liveness.
+- **Stability**: SSE exception handling; timezone-aware datetime; stale lock timestamp spoofing prevention.
+
+## [Wave-9] - 2026-06-30
+
+### Added
+- **UI Module Split**: Monolithic `serve.py` refactored into composable modules for maintainability and direct testing (config, csrf, render, handler, collectors, agents, sse).
+- **Real Handler Tests**: Seam tests exercising render, collectors, agents without full HTTP coupling (wave-10 P0 foundation).
 
 ## [0.1.0-beta.3] - 2026-07-12
 
 ### Added
-- Hardened rule documentation (CARDINAL-RULES, DISPATCH-MODEL, new GOVERNANCE.md)
-- Real orchestration monitor signal collector with 10 standing health checks (replaces stub monitor)
+- Hardened rule documentation (CARDINAL-RULES, DISPATCH-MODEL, GOVERNANCE.md).
+- Real orchestration monitor with 10 standing health checks (replaced stub).
 
 ### Improved
-- Enhanced monitoring infrastructure for production observability
-
-## [Unreleased]
-
-### Agent Behavior as Source Code — Five Pillars
-
-1. **Onboarding-by-clone** — [CLAUDE-TEMPLATE.md](./CLAUDE-TEMPLATE.md), [docs/MEMORY-TEMPLATE.md](./docs/MEMORY-TEMPLATE.md); brain scaffolding via `bin/cli.js`.
-2. **Guardrails-in-code** — [hooks/pre-push-policy.sh](./hooks/pre-push-policy.sh) branch discipline + secret-scan gate; audit trail in [state/SECURITY-AUDIT.log](./state/SECURITY-AUDIT.log).
-3. **Behavioral PRs** — [.github/pull_request_template.md](./.github/pull_request_template.md), [docs/BEHAVIORAL-PR-REVIEW.md](./docs/BEHAVIORAL-PR-REVIEW.md), [CONTRIBUTING.md](./CONTRIBUTING.md) enforcement and process.
-4. **Forensic replay** — [tools/agent-forensics.sh](./tools/agent-forensics.sh) (`--diff behavior-surface` mode), [docs/FORENSICS.md](./docs/FORENSICS.md) git-bisect recipes.
-5. **Cross-machine continuity** — [docs/RESTORE.md](./docs/RESTORE.md) reconstitution playbook.
+- Production observability infrastructure.
 
 ## [1.0.0] - 2026-07-11
 
