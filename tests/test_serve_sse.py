@@ -25,6 +25,7 @@ import unittest
 from pathlib import Path
 
 SERVE_PATH = Path(__file__).parent.parent / "ui" / "serve.py"
+UI_PATH = Path(__file__).parent.parent / "ui"
 
 FIXTURE_BACKLOG = """# Audit backlog — test fixture
 
@@ -173,8 +174,14 @@ class TestSSERealtime(EnvFixtureCase):
         self.backlog_file = self.fixture_root / "AUDIT-BACKLOG.md"
         self.backlog_file.write_text(FIXTURE_BACKLOG, encoding="utf-8")
         self.serve = load_serve(self.fixture_root)
-        self.httpd = __import__("http.server", fromlist=["ThreadingHTTPServer"]) \
-            .ThreadingHTTPServer(("127.0.0.1", 0), self.serve.DashboardHandler)
+
+        # Load handler module to get QuietThreadingHTTPServer
+        if str(UI_PATH) not in sys.path:
+            sys.path.insert(0, str(UI_PATH))
+        import handler
+
+        # Use QuietThreadingHTTPServer to suppress socket disconnect exceptions
+        self.httpd = handler.QuietThreadingHTTPServer(("127.0.0.1", 0), self.serve.DashboardHandler)
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
         self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)

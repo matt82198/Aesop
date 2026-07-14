@@ -19,12 +19,15 @@ import importlib.util
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
 SERVE_PATH = Path(__file__).parent.parent / "ui" / "serve.py"
+UI_PATH = Path(__file__).parent.parent / "ui"
 
 ENV_KEYS = ("AESOP_ROOT", "AESOP_TRANSCRIPTS_ROOT", "AESOP_STATE_ROOT",
             "AESOP_UI_COLLECT_INTERVAL", "PORT")
@@ -54,8 +57,13 @@ class TrackerCSRFTestCase(unittest.TestCase):
         self.token = self.serve.SESSION_TOKEN
         self.assertTrue(self.token, "fixture must produce a session token")
 
-        self.httpd = __import__("http.server", fromlist=["ThreadingHTTPServer"]) \
-            .ThreadingHTTPServer(("127.0.0.1", 0), self.serve.DashboardHandler)
+        # Load handler module to get QuietThreadingHTTPServer
+        if str(UI_PATH) not in sys.path:
+            sys.path.insert(0, str(UI_PATH))
+        import handler
+
+        # Use QuietThreadingHTTPServer to suppress socket disconnect exceptions
+        self.httpd = handler.QuietThreadingHTTPServer(("127.0.0.1", 0), self.serve.DashboardHandler)
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
         self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -82,7 +90,7 @@ class TrackerCSRFTestCase(unittest.TestCase):
         # Retry transient Windows socket aborts (WSAECONNABORTED / reset) that can
         # surface when many ThreadingHTTPServer instances churn in one test process.
         last = None
-        for _ in range(3):
+        for attempt in range(3):
             con = self._conn()
             try:
                 con.request(method, path, body=body, headers=headers or {})
@@ -91,6 +99,9 @@ class TrackerCSRFTestCase(unittest.TestCase):
             except (ConnectionAbortedError, ConnectionResetError,
                     http.client.RemoteDisconnected) as e:
                 last = e
+                if attempt < 2:
+                    # Small delay between retries to allow server to stabilize
+                    time.sleep(0.1)
                 continue
             finally:
                 con.close()
