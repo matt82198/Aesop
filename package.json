@@ -15,6 +15,7 @@
     "ui/",
     "docs/",
     "hooks/",
+    "skills/",
     "aesop.config.example.json",
     "CLAUDE-TEMPLATE.md",
     "README.md",

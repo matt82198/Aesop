@@ -26,25 +26,46 @@ function loadConfigFile(aesopRoot) {
   return {};
 }
 
+// Helper: expand ~ and environment variables in paths for portability
+function expandPath(pathStr) {
+  if (!pathStr) return pathStr;
+  // Expand ~ to home directory
+  if (pathStr.startsWith('~')) {
+    return path.join(os.homedir(), pathStr.slice(1));
+  }
+  // Expand environment variables like $VAR or %VAR%
+  return pathStr.replace(/\$\{?([A-Z_]+)\}?/gi, (match, varName) => {
+    return process.env[varName] || match;
+  });
+}
+
 // Precedence: env var > config file > built-in default
 const AESOP_ROOT = process.env.AESOP_ROOT || '.';
 const config = loadConfigFile(AESOP_ROOT);
 
-const BRAIN_ROOT = process.env.BRAIN_ROOT ||
+const BRAIN_ROOT = expandPath(
+  process.env.BRAIN_ROOT ||
   config.brain_root ||
-  path.join(AESOP_ROOT, '..', '.claude');
+  path.join(AESOP_ROOT, '..', '.claude')
+);
 
-const SCRIPTS_ROOT = process.env.SCRIPTS_ROOT ||
+const SCRIPTS_ROOT = expandPath(
+  process.env.SCRIPTS_ROOT ||
   config.scripts_root ||
-  path.join(AESOP_ROOT, '..', 'scripts');
+  path.join(AESOP_ROOT, '..', 'scripts')
+);
 
-const TEMP_ROOT = process.env.TEMP_ROOT ||
+const TEMP_ROOT = expandPath(
+  process.env.TEMP_ROOT ||
   config.temp_root ||
-  path.join(os.tmpdir(), 'claude');
+  path.join(os.tmpdir(), 'claude')
+);
 
-const STATE_DIR = process.env.AESOP_STATE_ROOT ||
+const STATE_DIR = expandPath(
+  process.env.AESOP_STATE_ROOT ||
   config.state_root ||
-  path.join(AESOP_ROOT, 'state');
+  path.join(AESOP_ROOT, 'state')
+);
 
 const MON = path.join(AESOP_ROOT, 'monitor');
 
