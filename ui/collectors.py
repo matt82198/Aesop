@@ -37,7 +37,8 @@ def parse_audit_backlog():
             return result
 
         content = config.AUDIT_BACKLOG_FILE.read_text(encoding='utf-8')
-    except:
+    except Exception as e:
+        print(f"[collectors] Failed to read audit backlog: {e}", file=sys.stderr)
         return result
 
     # Split into lines
@@ -162,7 +163,8 @@ def get_heartbeat_status():
             try:
                 content = config.WATCHDOG_HEARTBEAT.read_text().strip()
                 timestamp = int(content)
-            except:
+            except Exception as e:
+                print(f"[collectors] Failed to parse watchdog heartbeat: {e}", file=sys.stderr)
                 return {"alive": "unknown", "age": -1, "threshold": 300}
         # Age in seconds: now_seconds - heartbeat_seconds
         age_seconds = int(time()) - timestamp
@@ -170,7 +172,8 @@ def get_heartbeat_status():
         age_bucketed = (age_seconds // 3) * 3
         alive = "ALIVE" if age_seconds < 300 else "STALE"
         return {"alive": alive, "age": age_bucketed, "threshold": 300}
-    except:
+    except Exception as e:
+        print(f"[collectors] Failed to get watchdog heartbeat: {e}", file=sys.stderr)
         return {"alive": "unknown", "age": -1, "threshold": 300}
 
 def get_monitor_heartbeat_status():
@@ -201,7 +204,8 @@ def get_monitor_heartbeat_status():
             try:
                 content = monitor_hb.read_text().strip()
                 timestamp = int(content)
-            except:
+            except Exception as e:
+                print(f"[collectors] Failed to parse monitor heartbeat: {e}", file=sys.stderr)
                 return {"alive": "unknown", "age": -1, "threshold": 3600}
         # Age in seconds: now_seconds - heartbeat_seconds
         age_seconds = int(time()) - timestamp
@@ -209,7 +213,8 @@ def get_monitor_heartbeat_status():
         age_bucketed = (age_seconds // 3) * 3
         alive = "ALIVE" if age_seconds < 3600 else "STALE"
         return {"alive": alive, "age": age_bucketed, "threshold": 3600}
-    except:
+    except Exception as e:
+        print(f"[collectors] Failed to get monitor heartbeat: {e}", file=sys.stderr)
         return {"alive": "unknown", "age": -1, "threshold": 3600}
 
 def get_main_thread_messages():
@@ -260,8 +265,8 @@ def get_main_thread_messages():
                     pass
             # Keep only last 12
             messages = messages[-12:]
-    except:
-        pass
+    except Exception as e:
+        print(f"[collectors] Failed to read main thread messages: {e}", file=sys.stderr)
     return messages
 
 def get_repos_status():
@@ -275,8 +280,8 @@ def get_repos_status():
             repos = data[:10]  # Limit to 10
         elif isinstance(data, dict):
             repos = [{"repo": k, "state": v} for k, v in data.items()][:10]
-    except:
-        pass
+    except Exception as e:
+        print(f"[collectors] Failed to read repos status: {e}", file=sys.stderr)
     return repos
 
 def get_recent_events():
@@ -287,8 +292,8 @@ def get_recent_events():
             return events
         lines = config.BACKUP_LOG.read_text().strip().split('\n')
         events = [line.strip() for line in lines[-8:] if line.strip()]
-    except:
-        pass
+    except Exception as e:
+        print(f"[collectors] Failed to read recent events: {e}", file=sys.stderr)
     return events
 
 def get_alerts():
@@ -306,8 +311,8 @@ def get_alerts():
         ]
         alerts["count"] = len(unreviewed)
         alerts["lines"] = unreviewed[-5:]  # Show last 5
-    except:
-        pass
+    except Exception as e:
+        print(f"[collectors] Failed to read alerts: {e}", file=sys.stderr)
     return alerts
 
 def load_tracker():
@@ -326,8 +331,8 @@ def load_tracker():
         try:
             if config.TRACKER_FILE.exists():
                 config.TRACKER_FILE.rename(corrupt_path)
-        except:
-            pass
+        except Exception as e:
+            print(f"[tracker] Failed to rename corrupt tracker: {e}", file=sys.stderr)
         return {"version": 1, "items": []}
 
 def save_tracker(tracker):
@@ -342,8 +347,8 @@ def save_tracker(tracker):
         print(f"[tracker] Error saving tracker: {e}", file=sys.stderr)
         try:
             temp_file.unlink()
-        except:
-            pass
+        except Exception as ue:
+            print(f"[tracker] Failed to unlink temp file: {ue}", file=sys.stderr)
         raise
 
 def migrate_tracker_from_backlog():
@@ -513,8 +518,8 @@ def _snapshot_orchestrator_status():
                     updated_at = datetime.fromisoformat(updated_at_str)
                     age_seconds = int((datetime.now(timezone.utc).replace(tzinfo=None) - updated_at).total_seconds())
                     stale = age_seconds > 1800
-            except:
-                pass
+            except Exception as e:
+                print(f"[collectors] Failed to parse orchestrator timestamp: {e}", file=sys.stderr)
             entry = dict(data)
             entry["age_seconds"] = age_seconds
             entry["stale"] = stale

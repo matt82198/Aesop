@@ -41,8 +41,9 @@ def reset_state():
     """
     global _collector_started, _collector_stop_event
     _collector_stop_event.set()            # stop a thread left over from a prior import
-    _collector_stop_event = threading.Event()
-    _collector_started = False
+    with _collector_lock:
+        _collector_stop_event = threading.Event()
+        _collector_started = False
     with _latest_lock:
         for k in list(_latest_snapshots):
             _latest_snapshots[k] = None

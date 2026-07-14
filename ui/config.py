@@ -10,6 +10,7 @@ Config precedence: env vars > aesop.config.json > built-in defaults.
 """
 import json
 import os
+import sys
 from pathlib import Path
 
 
@@ -42,8 +43,8 @@ def reload():
         try:
             with open(CONFIG_FILE) as f:
                 config_data = json.load(f)
-        except:
-            pass
+        except Exception as e:
+            print(f"[config] Failed to load {CONFIG_FILE}: {e}", file=sys.stderr)
 
     # Derive paths with precedence: env var > config file > built-in default
     # STATE_DIR: env AESOP_STATE_ROOT > config state_root > AESOP_ROOT/state
