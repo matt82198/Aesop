@@ -112,7 +112,7 @@ Read [docs/CARDINAL-RULES.md](./docs/CARDINAL-RULES.md) for the full text.
 
 The **dispatch model** fans work across parallel Haiku subagents (each 1/3 the cost of Opus). The orchestrator stays lean on the main thread, coordinating via durable STATE.md. Result: ~25% the cost of an all-Opus fleet.
 
-**Action tiers**: AUTO (immediate, logged) for read-only checks and appends; PROPOSE (staged in `monitor/PROPOSALS.md`) for changes requiring approval. See [docs/MONITOR-GOVERNANCE.md](./docs/MONITOR-GOVERNANCE.md).
+**Action tiers**: AUTO (immediate, logged) for read-only checks and appends; PROPOSE (staged in `monitor/PROPOSALS.md`) for changes requiring approval. See [docs/GOVERNANCE.md](./docs/GOVERNANCE.md).
 
 ## Security
 
@@ -148,8 +148,8 @@ Private brain (`~/.claude`) is never committed to this repo. Keep `aesop.config.
 For deeper docs, see `docs/`:
 - `CARDINAL-RULES.md` — full 10 principles
 - `DISPATCH-MODEL.md` — cost analysis and patterns
-- `STATE-MACHINE.md` — how STATE.md + BUILDLOG.md survive wipes
-- `MONITOR-GOVERNANCE.md` — AUTO/PROPOSE tiers
+- `CHECKPOINTING.md` — how STATE.md + BUILDLOG.md survive wipes
+- `GOVERNANCE.md` — AUTO/PROPOSE tiers
 
 See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
