@@ -1,0 +1,385 @@
+/**
+ * Shared test fixtures + the data-testid naming contract.
+ *
+ * TESTIDS is the SINGLE SOURCE OF TRUTH for data-testid values across the app.
+ * U4–U7 components MUST attach these testids; U8's Playwright proofs assert
+ * ONLY via these hooks (never CSS internals). Add new ids here first, then
+ * use them from components — never inline a bare testid string.
+ *
+ * Fixture objects are realistic samples of every API payload type in
+ * src/lib/types.ts. U4–U7 import these for component tests.
+ */
+
+import type {
+  Agent,
+  AgentDetail,
+  Alert,
+  AuditBacklog,
+  CostSummary,
+  DashboardData,
+  FullState,
+  HeartbeatStatus,
+  Message,
+  OrchestratorStatus,
+  RepoStatus,
+  TrackerItem,
+  TrackerSnapshot,
+} from '../lib/types';
+
+/* ------------------------------------------------------------------ */
+/* data-testid contract                                                */
+/* ------------------------------------------------------------------ */
+
+export const TESTIDS = {
+  // Health header (sticky, always visible)
+  healthHeader: 'health-header',
+  healthWatchdog: 'health-watchdog',
+  healthMonitor: 'health-monitor',
+  healthOrchestrator: 'health-orchestrator',
+  healthAgentsCount: 'health-agents-count',
+  healthAlertsCount: 'health-alerts-count',
+  sseStatus: 'sse-status',
+  themeToggle: 'theme-toggle',
+  refreshButton: 'refresh-button',
+
+  // Overview view
+  viewOverview: 'view-overview',
+  agentRow: 'agent-row',
+  agentRowDetail: 'agent-row-detail',
+  alertLine: 'alert-line',
+  alertsPanel: 'alerts-panel',
+  eventsFeed: 'events-feed',
+  reposPanel: 'repos-panel',
+  inboxForm: 'inbox-form',
+  inboxInput: 'inbox-input',
+  inboxSubmit: 'inbox-submit',
+
+  // Work view
+  viewWork: 'view-work',
+  trackerBoard: 'tracker-board',
+  trackerLane: 'tracker-lane',
+  trackerCard: 'tracker-card',
+  trackerForm: 'tracker-form',
+  trackerFormTitle: 'tracker-form-title',
+  trackerFormSubmit: 'tracker-form-submit',
+  backlogPanel: 'backlog-panel',
+
+  // Activity view
+  viewActivity: 'view-activity',
+  timeline: 'timeline',
+  timelineBar: 'timeline-bar',
+  messagesTail: 'messages-tail',
+  messagesFollowToggle: 'messages-follow-toggle',
+
+  // Cost view
+  viewCost: 'view-cost',
+  costTable: 'cost-table',
+  costChart: 'cost-chart',
+  scorecard: 'scorecard',
+} as const;
+
+export type TestId = (typeof TESTIDS)[keyof typeof TESTIDS];
+
+/* ------------------------------------------------------------------ */
+/* Fixtures                                                            */
+/* ------------------------------------------------------------------ */
+
+export const fixtureWatchdog: HeartbeatStatus = {
+  alive: 'ALIVE',
+  age: 3,
+  threshold: 300,
+};
+
+export const fixtureWatchdogStale: HeartbeatStatus = {
+  alive: 'STALE',
+  age: 642,
+  threshold: 300,
+};
+
+export const fixtureMonitor: HeartbeatStatus = {
+  alive: 'ALIVE',
+  age: 45,
+  threshold: 3600,
+};
+
+export const fixtureMonitorNotRunning: HeartbeatStatus = {
+  alive: 'not running',
+  age: -1,
+  threshold: 3600,
+};
+
+export const fixtureAgents: Agent[] = [
+  {
+    id: 'a77b995bcdb95',
+    project: 'aesop',
+    status: 'running',
+    age_s: 12,
+    hint: 'wave-14 U4 overview components',
+    startedAt: '2026-07-13T14:02:11.000Z',
+    lastActivity: '2026-07-13T14:31:47.000Z',
+    runtimeSeconds: 1776,
+    tokensUsed: 48213,
+    taskLabel: 'Wave-14 unit U4 (overview view components) for aesop.',
+    promptFull: 'Wave-14 unit U4 (overview view components) for aesop. Read the plan first.',
+  },
+  {
+    id: 'b12c4d99ef012',
+    project: 'aesop',
+    status: 'idle',
+    age_s: 341,
+    hint: 'tracker lane bucketing tests',
+    startedAt: '2026-07-13T13:40:00.000Z',
+    lastActivity: '2026-07-13T14:26:02.000Z',
+    runtimeSeconds: 2762,
+    tokensUsed: 102455,
+    taskLabel: 'Wave-14 unit U5 (work view components) for aesop.',
+    promptFull: 'Wave-14 unit U5 (work view components) for aesop.',
+  },
+  {
+    id: 'c99ff00aa1122',
+    project: 'tr-sample-tracker',
+    status: 'SUSPICIOUS',
+    age_s: 45,
+    hint: 'unexpected file write outside worktree',
+    startedAt: '2026-07-13T14:20:00.000Z',
+    lastActivity: '2026-07-13T14:31:15.000Z',
+    runtimeSeconds: 675,
+    tokensUsed: 8102,
+    taskLabel: 'Fix flaky test in sample tracker suite.',
+    promptFull: 'Fix flaky test in sample tracker suite.',
+  },
+];
+
+export const fixtureAgentDetail: AgentDetail = {
+  id: 'a77b995bcdb95',
+  dispatch_prompt:
+    'Wave-14 unit U4 (overview view components) for aesop. Read the plan FIRST, then implement AgentsPanel, AlertsPanel, EventsFeed with tests.',
+  dispatcher: 'main thread',
+  model: 'claude-haiku-4-5-20251001',
+  message_count: 87,
+  first_seen: 1783346531,
+  last_activity: 1783348307,
+};
+
+export const fixtureAlerts: Alert = {
+  count: 2,
+  lines: [
+    '2026-07-13T09:11:02Z HIGH agent-c99ff00 wrote outside its worktree: C:/Users/matt8/aesop/ui/serve.py',
+    '2026-07-13T11:45:38Z MED agent-b12c4d9 3 consecutive test failures on feat/wave14-u5-work',
+  ],
+};
+
+export const fixtureAlertsEmpty: Alert = { count: 0, lines: [] };
+
+export const fixtureRepos: RepoStatus[] = [
+  { repo: 'aesop', state: 'clean' },
+  { repo: 'tr-sample-tracker', state: 'dirty: 3 files' },
+  { repo: 'ecm-ai', state: 'clean' },
+];
+
+export const fixtureEvents: string[] = [
+  '2026-07-13 14:00:01 BACKUP aesop -> bundle OK (12.4 MB)',
+  '2026-07-13 14:00:04 BACKUP tr-sample-tracker -> bundle OK (3.1 MB)',
+  '2026-07-13 14:05:00 SCAN secret_scan --staged exit 0',
+  '2026-07-13 14:10:22 PUSH aesop feat/wave14-u1-foundation OK',
+];
+
+export const fixtureMessages: Message[] = [
+  {
+    role: 'user',
+    text: 'Run wave 14: dashboard rewrite, start with the foundation unit.',
+    timestamp: '2026-07-13T14:00:12.000Z',
+  },
+  {
+    role: 'assistant',
+    text: 'Dispatching U1 (foundation) to a worktree agent; U3 cost collector runs in parallel.',
+    timestamp: '2026-07-13T14:01:03.000Z',
+  },
+  {
+    role: 'assistant',
+    text: 'U1 scaffold complete: vite build green, vitest 41 passing. Moving to fixtures.',
+    timestamp: '2026-07-13T14:29:44.000Z',
+  },
+];
+
+export const fixtureDashboardData: DashboardData = {
+  watchdog: fixtureWatchdog,
+  monitor: fixtureMonitor,
+  agents: fixtureAgents,
+  repos: fixtureRepos,
+  events: fixtureEvents,
+  alerts: fixtureAlerts,
+  messages: fixtureMessages,
+};
+
+export const fixtureBacklog: AuditBacklog = {
+  tiers: [
+    {
+      tier: 'P0',
+      items: [
+        { status: '✅', tag: '[sec]', title: 'Origin fail-closed on /api/session' },
+        { status: '🔵', tag: '[ui]', title: 'Dashboard rewrite foundation (U1)' },
+        { status: '⬜', tag: '[ui]', title: 'Cutover / to dist index (U9)' },
+      ],
+      done: 1,
+      inflight: 1,
+      todo: 1,
+      total: 3,
+    },
+    {
+      tier: 'P1',
+      items: [
+        { status: '⬜', tag: '[perf]', title: 'SSE keepalive tuning' },
+        { status: '⏸', tag: '[arch]', title: 'Hierarchical orchestration seams' },
+      ],
+      done: 0,
+      inflight: 0,
+      todo: 1,
+      total: 2,
+    },
+  ],
+};
+
+export const fixtureTrackerItems: TrackerItem[] = [
+  {
+    id: '3f9a1b2c4d5e',
+    title: 'Dashboard rewrite: foundation scaffold',
+    priority: 'P0',
+    status: 'in-progress',
+    lane: 'in-progress',
+    source: 'wave14-plan',
+    tags: ['ui', 'wave-14'],
+    notes: 'U1 trunk unit; U4-U7 build on its types/fixtures/shell.',
+    pr_link: 'https://github.com/matt82198/aesop/pull/113',
+    created_at: '2026-07-12T18:30:00Z',
+    completed_at: null,
+  },
+  {
+    id: '8c7d6e5f4a3b',
+    title: 'Cost collector parses OUTCOMES-LEDGER.md',
+    priority: 'P1',
+    status: 'done',
+    lane: 'done',
+    source: 'wave14-plan',
+    tags: ['cost'],
+    notes: null,
+    pr_link: null,
+    created_at: '2026-07-12T18:31:00Z',
+    completed_at: '2026-07-13T09:15:00Z',
+  },
+  {
+    id: '1a2b3c4d5e6f',
+    title: 'Agent timeline read-only v1',
+    priority: 'P2',
+    status: 'todo',
+    lane: 'ranked',
+    source: 'audit-backlog-migration',
+    tags: ['activity'],
+    notes: null,
+    pr_link: null,
+    created_at: '2026-07-11T10:00:00Z',
+    completed_at: null,
+  },
+  {
+    id: '9e8d7c6b5a40',
+    title: 'Replay slider for agent timeline',
+    priority: 'P2',
+    status: 'todo',
+    lane: 'proposed',
+    source: 'ideation',
+    tags: ['activity', 'later'],
+    notes: 'v2 — read-only timeline ships first.',
+    pr_link: null,
+    created_at: '2026-07-11T10:05:00Z',
+    completed_at: null,
+  },
+  {
+    id: 'aa11bb22cc33',
+    title: 'Old dashboard patch attempt (superseded)',
+    priority: 'P2',
+    status: 'archived',
+    lane: 'done',
+    source: 'manual',
+    tags: [],
+    notes: null,
+    pr_link: 'javascript:alert(1)', // deliberately hostile: must render inert via sanitizeUrl
+    created_at: '2026-07-01T08:00:00Z',
+    completed_at: '2026-07-02T08:00:00Z',
+  },
+];
+
+export const fixtureTracker: TrackerSnapshot = { items: fixtureTrackerItems };
+
+export const fixtureStatus: OrchestratorStatus = {
+  orchestrators: [
+    {
+      id: 'main',
+      role: 'orchestrator',
+      age_seconds: 42,
+      stale: false,
+      updated_at: '2026-07-13T14:31:00Z',
+    },
+  ],
+};
+
+export const fixtureCost: CostSummary = {
+  models: {
+    'claude-haiku-4-5-20251001': {
+      runs: 128,
+      tokens_in: 2140050,
+      tokens_out: 512300,
+      verdicts: { OK: 119, FAILED: 6, EMPTY: 2, HUNG: 1 },
+    },
+    'claude-sonnet-4-5-20250929': {
+      runs: 14,
+      tokens_in: 890120,
+      tokens_out: 210440,
+      verdicts: { OK: 13, FAILED: 1, EMPTY: 0, HUNG: 0 },
+    },
+  },
+  daily_totals: {
+    '2026-07-11': { tokens_in: 1204000, tokens_out: 280100 },
+    '2026-07-12': { tokens_in: 986170, tokens_out: 262300 },
+    '2026-07-13': { tokens_in: 840000, tokens_out: 180340 },
+  },
+  overall_scorecard: {
+    total_runs: 142,
+    ok_count: 132,
+    failed_count: 7,
+    empty_count: 2,
+    hung_count: 1,
+    ok_rate: 0.9296,
+    failed_rate: 0.0493,
+    empty_rate: 0.0141,
+    hung_rate: 0.007,
+  },
+  skipped_lines: 3,
+  has_pricing: false,
+  estimates_by_model: {},
+};
+
+export const fixtureCostWithPricing: CostSummary = {
+  ...fixtureCost,
+  has_pricing: true,
+  estimates_by_model: {
+    'claude-haiku-4-5-20251001': {
+      input_cost: 2.14,
+      output_cost: 2.05,
+      total_cost: 4.19,
+    },
+    'claude-sonnet-4-5-20250929': {
+      input_cost: 2.67,
+      output_cost: 3.16,
+      total_cost: 5.83,
+    },
+  },
+};
+
+export const fixtureFullState: FullState = {
+  data: fixtureDashboardData,
+  backlog: fixtureBacklog,
+  agents: fixtureAgents,
+  tracker: fixtureTracker,
+  status: fixtureStatus,
+  cost: fixtureCost,
+};
