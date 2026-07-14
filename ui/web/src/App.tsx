@@ -13,6 +13,7 @@ import { useHashRoute, type Route } from './lib/useHashRoute';
 import { useSSE } from './lib/useSSE';
 import { HealthHeader } from './components/HealthHeader';
 import { Overview } from './views/Overview';
+import { Cost } from './views/Cost';
 import { TESTIDS } from './test/fixtures';
 
 const THEME_STORAGE_KEY = 'aesop-theme';
@@ -83,10 +84,10 @@ function Placeholder({ name, testid }: { name: string; testid: string }) {
 
 export default function App() {
   const route = useHashRoute();
-  const sse = useSSE();
+  const sseState = useSSE();
   const { toggle } = useTheme();
 
-  const connection = sse.connectionStatus;
+  const connection = sseState.connectionStatus;
 
   const handleRefresh = useCallback(() => {
     window.location.reload();
@@ -95,11 +96,11 @@ export default function App() {
   return (
     <>
       <HealthHeader
-        watchdog={sse.data?.watchdog ?? null}
-        monitor={sse.data?.monitor ?? null}
-        orchestrator={sse.status ?? null}
-        agents={sse.agents ?? null}
-        alerts={sse.data?.alerts ?? null}
+        watchdog={sseState.data?.watchdog ?? null}
+        monitor={sseState.data?.monitor ?? null}
+        orchestrator={sseState.status ?? null}
+        agents={sseState.agents ?? null}
+        alerts={sseState.data?.alerts ?? null}
         connectionStatus={connection}
         onThemeToggle={toggle}
         onRefresh={handleRefresh}
@@ -114,15 +115,16 @@ export default function App() {
       <main className="app-main">
         {route === '#/' && (
           <Overview
-            agents={sse.agents ?? null}
-            alerts={sse.data?.alerts ?? null}
-            events={sse.data?.events ?? null}
-            repos={sse.data?.repos ?? null}
+            agents={sseState.agents ?? null}
+            alerts={sseState.data?.alerts ?? null}
+            events={sseState.data?.events ?? null}
+            repos={sseState.data?.repos ?? null}
           />
         )}
         {route === '#/work' && <Placeholder name="Work" testid={TESTIDS.viewWork} />}
         {route === '#/activity' && <Placeholder name="Activity" testid={TESTIDS.viewActivity} />}
-        {route === '#/cost' && <Placeholder name="Cost" testid={TESTIDS.viewCost} />}
+        {route === '#/cost' &&
+          (sseState.cost ? <Cost cost={sseState.cost} /> : <Placeholder name="Cost" testid={TESTIDS.viewCost} />)}
       </main>
     </>
   );

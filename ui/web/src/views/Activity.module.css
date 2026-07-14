@@ -1,0 +1,43 @@
+/**
+ * Activity view layout — timeline + messages tail stacked vertically.
+ */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  height: 100%;
+  overflow-y: auto;
+}
+
+.section {
+  flex: 0 1 auto;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+}
+
+.section:first-child {
+  flex: 0 1 40%;
+}
+
+.section:last-child {
+  flex: 1 1 60%;
+}
+
+/* Responsive: allow more height for each section on small screens */
+@media (max-width: 768px) {
+  .container {
+    gap: var(--space-4);
+  }
+
+  .section:first-child {
+    flex: 0 1 auto;
+    min-height: auto;
+  }
+
+  .section:last-child {
+    flex: 1 1 auto;
+    min-height: 250px;
+  }
+}

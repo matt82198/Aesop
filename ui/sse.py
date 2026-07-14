@@ -7,6 +7,7 @@ import sys
 import threading
 
 import config
+import cost
 from collectors import (parse_audit_backlog, _snapshot_data, _snapshot_tracker,
                         _snapshot_orchestrator_status, drain_tracker_inbox)
 from agents import get_fleet_agents, _transcripts_fingerprint
@@ -18,7 +19,8 @@ _sse_clients = []  # list[queue.Queue]
 
 _latest_lock = threading.Lock()
 
-_latest_snapshots = {"data": None, "backlog": None, "agents": None, "tracker": None, "status": None}  # name -> json str
+_latest_snapshots = {"data": None, "backlog": None, "agents": None,
+                     "tracker": None, "status": None, "cost": None}  # name -> json str
 
 _collector_lock = threading.Lock()
 
@@ -105,8 +107,10 @@ def collector_loop(stop_event):
     cached_agents_snapshot = []
     last_tracker_mtime = object()
     last_status_mtime = object()
+    last_cost_mtime = object()
     cached_tracker_snapshot = {'items': []}
     cached_status_snapshot = {'orchestrators': []}
+    cached_cost_snapshot = {}
 
     while not stop_event.is_set():
         try:
@@ -146,6 +150,17 @@ def collector_loop(stop_event):
                 last_status_mtime = status_mtime
                 cached_status_snapshot = _snapshot_orchestrator_status()
             _maybe_emit("status", cached_status_snapshot, last_hashes)
+
+            # Emit cost section (wave-14 6th section; mtime-gated on the
+            # outcomes ledger, mirroring the tracker gate above)
+            try:
+                cost_mtime = config.LEDGER_FILE.stat().st_mtime if config.LEDGER_FILE.exists() else None
+            except OSError:
+                cost_mtime = None
+            if cost_mtime != last_cost_mtime:
+                last_cost_mtime = cost_mtime
+                cached_cost_snapshot = cost.get_cost_summary()
+            _maybe_emit("cost", cached_cost_snapshot, last_hashes)
 
             # Drain inbox
             try:
