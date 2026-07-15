@@ -87,15 +87,19 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 130 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 354 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 141 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 377 <!-- metrics-verified: self_stats.py (git log) --> |
 | Project Age | 3 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Waves | 13 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 68,270 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 253 <!-- metrics-verified: self_stats.py (git log) --> |
+| Waves | 15 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 70,439 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 257 <!-- metrics-verified: self_stats.py (git log) --> |
 | Distinct Co-authors | 7 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- SELF-STATS:END -->
+
+## Recommended Agents
+
+Aesop pairs well with the open-source [Claude specialized-agent catalog](https://github.com/anthropics/claude-code/tree/main/agents) — a library of ~130 domain-specific agents (TDD orchestrators, security reviewers, performance engineers, etc.). For optimal results, install agents from the upstream source and pair them with Aesop's cost-optimized Haiku dispatch. This is optional; Aesop works standalone with general-purpose Claude Code agents.
 
 ## Use with Claude Code
 
