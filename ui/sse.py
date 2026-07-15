@@ -10,7 +10,7 @@ import config
 import cost
 from collectors import (parse_audit_backlog, _snapshot_data, _snapshot_tracker,
                         _snapshot_orchestrator_status, drain_tracker_inbox)
-from agents import get_fleet_agents, _transcripts_fingerprint
+from agents import get_fleet_agents, _transcripts_fingerprint, sanitize_agents_for_broadcast
 
 
 _sse_lock = threading.Lock()
@@ -136,10 +136,31 @@ def collector_loop(stop_event):
     cached_tracker_snapshot = {'items': []}
     cached_status_snapshot = {'orchestrators': []}
     cached_cost_snapshot = {}
+    # Wave-19: Gate data section sources on mtime to avoid expensive reads every tick
+    last_backup_log_mtime = object()  # sentinel
+    last_alerts_log_mtime = object()  # sentinel
+    cached_data_snapshot = {}
 
     while not stop_event.is_set():
         try:
-            _maybe_emit("data", _snapshot_data(), last_hashes)
+            # Wave-19: Gate data section on mtimes to avoid expensive file reads every tick.
+            # Only regenerate the snapshot if one of the underlying log files changed.
+            try:
+                backup_log_mtime = config.BACKUP_LOG.stat().st_mtime if config.BACKUP_LOG.exists() else None
+            except OSError:
+                backup_log_mtime = None
+            try:
+                alerts_log_mtime = config.ALERTS_LOG.stat().st_mtime if config.ALERTS_LOG.exists() else None
+            except OSError:
+                alerts_log_mtime = None
+
+            if (backup_log_mtime != last_backup_log_mtime or
+                alerts_log_mtime != last_alerts_log_mtime):
+                last_backup_log_mtime = backup_log_mtime
+                last_alerts_log_mtime = alerts_log_mtime
+                cached_data_snapshot = _snapshot_data()
+
+            _maybe_emit("data", cached_data_snapshot, last_hashes)
 
             try:
                 backlog_mtime = config.AUDIT_BACKLOG_FILE.stat().st_mtime if config.AUDIT_BACKLOG_FILE.exists() else None
@@ -153,7 +174,9 @@ def collector_loop(stop_event):
             fingerprint = _transcripts_fingerprint()
             if fingerprint != last_agents_fingerprint:
                 last_agents_fingerprint = fingerprint
-                cached_agents_snapshot = get_fleet_agents()
+                agents = get_fleet_agents()
+                # Wave-19: strip large prompt fields before broadcast
+                cached_agents_snapshot = sanitize_agents_for_broadcast(agents)
             _maybe_emit("agents", cached_agents_snapshot, last_hashes)
 
             # Emit tracker section (mtime-gated)

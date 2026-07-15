@@ -281,6 +281,43 @@ check_branch_policy() {
   return 0
 }
 
+get_commit_range() {
+  # Parse pre-push stdin to build commit range for scanning.
+  # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+  # Returns: "remote-sha..local-sha" for diff, or empty if unable to parse
+  local local_ref local_sha remote_ref remote_sha
+
+  if [ -t 0 ]; then
+    # Running interactively on a tty; no stdin to parse
+    return 1
+  fi
+
+  # Read first (and typically only) ref tuple from stdin
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
+    # Skip empty lines
+    if [ -z "$remote_ref" ]; then
+      continue
+    fi
+
+    # Found a valid ref tuple; build the range
+    # If remote_sha is all zeros (new branch), use merge-base with default branch
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+      # New branch: find merge-base with main/master
+      local default_branch="main"
+      if ! git rev-parse "$default_branch" >/dev/null 2>&1; then
+        default_branch="master"
+      fi
+      printf '%s..%s' "$default_branch" "$local_sha"
+    else
+      # Existing branch: use remote sha as base
+      printf '%s..%s' "$remote_sha" "$local_sha"
+    fi
+    return 0
+  done
+
+  return 1
+}
+
 check_secret_scan() {
   local scan_bin
   if command -v python >/dev/null 2>&1; then
@@ -301,17 +338,29 @@ check_secret_scan() {
     return 0
   fi
 
-  # Run scanner and capture output; surface ALLOWED-DOC lines to stderr for visibility
+  # Parse pre-push stdin to get commit range, then scan files in that range
+  local commit_range
+  commit_range=$(get_commit_range)
+  local parse_exit_code=$?
+
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_range" ]; then
+    # Unable to parse stdin or range; log event and warn, but don't block
+    log_event "secret_scan_range_parse_failed"
+    printf 'Warning: Could not parse pre-push stdin for commit range; skipping secret scan\n' >&2
+    return 0
+  fi
+
+  # Run scanner on commit range and capture output
   local scan_output
-  scan_output=$("$scan_bin" "$scan_script" --staged 2>&1)
-  local exit_code=$?
+  scan_output=$("$scan_bin" "$scan_script" --range "$commit_range" 2>&1)
+  local scan_exit_code=$?
 
   # Surface all output including ALLOWED-DOC findings to stderr
   if [ -n "$scan_output" ]; then
     printf '%s\n' "$scan_output" >&2
   fi
 
-  return $exit_code
+  return $scan_exit_code
 }
 
 log_event() {

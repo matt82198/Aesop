@@ -34,8 +34,28 @@ def reload():
     # PORT: env PORT > default 8770
     PORT = int(os.getenv("PORT", "8770"))
 
-    # Determine AESOP_ROOT: env AESOP_ROOT > default $HOME/aesop
-    AESOP_ROOT = Path(os.getenv("AESOP_ROOT", Path.home() / "aesop"))
+    # Determine AESOP_ROOT with fallback tiers (matching daemons/run-watchdog.sh pattern):
+    # (1) AESOP_ROOT env var if set
+    # (2) Derive from file location: Path(__file__).resolve().parents[1]
+    # (3) Load config from derived location; if it has aesop_root, use that
+    env_root = os.getenv("AESOP_ROOT")
+    if env_root:
+        AESOP_ROOT = Path(env_root)
+    else:
+        # Derive from file location (matches daemons/run-watchdog.sh pattern)
+        AESOP_ROOT = Path(__file__).resolve().parents[1]
+
+        # Check if derived location's config has aesop_root key
+        derived_config_file = AESOP_ROOT / "aesop.config.json"
+        if derived_config_file.exists():
+            try:
+                with open(derived_config_file) as f:
+                    derived_config = json.load(f)
+                    if "aesop_root" in derived_config:
+                        AESOP_ROOT = Path(derived_config["aesop_root"])
+            except Exception:
+                # Silently ignore config errors here; will attempt full load below
+                pass
 
     # Try to load config file for additional settings
     CONFIG_FILE = AESOP_ROOT / "aesop.config.json"
