@@ -69,7 +69,9 @@ jobs:
           npm publish --access public --tag "${{ steps.tag.outputs.tag }}"
 
       - name: Diagnose publish failure
-        if: failure() && steps.publish-attempt.outcome == 'failure'
+        # continue-on-error keeps job-level failure() false, so gate on the
+        # step outcome alone — failure() here would make this step dead code.
+        if: steps.publish-attempt.outcome == 'failure'
         run: |
           echo "=========================================="
           echo "PUBLISH FAILED — LIKELY CAUSE:"
