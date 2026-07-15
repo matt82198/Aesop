@@ -22,6 +22,7 @@ interface HealthHeaderProps {
   alerts: Alert | null;
   connectionStatus: SSEConnectionStatus;
   dataTimestamp?: number | null; // Epoch ms when last SSE payload was received
+  now?: number; // Wall-clock time for staleness re-evaluation (updated ~5s)
   onThemeToggle: () => void;
   onRefresh: () => void;
 }
@@ -60,6 +61,7 @@ export function HealthHeader({
   alerts,
   connectionStatus,
   dataTimestamp,
+  now,
   onThemeToggle,
   onRefresh,
 }: HealthHeaderProps) {
@@ -91,7 +93,9 @@ export function HealthHeader({
   const alertsCount = alerts?.count ?? 0;
 
   // Compute data staleness (stale if > 60 seconds old)
-  const dataAgeMs = dataTimestamp ? Date.now() - dataTimestamp : -1;
+  // Use wall-clock 'now' if available for proper re-evaluation without SSE traffic
+  const currentTime = now ?? Date.now();
+  const dataAgeMs = dataTimestamp ? currentTime - dataTimestamp : -1;
   const isDataStale = dataAgeMs > 60000;
   const dataTimeStr = dataTimestamp ? formatRelativeTime(dataTimestamp) : 'unknown';
   const stalenessAge = isDataStale ? formatAge(Math.floor(dataAgeMs / 1000)) : null;
