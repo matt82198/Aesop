@@ -90,13 +90,13 @@ def _is_local_origin(origin):
     )
 
 
-def _is_valid_host_header(host_header):
+def _is_valid_host_header(host_header, expected_port):
     """True if Host header value is on the loopback allowlist.
 
     DNS-rebinding mitigation (wave-19): validates that the Host header
     matches one of the allowed loopback addresses with the correct port.
 
-    Allowed forms (where port matches config.PORT):
+    Allowed forms (where port matches expected_port):
     - 127.0.0.1 (no port, implies http default)
     - 127.0.0.1:<port>
     - localhost (no port)
@@ -106,6 +106,9 @@ def _is_valid_host_header(host_header):
 
     Args:
         host_header: The value of the Host header (may be None/empty)
+        expected_port: the port the server is actually bound to (validate
+            against the live socket, not config.PORT — a test or a
+            dynamically-assigned ephemeral port can differ from config)
 
     Returns:
         bool: True if host is on the local allowlist, False otherwise
@@ -151,9 +154,9 @@ def _is_valid_host_header(host_header):
     if host_part not in allowed_hosts:
         return False
 
-    # If a port was specified, it must match config.PORT
+    # If a port was specified, it must match the server's actual bound port
     if port_part is not None:
-        if port_part != config.PORT:
+        if port_part != expected_port:
             return False
 
     return True
@@ -170,7 +173,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         """Handle GET requests."""
         # DNS-rebinding mitigation: validate Host header against allowlist
         host_header = self.headers.get("Host", "").strip()
-        if not _is_valid_host_header(host_header):
+        if not _is_valid_host_header(host_header, self.server.server_address[1]):
             self.send_response(403)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -213,7 +216,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         """Handle POST requests."""
         # DNS-rebinding mitigation: validate Host header against allowlist
         host_header = self.headers.get("Host", "").strip()
-        if not _is_valid_host_header(host_header):
+        if not _is_valid_host_header(host_header, self.server.server_address[1]):
             self.send_response(403)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
