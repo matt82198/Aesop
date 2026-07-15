@@ -3,9 +3,10 @@
 secret_scan.py — Pre-push secret/credential detection gate.
 
 Modes:
-  secret_scan.py --staged [--repo PATH]  Scan git staged files (default repo=cwd)
-  secret_scan.py --history [--repo PATH] Scan all blobs in git history
-  secret_scan.py PATH [PATH...]          Scan files/dirs directly (recurse dirs)
+  secret_scan.py --staged [--repo PATH]              Scan git staged files (default repo=cwd)
+  secret_scan.py --range COMMIT_RANGE [--repo PATH]  Scan files changed in range (e.g., main..HEAD or abc123..def456)
+  secret_scan.py --history [--repo PATH]             Scan all blobs in git history
+  secret_scan.py PATH [PATH...]                      Scan files/dirs directly (recurse dirs)
 
 Exit codes: 0=clean, 1=findings, 2=usage error
 Output: one line per finding or summary (never prints full secrets)
@@ -50,7 +51,7 @@ PATTERNS = {
     "slack_token": (r"xox[baprs]-[A-Za-z0-9-]{10,}", 0),
     "openai_anthropic_key": (r"sk-[A-Za-z0-9_\-]{20,}", 0),
     "generic_secret_assignment": (
-        r"(password|passwd|secret|api[_-]?key|token|authorization)\s*[:=]\s*[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']",
+        r"\b(password|passwd|secret|api[_-]?key|token|authorization)\b\s*(?::=|=)\s*(?:[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']|(?!['\"]|xxx|changeme|your-|example)[^\s\$\<\{\n]+)",
         re.IGNORECASE,
     ),
     "connection_string": (
@@ -342,6 +343,27 @@ def get_staged_files(repo_path):
         return []
 
 
+def get_range_files(repo_path, commit_range):
+    """Get list of files changed in commit range (e.g., 'main..HEAD' or 'abc123..def456')."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", commit_range],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+        return [
+            Path(repo_path) / f
+            for f in result.stdout.strip().split("\n")
+            if f.strip()
+        ]
+    except Exception:
+        return []
+
+
 def get_history_files(repo_path):
     """Get all file contents from git history via git log -p."""
     files_content = []
@@ -413,6 +435,11 @@ def main():
         help="Scan git staged files (requires --repo or uses cwd)",
     )
     parser.add_argument(
+        "--range",
+        metavar="COMMIT_RANGE",
+        help="Scan files changed in commit range (e.g., 'main..HEAD' or 'abc123..def456')",
+    )
+    parser.add_argument(
         "--history",
         action="store_true",
         help="Scan all blobs in git history (requires --repo or uses cwd)",
@@ -428,14 +455,17 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate usage
-    if sum([args.staged, args.history, bool(args.paths)]) != 1:
-        print("ERROR: Use exactly one of --staged, --history, or path arguments", file=sys.stderr)
+    # Validate usage: exactly one of --staged, --range, --history, or paths
+    mode_count = sum([args.staged, bool(args.range), args.history, bool(args.paths)])
+    if mode_count != 1:
+        print("ERROR: Use exactly one of --staged, --range, --history, or path arguments", file=sys.stderr)
         sys.exit(2)
 
     # Collect files to scan
     if args.staged:
         files = get_staged_files(args.repo)
+    elif args.range:
+        files = get_range_files(args.repo, args.range)
     elif args.history:
         # History mode: scan all files from git log
         history_files = get_history_files(args.repo)
