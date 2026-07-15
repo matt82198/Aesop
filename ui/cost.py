@@ -81,8 +81,8 @@ def _validate_ledger_format(lines):
         if not line:
             continue
 
-        # Skip separator lines (all dashes and pipes)
-        if all(c in '|-' for c in line):
+        # Skip separator lines (all dashes, pipes, and spaces)
+        if all(c in '|- ' for c in line):
             continue
 
         # This is the first real line; validate it
@@ -202,14 +202,18 @@ def get_cost_summary():
         if not line:
             continue
 
-        # Skip header separator lines (all dashes and pipes) — silently, don't count as skipped
-        if all(c in '|-' for c in line):
+        # Skip header separator lines (all dashes, pipes, and spaces) — silently, don't count as skipped
+        if all(c in '|- ' for c in line):
             continue
 
         # Parse pipe-delimited row
         if not line.startswith('|') or not line.endswith('|'):
             print(f"[cost] Skipping malformed line (no pipe delimiters): {line[:50]}", file=sys.stderr, flush=True)
             result["skipped_lines"] += 1
+            continue
+
+        # Skip separator lines (all dashes, pipes, and spaces) — silently, don't count as skipped
+        if all(c in '|- ' for c in line):
             continue
 
         # Split by pipe and strip whitespace
