@@ -203,11 +203,21 @@ processed_paths=""
 repos_to_scan=""
 config_file="$AESOP_ROOT/aesop.config.json"
 if [ -f "$config_file" ]; then
-  # Parse repos array from config using Python (not grep)
-  repos_to_scan=$(python3 -c "
+  # Find Python interpreter (portable: prefer python3, fallback to python)
+  python_exe=""
+  if command -v python3 >/dev/null 2>&1; then
+    python_exe="python3"
+  elif command -v python >/dev/null 2>&1; then
+    python_exe="python"
+  fi
+
+  if [ -n "$python_exe" ]; then
+    # Parse repos array from config using Python (not grep)
+    # Note: Strip trailing \r (CRLF compatibility) and empty lines
+    repos_to_scan=$($python_exe -c "
 import json, sys
 try:
-  with open('$config_file', 'r') as f:
+  with open(sys.argv[1], 'r') as f:
     config = json.load(f)
     repos = config.get('repos', [])
     if isinstance(repos, list) and len(repos) > 0:
@@ -216,7 +226,8 @@ try:
           print(repo['path'])
 except Exception as e:
   pass
-" 2>/dev/null)
+" "$config_file" 2>/dev/null | tr -d '\r')
+  fi
 fi
 
 if [ -n "$repos_to_scan" ]; then

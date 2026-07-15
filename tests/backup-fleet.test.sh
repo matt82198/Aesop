@@ -483,6 +483,9 @@ test_audit_fix_1_config_repos_honored() {
   setup_fixture
   create_mock_scanner
 
+  # Add uncommitted changes to REPO_DIR to make it "touched"
+  echo "modified" >> "$REPO_DIR/README.md"
+
   # Create another test repo
   REPO_DIR_2="$TEST_DIR/repo2"
   mkdir -p "$REPO_DIR_2"
@@ -493,6 +496,9 @@ test_audit_fix_1_config_repos_honored() {
   echo "repo2" > README.md
   git add README.md
   git commit -m "initial"
+
+  # Add uncommitted changes to REPO_DIR_2 to make it "touched"
+  echo "modified" >> "$REPO_DIR_2/README.md"
 
   # Create aesop.config.json with explicit repos array
   cat > "$AESOP_FIXTURE/aesop.config.json" << EOFCONFIG
