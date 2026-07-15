@@ -1,43 +1,30 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Work } from './Work';
 import { fixtureTrackerItems, fixtureBacklog, TESTIDS } from '../test/fixtures';
 
-// Mock useSSE hook
-vi.mock('../lib/useSSE', () => ({
-  useSSE: () => ({
-    tracker: { items: fixtureTrackerItems },
-    backlog: fixtureBacklog,
-    data: null,
-    agents: null,
-    status: null,
-    cost: null,
-    connectionStatus: { status: 'live' as const },
-  }),
-}));
-
 describe('Work view', () => {
   it('renders the work view with correct testid', () => {
-    render(<Work />);
+    render(<Work tracker={{ items: fixtureTrackerItems }} backlog={fixtureBacklog} />);
 
     expect(screen.getByTestId(TESTIDS.viewWork)).toBeInTheDocument();
   });
 
   it('renders tracker board heading', () => {
-    render(<Work />);
+    render(<Work tracker={{ items: fixtureTrackerItems }} backlog={fixtureBacklog} />);
 
     expect(screen.getByText('Tracker Kanban')).toBeInTheDocument();
   });
 
   it('renders the add item button', () => {
-    render(<Work />);
+    render(<Work tracker={{ items: fixtureTrackerItems }} backlog={fixtureBacklog} />);
 
     const addButton = screen.getByRole('button', { name: /Add Item/ });
     expect(addButton).toBeInTheDocument();
   });
 
   it('shows form when add item button is clicked', () => {
-    render(<Work />);
+    render(<Work tracker={{ items: fixtureTrackerItems }} backlog={fixtureBacklog} />);
 
     const addButton = screen.getByRole('button', { name: /Add Item/ });
     expect(addButton).toHaveAttribute('aria-expanded', 'false');
@@ -47,19 +34,19 @@ describe('Work view', () => {
   });
 
   it('displays tracker board with items', () => {
-    render(<Work />);
+    render(<Work tracker={{ items: fixtureTrackerItems }} backlog={fixtureBacklog} />);
 
     expect(screen.getByTestId(TESTIDS.trackerBoard)).toBeInTheDocument();
   });
 
   it('displays backlog panel', () => {
-    render(<Work />);
+    render(<Work tracker={{ items: fixtureTrackerItems }} backlog={fixtureBacklog} />);
 
     expect(screen.getByTestId(TESTIDS.backlogPanel)).toBeInTheDocument();
   });
 
   it('renders all tracker lanes', () => {
-    render(<Work />);
+    render(<Work tracker={{ items: fixtureTrackerItems }} backlog={fixtureBacklog} />);
 
     // Be specific to avoid duplicate "Done" matching
     // Lane headers include counts, e.g., "Proposed1", so check by prefix
@@ -72,7 +59,7 @@ describe('Work view', () => {
   });
 
   it('renders backlog audit tier headers', () => {
-    render(<Work />);
+    render(<Work tracker={{ items: fixtureTrackerItems }} backlog={fixtureBacklog} />);
 
     expect(screen.getByText('Audit Backlog')).toBeInTheDocument();
     // Use context to avoid matching P0 in tracker cards

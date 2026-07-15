@@ -74,6 +74,46 @@ get_untracked_files() {
   ) | sort -u
 }
 
+scan_unpushed_commits() {
+  local repo="$1"
+  local file_paths=()
+  local repo_win
+  local unpushed_files
+
+  repo_win=$(cd "$repo" 2>/dev/null && pwd -W 2>/dev/null || echo "$repo")
+
+  unpushed_files=$(
+    cd "$repo" || return 1
+    git diff --name-only @{u}..HEAD 2>/dev/null | sort -u
+  )
+
+  if [ -n "$unpushed_files" ]; then
+    while IFS= read -r file; do
+      if [ -n "$file" ] && [ -f "$repo/$file" ]; then
+        file_paths+=("$repo_win/$file")
+      fi
+    done <<EOF
+$unpushed_files
+EOF
+  fi
+
+  if [ ${#file_paths[@]} -eq 0 ]; then
+    return 0
+  fi
+
+  if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+      python3 "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      return $?
+    elif command -v python >/dev/null 2>&1; then
+      python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      return $?
+    fi
+  fi
+
+  return 0
+}
+
 scan_tracked_files() {
   local repo="$1"
   local tracked_files
@@ -115,8 +155,14 @@ EOF
 
   if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
     # ITEM 2 fix: use "${file_paths[@]}" to properly quote array elements
-    python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
-    return $?
+    # Defect (a) fix: use python3||python probe instead of bare python (portable to python3-only systems)
+    if command -v python3 >/dev/null 2>&1; then
+      python3 "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      return $?
+    elif command -v python >/dev/null 2>&1; then
+      python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      return $?
+    fi
   fi
 
   return 0
@@ -167,7 +213,7 @@ process_repo() {
 
       if [ "$branch" = "$default" ]; then
         WIPREF="backup/master-wip-$(date +%Y%m%d)"
-        if scan_tracked_files "$repo"; then
+        if scan_unpushed_commits "$repo"; then
           if git push -qf origin "HEAD:refs/heads/$WIPREF" 2>/dev/null; then
             printf 'SNAPSHOTTED\0%s\n' "$name"
             exit 0
@@ -177,7 +223,7 @@ process_repo() {
           exit 0
         fi
       else
-        if scan_tracked_files "$repo"; then
+        if scan_unpushed_commits "$repo"; then
           if git push -q origin "$branch" 2>/dev/null; then
             printf 'PUSHED\0%s\n' "$name"
             exit 0
@@ -243,7 +289,7 @@ if [ -n "$repos_to_scan" ]; then
     # Normalize path to detect duplicates
     real_dir=$(cd "$dir" && pwd 2>/dev/null)
     if [ -z "$real_dir" ]; then continue; fi
-    if echo "$processed_paths" | grep -Fq "$real_dir"; then
+    if echo "$processed_paths" | grep -Fxq "$real_dir"; then
       continue
     fi
     processed_paths="$processed_paths
@@ -278,7 +324,7 @@ else
     # Normalize path to detect duplicates (e.g., .claude vs .claude/)
     real_dir=$(cd "$dir" && pwd 2>/dev/null)
     if [ -z "$real_dir" ]; then continue; fi
-    if echo "$processed_paths" | grep -Fq "$real_dir"; then
+    if echo "$processed_paths" | grep -Fxq "$real_dir"; then
       continue
     fi
     processed_paths="$processed_paths

@@ -212,4 +212,17 @@ describe('Timeline', () => {
     expect(bars.length).toBeGreaterThan(0);
     // Should render without issues even with reduced motion preference
   });
+
+  it('running status maps to info (blue), not ok (green)', () => {
+    const agents: Agent[] = [
+      { ...fixtureAgents[0], status: 'running' },
+    ];
+    const { container } = render(<Timeline agents={agents} />);
+    const bar = screen.getByTestId(TESTIDS.timelineBar);
+
+    // Check that the bar's className contains status-info (CSS modules will hash it)
+    const className = bar.getAttribute('class') || '';
+    expect(className).toContain('status-info');
+    expect(className).not.toContain('status-ok');
+  });
 });

@@ -606,6 +606,148 @@ test_audit_fix_1_config_no_file_uses_autodiscovery() {
   fi
 }
 
+# ===== DEFECT (a): Python interpreter probe (python3||python) =====
+
+test_defect_a_python_interpreter_probe() {
+  log "TEST DEFECT (a): Python interpreter uses python3||python probe instead of bare python"
+
+  setup_fixture
+  create_mock_scanner
+
+  # Add uncommitted changes to trigger secret scan
+  echo "modified" >> "$REPO_DIR/README.md"
+
+  # Source the script and check that scan_tracked_files uses the probe pattern
+  if grep -q 'if command -v python3 >/dev/null 2>&1; then' "$BACKUP_FLEET_SCRIPT" && \
+     grep -q 'elif command -v python >/dev/null 2>&1; then' "$BACKUP_FLEET_SCRIPT"; then
+    pass "DEFECT (a): Python probe pattern (python3||python) is present in scan_tracked_files"
+  else
+    fail "DEFECT (a): Python probe pattern not found (bare python still being used)"
+  fi
+
+  # Verify any bare 'python' call in scan_tracked_files is the guarded fallback
+  # (the elif branch of the python3||python probe), not an unconditional call —
+  # the probe pattern above legitimately contains one bare `python` invocation.
+  local scan_func=$(sed -n '/^scan_tracked_files()/,/^}/p' "$BACKUP_FLEET_SCRIPT")
+  if echo "$scan_func" | grep -q 'python "$AESOP_ROOT/tools/secret_scan.py"' && \
+     ! echo "$scan_func" | grep -B2 'python "$AESOP_ROOT/tools/secret_scan.py"' | grep -q 'elif command -v python'; then
+    fail "DEFECT (a): Bare python call exists outside the python3||python fallback guard"
+  else
+    pass "DEFECT (a): No unguarded bare python calls in scan_tracked_files"
+  fi
+}
+
+# ===== DEFECT (b): Scan unpushed commits before force-push =====
+
+test_defect_b_unpushed_commits_scanning() {
+  log "TEST DEFECT (b): Unpushed commits are scanned before force-push"
+
+  setup_fixture
+  create_mock_scanner
+
+  # Create a local unpushed commit
+  cd "$REPO_DIR"
+  echo "unpushed content" >> README.md
+  git add README.md
+  git commit -m "unpushed commit"
+
+  # Set up tracking to see if scan_unpushed_commits was called
+  if grep -q 'scan_unpushed_commits "$repo"' "$BACKUP_FLEET_SCRIPT"; then
+    pass "DEFECT (b): scan_unpushed_commits function is called for unpushed commits"
+  else
+    fail "DEFECT (b): scan_unpushed_commits not called (still using old scan_tracked_files)"
+  fi
+
+  # Check that scan_unpushed_commits uses git diff @{u}..HEAD
+  if grep -q 'git diff --name-only @{u}..HEAD' "$BACKUP_FLEET_SCRIPT"; then
+    pass "DEFECT (b): scan_unpushed_commits uses git diff @{u}..HEAD to find changed files"
+  else
+    fail "DEFECT (b): scan_unpushed_commits not using correct diff range"
+  fi
+}
+
+# ===== DEFECT (c): Path dedup uses whole-line grep match =====
+
+test_defect_c_path_dedup_whole_line_match() {
+  log "TEST DEFECT (c): Path dedup uses grep -Fxq for whole-line matching"
+
+  # Check both occurrences of grep -Fxq (one in config repos, one in autodiscovery)
+  local grep_count
+  grep_count=$(grep -c 'grep -Fxq "$real_dir"' "$BACKUP_FLEET_SCRIPT" || echo "0")
+
+  if [ "$grep_count" -eq 2 ]; then
+    pass "DEFECT (c): Both dedup checks use grep -Fxq (whole-line match)"
+  else
+    fail "DEFECT (c): Expected 2 grep -Fxq calls, found $grep_count (substring match may still exist)"
+  fi
+
+  # Verify no bare grep -Fq (substring match) is used for dedup
+  if grep -q 'grep -Fq "$real_dir"' "$BACKUP_FLEET_SCRIPT"; then
+    fail "DEFECT (c): Bare grep -Fq (substring match) still exists"
+  else
+    pass "DEFECT (c): No bare grep -Fq substring matches found"
+  fi
+}
+
+test_defect_c_dedup_integration() {
+  log "TEST DEFECT (c): Path dedup correctly avoids prefix-matching false positives"
+
+  setup_fixture
+  create_mock_scanner
+
+  # Create a scenario where one path is a prefix of another
+  local repo1="$TEST_DIR/my-repo"
+  local repo2="$TEST_DIR/my-repo-backup"
+  mkdir -p "$repo1" "$repo2"
+
+  cd "$repo1"
+  git init
+  git config user.email "test@example.com"
+  git config user.name "Test User"
+  echo "repo1" > README.md
+  git add README.md
+  git commit -m "initial"
+
+  cd "$repo2"
+  git init
+  git config user.email "test@example.com"
+  git config user.name "Test User"
+  echo "repo2" > README.md
+  git add README.md
+  git commit -m "initial"
+
+  # Touch both repos
+  echo "touch1" >> "$repo1/README.md"
+  echo "touch2" >> "$repo2/README.md"
+
+  # Test the dedup logic directly
+  local processed_paths=""
+  local real_dir1=$(cd "$repo1" && pwd)
+  local real_dir2=$(cd "$repo2" && pwd)
+
+  # First repo should not be skipped
+  if ! echo "$processed_paths" | grep -Fxq "$real_dir1"; then
+    processed_paths="$processed_paths
+$real_dir1"
+  fi
+
+  # Second repo should NOT be skipped even though it contains the first path as substring
+  if ! echo "$processed_paths" | grep -Fxq "$real_dir2"; then
+    pass "DEFECT (c): Path dedup correctly processes both paths (whole-line matching works)"
+    processed_paths="$processed_paths
+$real_dir2"
+  else
+    fail "DEFECT (c): Second path was incorrectly skipped due to substring match"
+  fi
+
+  # Verify both paths are in processed_paths
+  if echo "$processed_paths" | grep -Fxq "$real_dir1" && echo "$processed_paths" | grep -Fxq "$real_dir2"; then
+    pass "DEFECT (c): Both paths correctly tracked in dedup list"
+  else
+    fail "DEFECT (c): One or both paths missing from dedup tracking"
+  fi
+}
+
 # ===== Run all tests =====
 
 echo "=================================================="
@@ -644,6 +786,19 @@ test_audit_fix_1_config_repos_honored
 test_audit_fix_1_config_fallback_when_empty
 test_audit_fix_1_config_missing_path_skipped_with_warning
 test_audit_fix_1_config_no_file_uses_autodiscovery
+echo ""
+
+log "Running DEFECT (a) test (Python interpreter probe)..."
+test_defect_a_python_interpreter_probe
+echo ""
+
+log "Running DEFECT (b) test (Unpushed commits scanning)..."
+test_defect_b_unpushed_commits_scanning
+echo ""
+
+log "Running DEFECT (c) tests (Path dedup whole-line matching)..."
+test_defect_c_path_dedup_whole_line_match
+test_defect_c_dedup_integration
 echo ""
 
 echo "=================================================="

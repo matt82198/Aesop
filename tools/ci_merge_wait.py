@@ -75,7 +75,21 @@ def get_pr_status(pr_number):
 
 def check_ci_status(status_rollup):
     """
-    Analyze status check rollup.
+    Analyze status check rollup from gh pr view --json statusCheckRollup.
+    Handles both CheckRun (status + conclusion) and StatusContext (state) entries.
+
+    CheckRun classification:
+      - status=COMPLETED + conclusion in (FAILURE, CANCELLED, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE) = failure
+      - status=COMPLETED + conclusion=None or empty = success
+      - status in (QUEUED, IN_PROGRESS) = pending
+
+    StatusContext classification:
+      - state='success' = success
+      - state in ('failure', 'error') = failure
+      - state='pending' = pending
+
+    Unrecognized shapes = fail-closed (neither success nor pending, treated as pending).
+
     Returns: ("pending", None), ("success", None), or ("failure", check_name)
     """
     if not status_rollup:
@@ -87,11 +101,50 @@ def check_ci_status(status_rollup):
     failed_checks = []
 
     for check in status_rollup:
-        status = check.get("status", "").upper()
-        if status == "PENDING":
-            pending_checks.append(check.get("name", "unknown"))
-        elif status == "FAILURE":
-            failed_checks.append(check.get("name", "unknown"))
+        check_name = check.get("name", "unknown")
+        check_status = None
+
+        # Determine check classification (CheckRun or StatusContext or unrecognized)
+        if "status" in check:
+            # CheckRun entry (has 'status' field)
+            status = check.get("status", "").upper()
+            conclusion = check.get("conclusion", "")
+
+            if status == "COMPLETED":
+                # Check conclusion for failure indicators
+                if conclusion and conclusion.upper() in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"):
+                    check_status = "failure"
+                else:
+                    # COMPLETED with no/empty conclusion or other conclusion = success
+                    check_status = "success"
+            elif status in ("QUEUED", "IN_PROGRESS"):
+                check_status = "pending"
+            else:
+                # Unrecognized status value (fail-closed)
+                check_status = "pending"
+
+        elif "state" in check:
+            # StatusContext entry (has 'state' field)
+            state = check.get("state", "").lower()
+            if state == "success":
+                check_status = "success"
+            elif state in ("failure", "error"):
+                check_status = "failure"
+            elif state == "pending":
+                check_status = "pending"
+            else:
+                # Unrecognized state value (fail-closed)
+                check_status = "pending"
+
+        else:
+            # Unrecognized shape (no status or state field) - fail-closed
+            check_status = "pending"
+
+        # Collect check status
+        if check_status == "failure":
+            failed_checks.append(check_name)
+        elif check_status == "pending":
+            pending_checks.append(check_name)
 
     # Determine overall status
     if failed_checks:
@@ -124,54 +177,124 @@ def merge_pr(pr_number, merge_method, dry_run=False):
 
 def run_self_test():
     """
-    Run self-test with mocked CI status checks.
-    No network calls; verifies the merge guard logic.
+    Run self-test with real GitHub API payload structures.
+    No network calls; verifies the merge guard logic with CheckRun and StatusContext payloads.
     Returns True if all tests pass, False otherwise.
     """
-    print("Running self-test with mocked CI statuses...")
+    print("Running self-test with real GitHub API payloads...")
 
-    # Mock status rollup: all checks SUCCESS
-    success_rollup = [
-        {"name": "test-unit", "status": "SUCCESS"},
-        {"name": "test-integration", "status": "SUCCESS"},
-        {"name": "lint", "status": "SUCCESS"},
+    # Test 1: CheckRun success case (COMPLETED with no conclusion)
+    checkrun_success = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": None},
+        {"name": "test-integration", "status": "COMPLETED", "conclusion": ""},
+        {"name": "lint", "status": "COMPLETED", "conclusion": None},
     ]
-
-    # Test 1: success case
-    ci_status, failed_check = check_ci_status(success_rollup)
+    ci_status, failed_check = check_ci_status(checkrun_success)
     if ci_status != "success":
-        print(f"FAIL: Expected 'success', got '{ci_status}'")
+        print(f"FAIL: Expected 'success' for CheckRun COMPLETED, got '{ci_status}'")
         return False
-    print("[OK] success case: merge guard permits merge")
+    print("[OK] CheckRun success case (COMPLETED + no conclusion)")
 
-    # Test 2: pending case
-    pending_rollup = [
-        {"name": "test-unit", "status": "PENDING"},
-        {"name": "test-integration", "status": "SUCCESS"},
+    # Test 2: CheckRun in-progress case (should be pending)
+    checkrun_pending = [
+        {"name": "test-unit", "status": "IN_PROGRESS", "conclusion": None},
+        {"name": "test-integration", "status": "COMPLETED", "conclusion": None},
     ]
-    ci_status, failed_check = check_ci_status(pending_rollup)
+    ci_status, failed_check = check_ci_status(checkrun_pending)
     if ci_status != "pending":
-        print(f"FAIL: Expected 'pending', got '{ci_status}'")
+        print(f"FAIL: Expected 'pending' for IN_PROGRESS, got '{ci_status}'")
         return False
-    print("[OK] pending case: merge guard blocks merge (structurally unreachable)")
+    print("[OK] CheckRun pending case (IN_PROGRESS)")
 
-    # Test 3: failure case
-    failure_rollup = [
-        {"name": "test-unit", "status": "FAILURE"},
-        {"name": "test-integration", "status": "SUCCESS"},
+    # Test 3: CheckRun failure case (COMPLETED with FAILURE conclusion)
+    checkrun_failure = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": "FAILURE"},
+        {"name": "test-integration", "status": "COMPLETED", "conclusion": None},
     ]
-    ci_status, failed_check = check_ci_status(failure_rollup)
+    ci_status, failed_check = check_ci_status(checkrun_failure)
     if ci_status != "failure" or failed_check != "test-unit":
         print(f"FAIL: Expected 'failure' with 'test-unit', got '{ci_status}' / '{failed_check}'")
         return False
-    print("[OK] failure case: merge guard blocks merge (structurally unreachable)")
+    print("[OK] CheckRun failure case (COMPLETED + FAILURE)")
 
-    # Test 4: no checks (treat as success)
+    # Test 4: StatusContext success case (state=success)
+    statuscontext_success = [
+        {"name": "continuous-integration/travis-ci/push", "state": "success"},
+    ]
+    ci_status, failed_check = check_ci_status(statuscontext_success)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for StatusContext state=success, got '{ci_status}'")
+        return False
+    print("[OK] StatusContext success case (state=success)")
+
+    # Test 5: StatusContext failure case (state=failure)
+    statuscontext_failure = [
+        {"name": "continuous-integration/travis-ci/push", "state": "failure"},
+    ]
+    ci_status, failed_check = check_ci_status(statuscontext_failure)
+    if ci_status != "failure" or failed_check != "continuous-integration/travis-ci/push":
+        print(f"FAIL: Expected 'failure' with StatusContext, got '{ci_status}' / '{failed_check}'")
+        return False
+    print("[OK] StatusContext failure case (state=failure)")
+
+    # Test 6: StatusContext pending case (state=pending)
+    statuscontext_pending = [
+        {"name": "continuous-integration/travis-ci/push", "state": "pending"},
+    ]
+    ci_status, failed_check = check_ci_status(statuscontext_pending)
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' for StatusContext state=pending, got '{ci_status}'")
+        return False
+    print("[OK] StatusContext pending case (state=pending)")
+
+    # Test 7: Mixed CheckRun and StatusContext (all success)
+    mixed_success = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": None},
+        {"name": "travis-ci", "state": "success"},
+    ]
+    ci_status, _ = check_ci_status(mixed_success)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for mixed payloads, got '{ci_status}'")
+        return False
+    print("[OK] Mixed CheckRun + StatusContext success case")
+
+    # Test 8: Mixed payloads with pending (should block merge)
+    mixed_pending = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": None},
+        {"name": "lint", "status": "QUEUED", "conclusion": None},
+    ]
+    ci_status, _ = check_ci_status(mixed_pending)
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' for QUEUED check, got '{ci_status}'")
+        return False
+    print("[OK] Mixed payloads with QUEUED (pending)")
+
+    # Test 9: No checks (treat as success)
     ci_status, _ = check_ci_status([])
     if ci_status != "success":
         print(f"FAIL: Expected 'success' for no checks, got '{ci_status}'")
         return False
-    print("[OK] no-checks case: treated as success")
+    print("[OK] No-checks case: treated as success")
+
+    # Test 10: Unrecognized shape (fail-closed: should not succeed)
+    unrecognized = [
+        {"name": "mystery-check"},
+    ]
+    ci_status, _ = check_ci_status(unrecognized)
+    if ci_status == "success":
+        print(f"FAIL: Expected not 'success' for unrecognized shape, got '{ci_status}'")
+        return False
+    print("[OK] Unrecognized check shape (fail-closed)")
+
+    # Test 11: CheckRun cancelled (counts as failure)
+    cancelled_check = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": "CANCELLED"},
+    ]
+    ci_status, _ = check_ci_status(cancelled_check)
+    if ci_status != "failure":
+        print(f"FAIL: Expected 'failure' for CANCELLED, got '{ci_status}'")
+        return False
+    print("[OK] CheckRun CANCELLED (failure)")
 
     print("\nAll self-tests passed!")
     return True
