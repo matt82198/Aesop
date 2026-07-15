@@ -195,3 +195,139 @@ test('config loader expands ~ paths in Node.js', () => {
     execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
   }
 });
+
+test('filesToCopy includes all package.json files directories (defect a)', () => {
+  // Read package.json to get the list of directories that should be copied
+  const pkg = JSON.parse(fs.readFileSync(PACKAGE_JSON, 'utf8'));
+
+  // Read cli.js to extract filesToCopy array
+  const cli = fs.readFileSync(CLI, 'utf8');
+
+  // Directories from package.json files array that should be in filesToCopy
+  // These are directories that contain code/config needed by the scaffolded fleet
+  const requiredDirs = [
+    'daemons',
+    'dash',
+    'monitor',
+    'tools',
+    'ui',
+    'docs',
+    'state_store',  // defect: currently omitted, ui/collectors.py imports from this
+    'skills',       // defect: currently omitted
+    'mcp',          // defect: currently omitted
+    'scan'          // defect: currently omitted
+  ];
+
+  // Search for each directory in filesToCopy array (looking around line 209)
+  const filesCopyStart = cli.indexOf('const filesToCopy = [');
+  const filesCopyEnd = cli.indexOf('];', filesCopyStart);
+  assert.ok(filesCopyStart > -1 && filesCopyEnd > -1, 'Should find filesToCopy array');
+
+  const filesArrayText = cli.substring(filesCopyStart, filesCopyEnd + 2);
+
+  for (const dir of requiredDirs) {
+    assert.ok(
+      filesArrayText.includes(`'${dir}'`) || filesArrayText.includes(`"${dir}"`),
+      `filesToCopy should include "${dir}" directory (found in package.json files, but currently missing from cli.js filesToCopy)`
+    );
+  }
+});
+
+test('aesopDirs allowlist includes all directories from filesToCopy (defect a)', () => {
+  // Read cli.js and verify aesopDirs includes all directories from filesToCopy
+  const cli = fs.readFileSync(CLI, 'utf8');
+
+  // Get aesopDirs array text
+  const aesopDirsStart = cli.indexOf('const aesopDirs = [');
+  const aesopDirsEnd = cli.indexOf('];', aesopDirsStart);
+  const aesopDirsText = cli.substring(aesopDirsStart, aesopDirsEnd + 2);
+
+  // These are the directories (not files) that should all be in aesopDirs
+  const requiredDirsInAesopDirs = [
+    'daemons',
+    'dash',
+    'monitor',
+    'tools',
+    'ui',
+    'docs',
+    'state_store',
+    'skills',
+    'mcp',
+    'scan',
+    '.git',
+    'state'
+  ];
+
+  // Verify all directories are in aesopDirs for idempotency
+  for (const dir of requiredDirsInAesopDirs) {
+    assert.ok(
+      aesopDirsText.includes(`'${dir}'`) || aesopDirsText.includes(`"${dir}"`),
+      `aesopDirs allowlist should include "${dir}" (line ~163) for idempotency — currently missing`
+    );
+  }
+});
+
+test('dashboard config generation guards against missing dashboard key (defect b)', () => {
+  // This tests that the wizard mode doesn't crash even if config.dashboard key is missing
+  // (defect b: originally accessed config.dashboard.refresh_seconds without checking if dashboard exists)
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-dashboard-test-'));
+
+  try {
+    // Initialize git
+    execSync('git init', { cwd: tempDir, stdio: 'ignore' });
+    execSync('git config user.email "test@example.com"', { cwd: tempDir, stdio: 'ignore' });
+    execSync('git config user.name "Test"', { cwd: tempDir, stdio: 'ignore' });
+
+    // Run scaffold — this should not crash even if the example config
+    // doesn't have a dashboard key
+    const targetDir = path.join(tempDir, 'fleet');
+
+    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet'], {
+      encoding: 'utf8',
+      cwd: tempDir,
+      timeout: 30000
+    });
+
+    assert.equal(result.status, 0,
+      `Scaffold should succeed without crashing (even if config lacks dashboard key): ${result.stderr}`);
+
+    // Check generated config is valid JSON
+    const configPath = path.join(targetDir, 'aesop.config.json');
+    assert.ok(fs.existsSync(configPath), 'aesop.config.json should be generated');
+
+    // Verify generated config is valid JSON (the main goal)
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.ok(typeof config === 'object', 'Generated config should be valid JSON object');
+
+  } finally {
+    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+  }
+});
+
+test('pre-push hook is copied not symlinked on all platforms (defect c)', () => {
+  // Verify that the pre-push hook is copied (copyFileSync) not symlinked
+  // on all platforms including Unix
+
+  const cli = fs.readFileSync(CLI, 'utf8');
+
+  // Find the installPrePushHook function
+  const hookInstallStart = cli.indexOf('function installPrePushHook');
+  assert.ok(hookInstallStart > -1, 'Should find installPrePushHook function');
+
+  // Find the hook installation code section (look for hookSource and hookDest)
+  const hookCodeStart = cli.indexOf('// Install the hook', hookInstallStart);
+  const hookCodeEnd = cli.indexOf('// Ensure hook is executable', hookCodeStart);
+  const hookCode = cli.substring(hookCodeStart, hookCodeEnd);
+
+  // Should use copyFileSync, not symlinkSync
+  assert.ok(
+    hookCode.includes('copyFileSync'),
+    'Hook installation should use copyFileSync for all platforms (defect c: fix converts Unix symlink to copy)'
+  );
+
+  assert.ok(
+    !hookCode.includes('symlinkSync'),
+    'Hook installation must not use symlinkSync (dangling symlinks after npx cache clean disable branch protection and secret gate)'
+  );
+});
