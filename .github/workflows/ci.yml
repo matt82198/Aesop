@@ -1,20 +1,14 @@
 name: CI
 
+# NOTE: docs-only skipping is done via the job-level `if:` on `ci` below, NOT via a
+# trigger-level `paths-ignore:` here. A required status check that never queues because the
+# whole workflow didn't trigger blocks merging forever under strict branch protection; a job
+# that's present but skipped satisfies the required check. Do not add paths-ignore back here.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'LICENSE'
   pull_request:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'LICENSE'
 
 jobs:
   docs-only-gate:
