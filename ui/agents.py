@@ -46,16 +46,12 @@ def sanitize_agents_for_broadcast(agents):
         if not isinstance(agent, dict):
             sanitized.append(agent)
             continue
-        # Create a new dict with only summary fields, stripping large text
-        summary = {}
-        keep_fields = {
-            "id", "status", "model", "memory", "tokens",
-            "dispatch_at", "started_at", "task", "message_count",
-            "first_seen", "last_activity", "dispatcher", "progress"
-        }
-        for key, value in agent.items():
-            if key in keep_fields:
-                summary[key] = value
+        # Drop only the multi-KB prompt fields; keep everything else the
+        # frontend Agent contract reads (ui/web/src/lib/types.ts) — id,
+        # project, status, age_s, hint, startedAt, lastActivity,
+        # runtimeSeconds, tokensUsed, taskLabel.
+        strip_fields = {"promptFull", "dispatch_prompt"}
+        summary = {k: v for k, v in agent.items() if k not in strip_fields}
         sanitized.append(summary)
     return sanitized
 
