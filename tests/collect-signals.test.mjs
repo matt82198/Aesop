@@ -701,3 +701,166 @@ test('P2 fix: corrupted .signal-state.json logs warning and gracefully resets', 
   }
 });
 
+// === Isolation-violation detector tests ===
+test('isolation violation: untracked in-root worktree dir FLAGS', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Setup: initialize git repo in fixture root
+    const result = spawnSync('git', ['init'], {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    if (result.status !== 0) {
+      // Skip test if git init fails
+      return;
+    }
+
+    // Create an untracked directory that looks like a worktree (has nested .git)
+    const wtDir = path.join(fixture.root, 'bad-worktree');
+    fs.mkdirSync(wtDir, { recursive: true });
+
+    // Create a fake worktree .git file (pointing to main repo's worktrees dir)
+    fs.writeFileSync(path.join(wtDir, '.git'), 'gitdir: ../.git/worktrees/bad-worktree\n', 'utf8');
+
+    // Run collector
+    const output = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', AESOP_EXTENDED_SIGNALS: 'true' });
+    assert.ok(output.stdout, 'Collector should complete');
+
+    // Check SIGNALS.json for isolation violations
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    assert.ok(fs.existsSync(signalsPath), 'SIGNALS.json should exist');
+
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.isolationViolations, 'SIGNALS should include isolationViolations');
+    assert.ok(Array.isArray(signals.isolationViolations.violations), 'isolationViolations.violations should be an array');
+    assert.ok(
+      signals.isolationViolations.violations.some(v => v.path.includes('bad-worktree')),
+      'Should flag untracked worktree directory'
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('isolation violation: git-tracked source dir does NOT flag', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Setup: initialize git repo in fixture root
+    const result = spawnSync('git', ['init'], {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    if (result.status !== 0) {
+      return; // Skip if git init fails
+    }
+
+    // Create a tracked source directory
+    const srcDir = path.join(fixture.root, 'src', 'new-module');
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(srcDir, 'index.js'), 'module.exports = {};\n', 'utf8');
+
+    // Add and commit it to make it tracked
+    spawnSync('git', ['add', 'src/new-module/index.js'], { cwd: fixture.root, stdio: 'ignore' });
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: fixture.root, stdio: 'ignore' });
+    spawnSync('git', ['config', 'user.name', 'Test'], { cwd: fixture.root, stdio: 'ignore' });
+    spawnSync('git', ['commit', '-m', 'Add module'], { cwd: fixture.root, stdio: 'ignore' });
+
+    // Run collector
+    const output = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', AESOP_EXTENDED_SIGNALS: 'true' });
+    assert.ok(output.stdout, 'Collector should complete');
+
+    // Check SIGNALS.json
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.isolationViolations, 'SIGNALS should include isolationViolations');
+
+    // git-tracked source dir should NOT be flagged
+    const violations = signals.isolationViolations.violations || [];
+    assert.ok(
+      !violations.some(v => v.path.includes('src/new-module')),
+      'Should NOT flag git-tracked source directory'
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('isolation violation: sibling worktree not examined', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Setup: initialize git repo in fixture root
+    const result = spawnSync('git', ['init'], {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    if (result.status !== 0) {
+      return; // Skip if git init fails
+    }
+
+    // Create a sibling worktree directory (NOT inside repo root)
+    const siblingDir = path.join(path.dirname(fixture.root), 'aesop-wt-test');
+    fs.mkdirSync(siblingDir, { recursive: true });
+    fs.writeFileSync(path.join(siblingDir, '.git'), 'gitdir: ../.git/worktrees/aesop-wt-test\n', 'utf8');
+
+    // Run collector
+    const output = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', AESOP_EXTENDED_SIGNALS: 'true' });
+    assert.ok(output.stdout, 'Collector should complete');
+
+    // Check SIGNALS.json
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.isolationViolations, 'SIGNALS should include isolationViolations');
+
+    // Sibling worktree should NOT be checked (not inside repo root)
+    const violations = signals.isolationViolations.violations || [];
+    assert.ok(
+      !violations.some(v => v.path.includes(siblingDir)),
+      'Should NOT flag sibling worktree (outside repo root)'
+    );
+
+    // Cleanup sibling dir
+    try {
+      fs.rmSync(siblingDir, { recursive: true, force: true });
+    } catch (e) {}
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('isolation violation: no violations in clean repo', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Setup: initialize git repo with no violations
+    const result = spawnSync('git', ['init'], {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    if (result.status !== 0) {
+      return; // Skip if git init fails
+    }
+
+    // Run collector on clean repo
+    const output = runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', AESOP_EXTENDED_SIGNALS: 'true' });
+    assert.ok(output.stdout, 'Collector should complete');
+
+    // Check SIGNALS.json
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.isolationViolations, 'SIGNALS should include isolationViolations');
+
+    // Clean repo should have no violations
+    const violations = signals.isolationViolations.violations || [];
+    assert.strictEqual(violations.length, 0, 'Clean repo should have no isolation violations');
+  } finally {
+    fixture.cleanup();
+  }
+});
+

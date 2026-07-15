@@ -455,6 +455,70 @@ function checkUnreviewedPrompts() {
   return 0;
 }
 
+// 11) Isolation violation detection (rec #5: git-tracked dirs don't flag)
+// Detects worktrees created INSIDE repo root (violation) vs sanctioned ../sibling-wt-* (OK)
+// FP fix: git-tracked source directories (new modules) do NOT flag as violations
+function detectIsolationViolations() {
+  if (!fs.existsSync(AESOP_ROOT)) return { violations: [], count: 0 };
+
+  const violations = [];
+  const trackedFiles = new Set();
+
+  // Get list of git-tracked files to exclude legitimate source dirs
+  try {
+    const tracked = sh('git ls-files', AESOP_ROOT);
+    tracked.split('\n').forEach(f => {
+      if (f) {
+        const dir = f.split('/')[0];
+        trackedFiles.add(dir);
+      }
+    });
+  } catch {
+    // If git ls-files fails, proceed without tracked set (less precise but fail-open)
+  }
+
+  // Walk AESOP_ROOT (shallow) looking for dirs with nested .git
+  try {
+    const entries = fs.readdirSync(AESOP_ROOT, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.')) continue;
+      if (entry.name === 'node_modules') continue;
+
+      const dirPath = path.join(AESOP_ROOT, entry.name);
+      const gitPath = path.join(dirPath, '.git');
+
+      // Check if this directory has a .git file or .git dir (worktree indicator)
+      try {
+        const gitStat = fs.statSync(gitPath);
+        // It has .git — check if it's a worktree (contains "gitdir:" or is a symlink)
+        const isWorktree = gitStat.isFile() || gitStat.isSymbolicLink();
+
+        if (isWorktree) {
+          // This looks like a worktree. Check if it's git-tracked (FP fix)
+          const isTracked = trackedFiles.has(entry.name);
+
+          if (!isTracked) {
+            // Untracked worktree inside repo root = VIOLATION
+            violations.push({
+              path: entry.name,
+              type: 'untracked-worktree-in-root',
+              message: `Worktree '${entry.name}' found inside repo root (untracked). Should use sanctioned ../aesop-wt-* sibling instead.`,
+            });
+          }
+          // If tracked, it's a legitimate source directory; don't flag
+        }
+      } catch (e) {
+        // Entry doesn't have .git or is inaccessible; skip
+      }
+    }
+  } catch (e) {
+    // Directory read failed; fail-open with no violations
+  }
+
+  return { violations, count: violations.length };
+}
+
 // === AUTO Actions ===
 // Log rotation: invoke rotate_logs.py if available and log needs rotation
 function performAutoLogRotation(logFiles, actionsLogPath) {
@@ -661,6 +725,7 @@ const staleLoops = checkHeartbeats();
 const gitState = checkGitState();
 const memory = checkMemoryFreshness();
 const logFiles = checkLogFiles();
+const isolationViolations = detectIsolationViolations();
 
 // Extended signal checks (5, 6, 8, 10) — skipped if extended_signals is OFF
 const junk = extendedSignals ? detectJunkScripts() : { skipped: true };
@@ -709,6 +774,7 @@ const signals = {
   respawnWatch,
   costTick,
   unreviewedPrompts,
+  isolationViolations,
 };
 
 const brief = [];
@@ -752,6 +818,17 @@ if (needsRotation.length === 0) {
   brief.push(`⚠ **${needsRotation.length} log(s) need rotation:**`);
   for (const l of needsRotation) {
     brief.push(`  - ${l.name}: ${l.lineCount} lines, ${l.sizeKb}kb`);
+  }
+}
+brief.push('');
+
+brief.push('## Isolation violations');
+if (isolationViolations.count === 0) {
+  brief.push('✓ No worktrees detected inside repo root (sanctioned siblings OK).');
+} else {
+  brief.push(`🚨 **${isolationViolations.count} isolation violation(s)** detected (worktrees inside repo root):`);
+  for (const v of isolationViolations.violations) {
+    brief.push(`  - ${v.path}: ${v.message}`);
   }
 }
 brief.push('');
@@ -839,6 +916,14 @@ if (extendedSignals) {
 }
 
 // Core proposals (always emitted)
+if (isolationViolations.count > 0) {
+  emitProposal(
+    'isolation-violation-detected',
+    `${isolationViolations.count} worktree(s) detected inside repo root. Agents should create worktrees as sanctioned siblings (../aesop-wt-*), not inside the repo root to maintain isolation.`,
+    `Review the violation(s): ${isolationViolations.violations.map(v => v.path).join(', ')}. Move worktrees to ../aesop-wt-<name> location outside repo root. Add pre-commit hook or monitoring to prevent future in-root worktrees.`
+  );
+}
+
 if (alerts.highMedCount > 0) {
   emitProposal(
     'security-alerts-high-med',
