@@ -59,6 +59,7 @@ jobs:
         run: |
           cd ui/web
           git diff --exit-code -- dist/
+          git diff --cached --exit-code -- dist/
 
       - name: Run React component tests (vitest)
         run: |
