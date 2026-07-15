@@ -51,7 +51,13 @@ PATTERNS = {
     "slack_token": (r"xox[baprs]-[A-Za-z0-9-]{10,}", 0),
     "openai_anthropic_key": (r"sk-[A-Za-z0-9_\-]{20,}", 0),
     "generic_secret_assignment": (
-        r"\b(password|passwd|secret|api[_-]?key|token|authorization)\b\s*(?::=|=)\s*(?:[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']|(?!['\"]|xxx|changeme|your-|example)[^\s\$\<\{\n]+)",
+        # Unquoted branch requires 8+ contiguous chars from a bare-literal charset
+        # (no '.', '(', ')' — real code expressions like `secrets.token_urlsafe(32)`,
+        # `self.serve.SESSION_TOKEN`, or `headers.get(...)` all contain one of those)
+        # followed by whitespace/EOL, so an assignment from a variable/attribute/call
+        # doesn't false-positive as a hardcoded secret the way a bare env-file value
+        # (`API_TOKEN=verylongtokenvalue123456789`) legitimately does.
+        r"\b(password|passwd|secret|api[_-]?key|token|authorization)\b\s*(?::=|=)\s*(?:[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']|(?!['\"]|xxx|changeme|your-|example)[^\s\$\<\{\n\(\)\.\"']{8,}(?=\s|$))",
         re.IGNORECASE,
     ),
     "connection_string": (
