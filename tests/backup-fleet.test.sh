@@ -625,12 +625,15 @@ test_defect_a_python_interpreter_probe() {
     fail "DEFECT (a): Python probe pattern not found (bare python still being used)"
   fi
 
-  # Verify no bare 'python' calls in secret_scan invocation within scan_tracked_files
+  # Verify any bare 'python' call in scan_tracked_files is the guarded fallback
+  # (the elif branch of the python3||python probe), not an unconditional call —
+  # the probe pattern above legitimately contains one bare `python` invocation.
   local scan_func=$(sed -n '/^scan_tracked_files()/,/^}/p' "$BACKUP_FLEET_SCRIPT")
-  if echo "$scan_func" | grep -q 'python "$AESOP_ROOT/tools/secret_scan.py"'; then
-    fail "DEFECT (a): Bare python call still exists in scan_tracked_files"
+  if echo "$scan_func" | grep -q 'python "$AESOP_ROOT/tools/secret_scan.py"' && \
+     ! echo "$scan_func" | grep -B2 'python "$AESOP_ROOT/tools/secret_scan.py"' | grep -q 'elif command -v python'; then
+    fail "DEFECT (a): Bare python call exists outside the python3||python fallback guard"
   else
-    pass "DEFECT (a): No bare python calls in scan_tracked_files"
+    pass "DEFECT (a): No unguarded bare python calls in scan_tracked_files"
   fi
 }
 
