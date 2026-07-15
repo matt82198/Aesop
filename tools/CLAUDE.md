@@ -29,6 +29,11 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `agent-forensics.sh` — Incident forensics / behavior reconstruction
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
 - `rotate_logs.py` — Log rotation utility with size/line thresholds
+- `session_usage_summary.py` — Aggregate token usage across session transcripts
+- `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
+- `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
+- `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
+- `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (with lazy import error handling)
 
 ## secret_scan.py — Pre-push secret/credential detection gate
 
