@@ -45,16 +45,6 @@ This design provides:
   - **dist/** — Built static files (committed to git; served by Python handler). Filenames are content-hashed by Vite.
 - **README.md** — User guide and configuration reference (updated for wave-14).
 
-## API Package (ui/api/)
-
-Shared mutation-request validation and domain-logic handlers (wave-10 split from handler.py). Every mutating endpoint (`/submit`, `POST /api/tracker`, `POST /api/tracker/<id>`) gates requests identically: CSRF token validation, Content-Length bounds-check, then JSON decode. This module centralizes those gates so they are directly unit-testable without HTTP coupling.
-
-- **__init__.py** — Shared mutation gate (`validate_mutation()`). Performs CSRF validation + Content-Length bounds-check (10 KB cap) + JSON decode. Returns `(True, parsed_json)` on success or `(False, (status_code, error_dict))` on gate failure. **Load-bearing rule**: callers must bound the socket read using the same Content-Length header before invoking, to prevent DoS; MAX_BODY_BYTES is re-derived here for validation but socket read is caller's responsibility.
-- **submit.py** — Inbox-append logic (`append_to_inbox(text)`). Appends one timestamped line to `config.INBOX_FILE`, rejects symlinks (TOCTOU defense), creates file with header if missing.
-- **tracker.py** — Tracker CRUD handlers (`list_items()`, `create()`, `update()`, `delete()`). Calls `collectors` tracker functions; returns `(status_code, response_dict)` for direct HTTP response writing. **Load-bearing**: all tracker mutations pass through `validate_mutation()` in create; update/delete check CSRF via `csrf.validate_csrf_request()` performed by caller before path is parsed.
-
-**Key invariant**: All three modules read `config.X` live via `import config` at call time, never `from config import X`. A frozen import goes stale after `config.reload()` (breaks test-fixture isolation). See ui/CLAUDE.md "load-bearing rule" note above.
-
 ## Configuration & Path Precedence
 
 Configuration is resolved in this order (first match wins):
@@ -124,28 +114,7 @@ Configuration is resolved in this order (first match wins):
 
 ## Background Collector Thread
 
-**Lifecycle**:
-- Started idempotently on first HTTP request (via `start_collector_thread()`)
-- Runs as daemon thread (terminates when main process exits)
-- Single-instance guard via `_collector_lock` (prevents double-start)
-
-**Polling strategy**:
-- Wakes every `COLLECTOR_INTERVAL` seconds (default: 1.0, overridable via `AESOP_UI_COLLECT_INTERVAL`)
-- Polls cheap sources: heartbeat file mtimes, log tails, file fingerprints
-- Only re-derives sections when underlying input changed (mtime/fingerprint gate)
-- Only emits to clients when section content-hash changed (avoids redundant broadcasts)
-
-**Cached data**:
-- Last computed hash per section (data/backlog/agents)
-- Last mtime of AUDIT-BACKLOG.md
-- Last fingerprint of transcripts directory (to detect agent activity changes)
-- Cached parsed backlog and agent snapshot (reused until inputs change)
-
-**Content-change detection**:
-- Mtime-gated: backlog section re-derived only if AUDIT-BACKLOG.md mtime changed
-- Fingerprint-gated: agents section re-derived only if transcripts directory content changed
-- Hash-gated: broadcast only sent if content-hash differs from last broadcast
-- This avoids expensive operations (subprocess for dash-extra.mjs, directory walk) on every tick
+Daemon thread polling heartbeats/logs via mtime/fingerprint gates; re-derives SSE sections only on input change, broadcasts only when content-hash differs (avoids expensive operations on every tick). Started idempotently on first HTTP request via `start_collector_thread()`, runs with single-instance guard `_collector_lock`, wakes every `COLLECTOR_INTERVAL` (default 1.0s, `AESOP_UI_COLLECT_INTERVAL`).
 
 ## Invariants & Gotchas
 
