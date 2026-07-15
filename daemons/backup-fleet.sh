@@ -80,12 +80,30 @@ scan_unpushed_commits() {
   local repo_win
   local unpushed_files
 
-  repo_win=$(cd "$repo" 2>/dev/null && pwd -W 2>/dev/null || echo "$repo")
+  # Portable path derivation (not Git-Bash pwd -W only)
+  repo_win=$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "$repo")
 
-  unpushed_files=$(
-    cd "$repo" || return 1
-    git diff --name-only @{u}..HEAD 2>/dev/null | sort -u
-  )
+  # Detect if upstream exists (no-upstream or detached HEAD scenario)
+  local upstream
+  upstream=$(cd "$repo" 2>/dev/null && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+
+  if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
+    # No upstream or detached HEAD: fallback to scanning recent commits (last 20)
+    # Safe approach: use git log to show files changed in recent commits
+    log "WARN: Repository has no upstream or detached HEAD; falling back to recent commits scan for $repo"
+    unpushed_files=$(
+      cd "$repo" || return 1
+      # Get files from the last 20 commits (or fewer if repository is smaller)
+      # Filter out commit hashes (lines starting with hex digits and space)
+      git log --name-only -20 --oneline 2>/dev/null | grep -v '^[a-f0-9]' | grep -v '^$' | sort -u
+    )
+  else
+    # Normal case: scan commits not yet pushed to upstream
+    unpushed_files=$(
+      cd "$repo" || return 1
+      git diff --name-only @{u}..HEAD 2>/dev/null | sort -u
+    )
+  fi
 
   if [ -n "$unpushed_files" ]; then
     while IFS= read -r file; do
@@ -121,8 +139,8 @@ scan_tracked_files() {
   local -a file_paths=()
   local repo_win
 
-  # Convert repo path to Windows format for Python compatibility (Git Bash on Windows)
-  repo_win=$(cd "$repo" 2>/dev/null && pwd -W 2>/dev/null || echo "$repo")
+  # Portable path derivation (not Git-Bash pwd -W only)
+  repo_win=$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "$repo")
 
   tracked_files=$(get_tracked_modifications "$repo")
   untracked_files=$(get_untracked_files "$repo")
@@ -206,7 +224,20 @@ process_repo() {
       fi
     fi
 
-    local unpushed=$(git log @{u}.. --oneline 2>/dev/null | wc -l | tr -d ' ')
+    # Detect if upstream exists before trying to count unpushed commits
+    local upstream
+    upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+
+    local unpushed
+    if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
+      # No upstream or detached HEAD: count recent commits instead (last 20)
+      log "WARN: Repository has no upstream or detached HEAD; falling back to recent commits count for $name"
+      unpushed=$(git log --oneline -20 2>/dev/null | wc -l | tr -d ' ')
+    else
+      # Normal case: count commits not yet pushed to upstream
+      unpushed=$(git log @{u}.. --oneline 2>/dev/null | wc -l | tr -d ' ')
+    fi
+
     if [ "$unpushed" -gt 0 ]; then
       local branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
       [ "$branch" = "HEAD" ] && branch="$default"

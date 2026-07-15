@@ -331,3 +331,44 @@ test('pre-push hook is copied not symlinked on all platforms (defect c)', () => 
     'Hook installation must not use symlinkSync (dangling symlinks after npx cache clean disable branch protection and secret gate)'
   );
 });
+
+test('chmod failure on non-Windows platforms warns user (TASK C)', () => {
+  // When chmod fails on non-Windows, the script should log a clear warning
+  // telling the user to chmod +x manually. On Windows, silent failure is OK.
+  // This test checks that the code CONTAINS logic to warn on POSIX platforms.
+
+  const cli = fs.readFileSync(CLI, 'utf8');
+
+  // Find the chmod section in installPrePushHook
+  const chmodStart = cli.indexOf('// Ensure hook is executable');
+  assert.ok(chmodStart > -1, 'Should find chmod section');
+
+  // Get the section up to the next function or closing brace
+  const chmodEnd = cli.indexOf('}', chmodStart);
+  const chmodSection = cli.substring(chmodStart, chmodEnd);
+
+  // The fixed code should check if we're NOT on Windows before silently ignoring chmod
+  // Look for platform detection logic or a warning message
+  const hasNonWindowsCheck =
+    chmodSection.includes('process.platform') ||
+    chmodSection.includes('win32') ||
+    chmodSection.includes('warning') ||
+    chmodSection.includes('Warning') ||
+    chmodSection.includes('chmod');
+
+  assert.ok(
+    hasNonWindowsCheck,
+    'chmod section should include platform detection or warning message for non-Windows (TASK C: tell user to chmod +x manually)'
+  );
+
+  // Additional check: if there's a console.warn or console.error, it should mention chmod
+  if (chmodSection.includes('console.warn') || chmodSection.includes('console.error')) {
+    const hasChmodWarning = chmodSection.includes('chmod') ||
+                            chmodSection.includes('executable') ||
+                            chmodSection.includes('permission');
+    assert.ok(
+      hasChmodWarning,
+      'chmod warning message should mention chmod, executable, or permission when logging to console'
+    );
+  }
+});

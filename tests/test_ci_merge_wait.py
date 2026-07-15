@@ -354,6 +354,94 @@ class TestCiMergeWait(unittest.TestCase):
         # Verify no error about missing PR
         self.assertNotIn("required", result.stderr.lower())
 
+    def test_check_ci_status_function_checkrun_completed_neutral(self):
+        """Test check_ci_status with CheckRun: COMPLETED + NEUTRAL conclusion should be success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # CheckRun with NEUTRAL conclusion is non-blocking, should be success
+        checkrun = [
+            {"name": "advisory-check", "status": "COMPLETED", "conclusion": "NEUTRAL"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "success", "COMPLETED + NEUTRAL should be success (non-blocking advisory)")
+
+    def test_check_ci_status_function_checkrun_completed_skipped(self):
+        """Test check_ci_status with CheckRun: COMPLETED + SKIPPED conclusion should be success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # CheckRun with SKIPPED conclusion is non-blocking, should be success
+        checkrun = [
+            {"name": "skipped-check", "status": "COMPLETED", "conclusion": "SKIPPED"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "success", "COMPLETED + SKIPPED should be success (non-blocking)")
+
+    def test_check_ci_status_function_statuscontext_neutral(self):
+        """Test check_ci_status with StatusContext: state=neutral should be success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # StatusContext with neutral state is non-blocking
+        status_context = [
+            {"name": "optional-check", "state": "neutral"},
+        ]
+        result = module.check_ci_status(status_context)
+        self.assertEqual(result[0], "success", "StatusContext state=neutral should be success (non-blocking advisory)")
+
+    def test_check_ci_status_function_statuscontext_skipped(self):
+        """Test check_ci_status with StatusContext: state=skipped should be success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # StatusContext with skipped state is non-blocking
+        status_context = [
+            {"name": "optional-check", "state": "skipped"},
+        ]
+        result = module.check_ci_status(status_context)
+        self.assertEqual(result[0], "success", "StatusContext state=skipped should be success (non-blocking)")
+
+    def test_check_ci_status_function_unknown_state_fails_closed(self):
+        """Test check_ci_status with fabricated unknown state defaults to pending."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Fabricated unknown state that should fail-closed as pending
+        status_context = [
+            {"name": "mystery-state-check", "state": "fabricated_unknown_state"},
+        ]
+        result = module.check_ci_status(status_context)
+        self.assertNotEqual(result[0], "success", "Unknown state should fail-closed (not succeed)")
+        self.assertEqual(result[0], "pending", "Unknown state should default to pending (fail-closed)")
+
+    def test_check_ci_status_function_mixed_with_neutral_skipped(self):
+        """Test check_ci_status with mixed checks including neutral and skipped."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Mix of required, neutral, and skipped checks - should all be success
+        mixed = [
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": None},  # Regular success
+            {"name": "advisory-lint", "status": "COMPLETED", "conclusion": "NEUTRAL"},  # Advisory
+            {"name": "optional-scan", "status": "COMPLETED", "conclusion": "SKIPPED"},  # Skipped
+            {"name": "travis-ci", "state": "success"},  # StatusContext success
+        ]
+        result = module.check_ci_status(mixed)
+        self.assertEqual(result[0], "success", "All non-blocking checks should result in success")
+
 
 if __name__ == "__main__":
     unittest.main()

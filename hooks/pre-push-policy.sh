@@ -344,10 +344,11 @@ check_secret_scan() {
   local parse_exit_code=$?
 
   if [ $parse_exit_code -ne 0 ] || [ -z "$commit_range" ]; then
-    # Unable to parse stdin or range; log event and warn, but don't block
-    log_event "secret_scan_range_parse_failed"
-    printf 'Warning: Could not parse pre-push stdin for commit range; skipping secret scan\n' >&2
-    return 0
+    # Malformed stdin or unable to parse: fail-CLOSED (security P1 fix)
+    # Only fail-open for missing scanner tool, not for malformed input
+    log_block "secret_scan_stdin_parse_failed"
+    printf 'Error: Could not parse pre-push stdin for commit range (malformed or empty)\n' >&2
+    return 1
   fi
 
   # Run scanner on commit range and capture output

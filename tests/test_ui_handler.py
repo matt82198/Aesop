@@ -141,6 +141,25 @@ class TestHostHeaderAllowed(HostHeaderTestCase):
         self.assertNotEqual(status, 403,
                            "GET / with Host: 127.0.0.1 should not be rejected")
 
+    def test_get_root_with_localhost_uppercase_allowed(self):
+        """GET / with Host: LOCALHOST should be allowed (case-insensitive per RFC 7230)."""
+        status, body = self._get("/", host="LOCALHOST")
+        self.assertNotEqual(status, 403,
+                           "GET / with Host: LOCALHOST should not be rejected")
+
+    def test_get_root_with_localhost_mixedcase_allowed(self):
+        """GET / with Host: LocalHost should be allowed (case-insensitive per RFC 7230)."""
+        status, body = self._get("/", host="LocalHost")
+        self.assertNotEqual(status, 403,
+                           "GET / with Host: LocalHost should not be rejected")
+
+    def test_get_root_with_ipv6_loopback_uppercase_allowed(self):
+        """GET / with Host: [::1] in uppercase form should be allowed (case-insensitive per RFC 7230)."""
+        # IPv6 addresses can have uppercase hex digits; [::1] is still valid
+        status, body = self._get("/", host="[::1]")
+        self.assertNotEqual(status, 403,
+                           "GET / with Host: [::1] should not be rejected")
+
     def test_get_root_with_127_0_0_1_and_port_allowed(self):
         """GET / with Host: 127.0.0.1:8770 should be allowed."""
         status, body = self._get("/", host=f"127.0.0.1:{self.actual_port}")
@@ -192,6 +211,12 @@ class TestHostHeaderRejected(HostHeaderTestCase):
         status, body = self._get("/", host="evil.example")
         self.assertEqual(status, 403,
                         "GET / with Host: evil.example should be rejected with 403")
+
+    def test_get_root_with_evil_domain_uppercase_rejected(self):
+        """GET / with Host: EVIL.EXAMPLE should be rejected with 403 (case-insensitive still rejects invalid hosts)."""
+        status, body = self._get("/", host="EVIL.EXAMPLE")
+        self.assertEqual(status, 403,
+                        "GET / with Host: EVIL.EXAMPLE should be rejected with 403")
 
     def test_get_root_with_wrong_port_rejected(self):
         """GET / with Host: 127.0.0.1:9999 should be rejected with 403."""

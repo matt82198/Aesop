@@ -30,7 +30,7 @@
    - Guards both daemon mode and `--once` mode (no bypass).
 2. **Testing override**: Set `AESOP_WATCHDOG_CYCLE_CMD` env var to replace backup-fleet.sh invocation (allows tests to use mock cycle without running real backup).
 3. **CRLF-safe, no line continuations**: Use POSIX-safe heredocs; never add `\` for line wrap.
-4. **Secret-scan gate**: `scan_tracked_files()` calls `$AESOP_ROOT/tools/secret_scan.py` on staged/modified files; non-0 exit blocks push, marks repo BLOCKED.
+4. **Secret-scan gate**: `scan_tracked_files()` calls `$AESOP_ROOT/tools/secret_scan.py` on tracked modifications and untracked files; non-0 exit blocks push, marks repo BLOCKED.
 5. **Append-only logs**: FLEET-BACKUP.log only grows; rotate via tools/rotate_logs.py.
 6. **Path dedup via realpath**: Avoids processing symlinked repos or dot-dir aliases twice.
 7. **Alert Bridge integration** (NEW wave-14): After each backup-fleet.sh cycle, run-watchdog.sh calls `python $AESOP_ROOT/tools/alert_bridge.py --scan || true` to post HIGH/CRITICAL security alerts and heartbeat staleness to Slack/Discord. No-op if webhook_url null/absent in aesop.config.json (feature opt-in). Uses cursor file for idempotent dispatch (no re-sends). See tools/alert_bridge.py for details.

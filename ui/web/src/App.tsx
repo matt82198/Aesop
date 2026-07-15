@@ -122,6 +122,7 @@ export default function App() {
         alerts={sseState.data?.alerts ?? null}
         connectionStatus={connection}
         dataTimestamp={dataTimestamp}
+        heartbeatTimestamp={sseState.lastHeartbeat}
         now={now}
         onThemeToggle={toggle}
         onRefresh={handleRefresh}
