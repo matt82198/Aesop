@@ -12,7 +12,7 @@
   <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-**Aesop** is an open-source orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
+**Aesop** is an open-source orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
 
 What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator), **durable state** (git-committed checkpoints survive wipes), **observable machinery** (every agent run logged, every cost tracked), **live dashboard** (real-time fleet health at http://localhost:8770), and **security gates** (secret-scan blocks pushes, CI validates each merge).
 
@@ -70,7 +70,7 @@ orchestrator (via Claude Code)  Reads backlog, dispatches Haiku subagents in par
   ↓
 parallel Haiku fleet            Tiny, scoped domains (tests, build, review, docs, etc.)
   ↓
-watchdog verifies & merges      GREEN → push to main
+watchdog backs up & gates        Heartbeat, secret-scan, push to backup branch; merging is orchestrator/human-driven
   ↓
 monitor/collect-signals.mjs     Audits orchestration health, feeds next wave's backlog
   ↓
@@ -99,7 +99,7 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 ## Recommended Agents
 
-Aesop pairs well with the open-source [Claude specialized-agent catalog](https://github.com/anthropics/claude-code/tree/main/agents) — a library of ~130 domain-specific agents (TDD orchestrators, security reviewers, performance engineers, etc.). For optimal results, install agents from the upstream source and pair them with Aesop's cost-optimized Haiku dispatch. This is optional; Aesop works standalone with general-purpose Claude Code agents.
+Aesop pairs well with the open-source catalog of ~130 community-authored specialized agent definitions (TDD orchestrators, security reviewers, performance engineers, etc.). For optimal results, install agents from the upstream source and pair them with Aesop's cost-optimized Haiku dispatch. This is optional; Aesop works standalone with general-purpose Claude Code agents.
 
 ## Use with Claude Code
 
