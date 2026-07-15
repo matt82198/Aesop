@@ -33,8 +33,8 @@ function expandPath(pathStr) {
   if (pathStr.startsWith('~')) {
     return path.join(os.homedir(), pathStr.slice(1));
   }
-  // Expand environment variables like $VAR or %VAR%
-  return pathStr.replace(/\$\{?([A-Z_]+)\}?/gi, (match, varName) => {
+  // Expand environment variables like $VAR, $VAR_1, or ${myVar}
+  return pathStr.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (match, varName) => {
     return process.env[varName] || match;
   });
 }
@@ -345,8 +345,10 @@ function detectStrayRepoScripts() {
       .map(s => s.trim())
       .filter(Boolean);
     for (const f of new Set(recent)) {
-      if (/^[^/\\]+\.(py|mjs|js|sql)$/.test(f)) {
-        strayRepo.push(`${path.basename(repoPath)}: ${f}`);
+      // Normalize git-output paths to forward slashes immediately after read
+      const normalized = f.replace(/\\/g, '/');
+      if (/^[^/]+\.(py|mjs|js|sql)$/.test(normalized)) {
+        strayRepo.push(`${path.basename(repoPath)}: ${normalized}`);
       }
     }
   }
@@ -673,6 +675,14 @@ function emitProposal(signalKey, problem, suggestedChange) {
 
   // If lock acquisition failed (fail-closed), skip emission for this cycle
   if (!lockDir) {
+    // On lock timeout, append a one-line MISSED-PROPOSAL record to ACTIONS.log (append-only)
+    // so the condition surfaces next cycle
+    const actionsLogPath = path.join(MON, 'ACTIONS.log');
+    try {
+      fs.appendFileSync(actionsLogPath, `[${timestamp}] MISSED-PROPOSAL: ${signalKey} (lock timeout)\n`, 'utf8');
+    } catch (e) {
+      // Fail-open: ignore write errors to ACTIONS.log
+    }
     return;
   }
 

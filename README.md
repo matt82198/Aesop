@@ -27,7 +27,7 @@ What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, le
 
 ## Get Started (3 steps, 5 min)
 
-**Note:** Aesop is in beta. Install the `@beta` tag for the latest prerelease (0.1.0-beta.1+).
+**Note:** Aesop is in beta. Install the `@beta` tag for the latest prerelease (v0.1.0-beta.5).
 
 ### Quickest path: npx scaffold
 
@@ -87,12 +87,12 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 141 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 377 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 143 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 390 <!-- metrics-verified: self_stats.py (git log) --> |
 | Project Age | 3 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Waves | 15 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 70,439 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 257 <!-- metrics-verified: self_stats.py (git log) --> |
+| Waves | 16 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 72,168 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 268 <!-- metrics-verified: self_stats.py (git log) --> |
 | Distinct Co-authors | 7 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- SELF-STATS:END -->

@@ -33,13 +33,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
-def get_state_dir():
-    """Resolve state directory from env var or current working directory."""
-    if os.environ.get("AESOP_STATE_ROOT"):
-        return Path(os.environ["AESOP_STATE_ROOT"])
-    # Default to ./state (relative to cwd)
-    return Path.cwd() / "state"
+try:
+    from common import get_state_dir
+except ImportError:
+    from tools.common import get_state_dir
 
 
 def get_git_head(repo_path):

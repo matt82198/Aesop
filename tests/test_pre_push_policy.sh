@@ -158,10 +158,36 @@ printf '\n=== Finding 5: json_escape missing control chars (\\n, \\r, \\t, C0) =
 
   # Should be valid JSON after proper escaping
   if printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
-    printf 'PASS: Control character escaping produces valid JSON\n'
+    printf 'PASS: Control character escaping produces valid JSON (newline test)\n'
   else
     printf 'FAIL: JSON with control char is invalid\n'
     printf 'Entry: %s\n' "$audit_line"
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Finding 5b: json_escape all C0 control characters ===\n'
+(
+  # Direct test: Pass string with various C0 control chars to json_escape
+  # Test chars: BEL (\x07), BS (\x08), VT (\x0b), FF (\x0c), SO (\x0e), ESC (\x1b)
+  test_string=$(printf 'Alice\x07\x08\x0b\x0c\x0e\x1bAdmin')
+  escaped=$(json_escape "$test_string")
+
+  # The escaped output should be JSON-safe (no bare control chars)
+  # Create a minimal JSON object with the escaped string and validate
+  json_obj=$(printf '{"user":"%s"}' "$escaped")
+
+  if printf '%s' "$json_obj" | python3 -m json.tool >/dev/null 2>&1; then
+    printf 'PASS: All C0 control characters properly escaped to valid JSON\n'
+  else
+    printf 'FAIL: JSON with escaped C0 control chars is invalid\n'
+    printf 'Escaped string: %s\n' "$escaped"
+    printf 'JSON object: %s\n' "$json_obj"
     exit 1
   fi
 )

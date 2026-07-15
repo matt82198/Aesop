@@ -1,5 +1,10 @@
 /* CostTable — per-model cost and token display */
 
+.cost-table-wrapper {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+}
+
 .cost-table {
   width: 100%;
   border-collapse: collapse;
@@ -76,7 +81,14 @@
   font-weight: var(--font-weight-bold);
 }
 
-/* Responsive: overflow on smaller screens */
+/* Responsive: hide verdict columns on <640px, smaller padding on mobile */
+@media (max-width: 640px) {
+  .cost-table .verdict-col-header,
+  .cost-table .verdict-cell {
+    display: none;
+  }
+}
+
 @media (max-width: 768px) {
   .cost-table {
     font-size: var(--font-size-xs);

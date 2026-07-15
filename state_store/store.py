@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import time
 
 
@@ -91,12 +92,20 @@ class EventStore:
                 "SELECT id, ts, actor, stream, type, payload, version FROM events " + clause,
                 params,
             )
-            return [
-                {
-                    "id": r[0], "ts": r[1], "actor": r[2], "stream": r[3],
-                    "type": r[4], "payload": json.loads(r[5]), "version": r[6],
-                }
-                for r in cur.fetchall()
-            ]
+            rows = []
+            for r in cur.fetchall():
+                try:
+                    payload = json.loads(r[5])
+                    rows.append({
+                        "id": r[0], "ts": r[1], "actor": r[2], "stream": r[3],
+                        "type": r[4], "payload": payload, "version": r[6],
+                    })
+                except json.JSONDecodeError as e:
+                    # Log corrupt event (stream id + sequence) to stderr and skip
+                    print(
+                        f"WARNING: corrupt JSON payload in stream={r[3]} id={r[0]}: {e}",
+                        file=sys.stderr,
+                    )
+            return rows
         finally:
             conn.close()

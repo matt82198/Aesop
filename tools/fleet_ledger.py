@@ -27,12 +27,10 @@ from datetime import datetime, timezone
 import re
 from collections import defaultdict
 
-
-def get_state_dir():
-    """Resolve state directory from env var or current working directory."""
-    if os.environ.get("AESOP_STATE_ROOT"):
-        return Path(os.environ["AESOP_STATE_ROOT"])
-    return Path.cwd() / "state"
+try:
+    from common import get_state_dir
+except ImportError:
+    from tools.common import get_state_dir
 
 
 def get_ledger_paths():

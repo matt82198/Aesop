@@ -11,6 +11,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { DashboardData, AuditBacklog, Agent, TrackerSnapshot, OrchestratorStatus, CostSummary, SSEConnectionStatus } from './types';
 
+/**
+ * Extended connection status with attempt tracking and retry timing.
+ * Includes attemptNumber and nextRetryMs for better UX during reconnection.
+ */
+export interface ExtendedSSEConnectionStatus extends SSEConnectionStatus {
+  attemptNumber?: number;
+  nextRetryMs?: number;
+}
+
 export interface SSEState {
   data: DashboardData | null;
   backlog: AuditBacklog | null;
@@ -18,7 +27,7 @@ export interface SSEState {
   tracker: TrackerSnapshot | null;
   status: OrchestratorStatus | null;
   cost: CostSummary | null;
-  connectionStatus: SSEConnectionStatus;
+  connectionStatus: ExtendedSSEConnectionStatus;
 }
 
 const initialState: SSEState = {
@@ -136,18 +145,33 @@ export function useSSE() {
     });
 
     eventSource.addEventListener('error', (err) => {
-      console.error('EventSource error:', err);
+      // Extract error message from the event
+      const errorMessage = err instanceof Event && 'message' in err
+        ? (err as any).message
+        : err instanceof ErrorEvent
+          ? err.message
+          : 'Connection lost';
+
+      console.error(
+        `EventSource error (attempt ${reconnectAttemptRef.current + 1}): ${errorMessage}`,
+        err
+      );
+
       eventSource.close();
       eventSourceRef.current = null;
+      reconnectAttemptRef.current += 1;
+      const delay = getReconnectDelay();
+
       setState((prev) => ({
         ...prev,
         connectionStatus: {
           status: 'reconnecting',
-          lastError: 'Connection lost',
+          lastError: `Reconnecting (attempt ${reconnectAttemptRef.current})`,
+          attemptNumber: reconnectAttemptRef.current,
+          nextRetryMs: delay,
         },
       }));
-      reconnectAttemptRef.current += 1;
-      const delay = getReconnectDelay();
+
       reconnectTimeoutRef.current = setTimeout(connect, delay);
     });
 

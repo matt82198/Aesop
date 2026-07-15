@@ -15,15 +15,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-def get_state_dir():
-    """Get state directory from env or fallback to AESOP_ROOT/state."""
-    state_root = os.getenv("AESOP_STATE_ROOT")
-    if state_root:
-        return Path(state_root)
-    
-    aesop_root = os.getenv("AESOP_ROOT", str(Path.home() / "aesop"))
-    return Path(aesop_root) / "state"
+try:
+    from common import get_state_dir
+except ImportError:
+    from tools.common import get_state_dir
 
 
 def set_status(activity, phase, id=None, role=None):

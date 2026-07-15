@@ -136,8 +136,8 @@
     --color-status-neutral: #9198a1;
 
     --color-status-ok-bg: #12261e;
-    --color-status-warn-bg: #272115;
-    --color-status-error-bg: #2d1517;
+    --color-status-warn-bg: #3d3a1f;
+    --color-status-error-bg: #4a2028;
     --color-status-info-bg: #121d2f;
 
     --color-focus-ring: #58a6ff;
@@ -171,8 +171,8 @@
   --color-status-neutral: #9198a1;
 
   --color-status-ok-bg: #12261e;
-  --color-status-warn-bg: #272115;
-  --color-status-error-bg: #2d1517;
+  --color-status-warn-bg: #3d3a1f;
+  --color-status-error-bg: #4a2028;
   --color-status-info-bg: #121d2f;
 
   --color-focus-ring: #58a6ff;

@@ -4,36 +4,37 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 
 ## FILES
 
-- `lock.mjs` — Fail-closed atomic lock acquisition (exponential backoff + stale-lock detection)
-- `secret_scan.py` — Pre-push secret/credential detection gate
-- `scanner_selftest.py` — Regression harness for secret_scan.py
-- `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
-- `metrics_gate.py` — PR gate for hard numeric claims in markdown
-- `self_stats.py` — Git-derived metrics counter + README block generator
-- `verify_dash.py` — Browser proof for realtime SSE dashboard
-- `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
-- `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS)
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
-- `proposals.mjs` — Proposal lifecycle manager (list/accept/reject)
-- `power_selftest.py` — Health check harness for /power bootstrap
-- `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
 - `buildlog.py` — Uniform BUILDLOG.md appender
+- `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS)
+- `common.py` — Shared utilities (state directory resolution, heartbeat staleness checks)
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates
-- `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
-- `heartbeat.py` — Single-instance loop liveness registry
-- `stall_check.py` — Automated agent transcript stall detector
-- `inbox_drain.py` — Drain UI inbox submissions
-- `orchestrator_status.py` — Atomic orchestrator status updates
-- `reconstitute.sh` — Clone/fetch repos from config with security validation
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits)
-- `agent-forensics.sh` — Incident forensics / behavior reconstruction
+- `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
+- `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
+- `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
+- `heartbeat.py` — Single-instance loop liveness registry
+- `inbox_drain.py` — Drain UI inbox submissions
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
+- `lock.mjs` — Fail-closed atomic lock acquisition (exponential backoff + stale-lock detection)
+- `metrics_gate.py` — PR gate for hard numeric claims in markdown
+- `orchestrator_status.py` — Atomic orchestrator status updates
+- `power_selftest.py` — Health check harness for /power bootstrap
+- `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
+- `proposals.mjs` — Proposal lifecycle manager (list/accept/reject)
+- `reconstitute.sh` — Clone/fetch repos from config with security validation
 - `rotate_logs.py` — Log rotation utility with size/line thresholds
+- `scanner_selftest.py` — Regression harness for secret_scan.py
+- `secret_scan.py` — Pre-push secret/credential detection gate
+- `self_stats.py` — Git-derived metrics counter + README block generator
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
+- `stall_check.py` — Automated agent transcript stall detector
+- `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (with lazy import error handling)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
-- `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
-- `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (with lazy import error handling)
+- `verify_dash.py` — Browser proof for realtime SSE dashboard
+- `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
+- `agent-forensics.sh` — Incident forensics / behavior reconstruction
 
 ## secret_scan.py — Pre-push secret/credential detection gate
 

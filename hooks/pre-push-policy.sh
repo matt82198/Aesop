@@ -3,14 +3,45 @@ set -uo pipefail
 
 json_escape() {
   # Escape backslashes first, then quotes, then control chars for valid JSON
-  # Finding 5: Handle control characters (\n, \r, \t, C0)
+  # Finding 5: Handle ALL C0 control characters (\x00-\x08, \x0b-\x0c, \x0e-\x1f)
   local s="$1"
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
   s="${s//$'\n'/\\n}"
   s="${s//$'\r'/\\r}"
   s="${s//$'\t'/\\t}"
-  printf '%s' "$s"
+  # Escape remaining C0 control characters as \u00XX
+  # Using sed with explicit byte mappings for each C0 char not yet escaped
+  printf '%s' "$s" | sed \
+    -e 's/[\x00]/\\u0000/g' \
+    -e 's/[\x01]/\\u0001/g' \
+    -e 's/[\x02]/\\u0002/g' \
+    -e 's/[\x03]/\\u0003/g' \
+    -e 's/[\x04]/\\u0004/g' \
+    -e 's/[\x05]/\\u0005/g' \
+    -e 's/[\x06]/\\u0006/g' \
+    -e 's/[\x07]/\\u0007/g' \
+    -e 's/[\x08]/\\u0008/g' \
+    -e 's/[\x0b]/\\u000b/g' \
+    -e 's/[\x0c]/\\u000c/g' \
+    -e 's/[\x0e]/\\u000e/g' \
+    -e 's/[\x0f]/\\u000f/g' \
+    -e 's/[\x10]/\\u0010/g' \
+    -e 's/[\x11]/\\u0011/g' \
+    -e 's/[\x12]/\\u0012/g' \
+    -e 's/[\x13]/\\u0013/g' \
+    -e 's/[\x14]/\\u0014/g' \
+    -e 's/[\x15]/\\u0015/g' \
+    -e 's/[\x16]/\\u0016/g' \
+    -e 's/[\x17]/\\u0017/g' \
+    -e 's/[\x18]/\\u0018/g' \
+    -e 's/[\x19]/\\u0019/g' \
+    -e 's/[\x1a]/\\u001a/g' \
+    -e 's/[\x1b]/\\u001b/g' \
+    -e 's/[\x1c]/\\u001c/g' \
+    -e 's/[\x1d]/\\u001d/g' \
+    -e 's/[\x1e]/\\u001e/g' \
+    -e 's/[\x1f]/\\u001f/g'
 }
 compute_sha256() {
   # P1-Bug2 fix: Single helper for sha256sum with fallback to shasum
