@@ -30,20 +30,50 @@ acquire_lock() {
   fi
 
   # Lock directory already exists; check if it's stale
-  if [ -d "$lock_dir" ] && [ -f "$lock_dir/timestamp" ]; then
-    local lock_mtime=$(cat "$lock_dir/timestamp" 2>/dev/null || echo 0)
-    local now=$(date +%s)
-    local lock_age=$((now - lock_mtime))
+  # AUDIT FIX 2: Verify both timestamp AND pid files exist before the stale comparison
+  if [ -d "$lock_dir" ]; then
+    # Try to read pid file to check if process is still running
+    local lock_pid=""
+    if [ -f "$lock_dir/pid" ]; then
+      lock_pid=$(cat "$lock_dir/pid" 2>/dev/null)
+    fi
 
-    if [ "$lock_age" -gt "$stale_threshold" ]; then
-      # Lock is stale; try to reclaim it
-      rm -rf "$lock_dir" 2>/dev/null || true
-      if mkdir "$lock_dir" 2>/dev/null; then
-        date +%s > "$lock_dir/timestamp" 2>/dev/null
-        echo $$ > "$lock_dir/pid" 2>/dev/null
-        echo "watchdog lock was stale (${lock_age}s) — reclaimed." >&2
-        return 2
+    # Check if both required files exist
+    if [ -f "$lock_dir/timestamp" ] && [ -f "$lock_dir/pid" ] && [ -n "$lock_pid" ]; then
+      # Both files present and pid is readable - use timestamp for stale check
+      local lock_mtime=$(cat "$lock_dir/timestamp" 2>/dev/null || echo 0)
+      local now=$(date +%s)
+      local lock_age=$((now - lock_mtime))
+
+      if [ "$lock_age" -gt "$stale_threshold" ]; then
+        # Lock is stale; try to reclaim it
+        rm -rf "$lock_dir" 2>/dev/null || true
+        if mkdir "$lock_dir" 2>/dev/null; then
+          date +%s > "$lock_dir/timestamp" 2>/dev/null
+          echo $$ > "$lock_dir/pid" 2>/dev/null
+          echo "watchdog lock was stale (${lock_age}s) — reclaimed." >&2
+          return 2
+        fi
       fi
+    else
+      # AUDIT FIX 2: Timestamp or pid file missing, or pid is empty - lock is incomplete
+      # Check if the pid (if present) is still running
+      local pid_running=0
+      if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+        pid_running=1
+      fi
+
+      if [ $pid_running -eq 0 ]; then
+        # Process is not running - lock is stale, reclaim it
+        rm -rf "$lock_dir" 2>/dev/null || true
+        if mkdir "$lock_dir" 2>/dev/null; then
+          date +%s > "$lock_dir/timestamp" 2>/dev/null
+          echo $$ > "$lock_dir/pid" 2>/dev/null
+          echo "watchdog lock was stale (incomplete/no process) — reclaimed." >&2
+          return 2
+        fi
+      fi
+      # If process is still running, hold the lock (conservative)
     fi
   fi
 

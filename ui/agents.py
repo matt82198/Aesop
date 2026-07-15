@@ -9,6 +9,30 @@ from pathlib import Path
 import config
 
 
+def _path_is_contained(child, root):
+    """Check if child path is contained within root path (no traversal).
+
+    Returns True if child is under root, False if it escapes (e.g., via ..).
+    Uses Path.is_relative_to (Python 3.9+) with a fallback for older runtimes.
+
+    Args:
+        child: Path object (typically resolved)
+        root: Path object (typically resolved)
+
+    Returns:
+        bool: True if child is contained within root, False otherwise
+    """
+    try:
+        return child.is_relative_to(root.resolve())
+    except AttributeError:
+        # Path.is_relative_to requires Python 3.9+; fall back for older runtimes.
+        try:
+            child.relative_to(root.resolve())
+            return True
+        except ValueError:
+            return False
+
+
 def get_fleet_agents():
     """Detect running subagents by calling dash-extra.mjs --json.
 
@@ -90,16 +114,7 @@ def extract_agent_dispatch_prompt(agent_id):
 
         # Containment check: the resolved match must stay inside config.TRANSCRIPTS_ROOT.
         # Belt-and-suspenders alongside the input rejection above.
-        try:
-            is_contained = output_file.resolve().is_relative_to(config.TRANSCRIPTS_ROOT.resolve())
-        except AttributeError:
-            # Path.is_relative_to requires Python 3.9+; fall back for older runtimes.
-            try:
-                output_file.resolve().relative_to(config.TRANSCRIPTS_ROOT.resolve())
-                is_contained = True
-            except ValueError:
-                is_contained = False
-        if not is_contained:
+        if not _path_is_contained(output_file.resolve(), config.TRANSCRIPTS_ROOT):
             return {"error": "resolved path outside transcripts root", "invalid": True}
 
         dispatch_prompt = None
@@ -110,7 +125,7 @@ def extract_agent_dispatch_prompt(agent_id):
         last_activity = None
 
         # Parse NDJSON (one JSON per line)
-        with open(output_file, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(output_file, 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
             message_count = len(lines)
 
@@ -156,7 +171,8 @@ def extract_agent_dispatch_prompt(agent_id):
             "last_activity": last_activity,
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"[extract_agent_dispatch_prompt] Uncaught exception: {e}", file=sys.stderr)
+        return {"error": "Failed to extract dispatch prompt"}
 
 def _transcripts_fingerprint():
     """Cheap fs-stat-only fingerprint of the transcripts tree.

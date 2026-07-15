@@ -216,8 +216,9 @@ class TestPragmaNotSoftensFatalSecrets(unittest.TestCase):
     def test_connection_string_with_pragma_is_fatal(self):
         """Connection string with pragma should still be FATAL (exit 1)."""
         # Dummy connection URL assembled at runtime (scheme/creds/host split)
+        # Using prod.mycompany.com (not allowlisted) instead of example.com (now allowlisted for test domains)
         dummy_url = _j(
-            "postgresql:", "//user:dummypass", "@prod.example.com:5432/db"
+            "postgresql:", "//user:dummypass", "@prod.mycompany.com:5432/db"
         )
         temp_path = _write_fixture(
             ".py",

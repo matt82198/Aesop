@@ -83,6 +83,7 @@ Options:
   --name <name>           Project name (for headless scaffolding; generates CLAUDE.md + aesop.config.json)
   --domains <list>        Comma-separated domain list (e.g., "api,worker,monitoring")
   --repos <paths>         Comma-separated repo paths (e.g., "/path/to/repo1,/path/to/repo2")
+  --repo-urls <urls>      Comma-separated repo URLs (e.g., "https://github.com/user/repo1.git,https://github.com/user/repo2.git")
 
 Examples:
   npx @matt82198/aesop                                      # Creates ./aesop-fleet/ with template
@@ -134,9 +135,9 @@ if (wizardModeRequested && wizardArgIndex >= 0) {
 }
 
 // Extract targetDir (first non-flag argument, excluding flag values)
-// Build set of indices consumed as flag values (tokens after --name/--domains/--repos)
+// Build set of indices consumed as flag values (tokens after --name/--domains/--repos/--repo-urls)
 const consumedIndices = new Set();
-const flagsWithValues = ['--name', '--domains', '--repos'];
+const flagsWithValues = ['--name', '--domains', '--repos', '--repo-urls'];
 for (let i = 0; i < args.length; i++) {
   if (flagsWithValues.includes(args[i]) && i + 1 < args.length) {
     consumedIndices.add(i + 1);
@@ -153,6 +154,7 @@ const targetDir = args.find((arg, idx) =>
 const projectName = getFlag('--name');
 const domainsStr = getFlag('--domains');
 const reposStr = getFlag('--repos');
+const repoUrlsStr = getFlag('--repo-urls');
 
 // Validate target directory doesn't exist or is empty (except for .git and aesop files)
 if (fs.existsSync(targetDir)) {
@@ -277,7 +279,7 @@ function substituteTemplate(templateContent, projectName, domainsStr, reposStr) 
   return result;
 }
 
-function generateConfigJson(targetDir, templateRoot, projectName, reposStr) {
+function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repoUrlsStr) {
   // Read example config
   const exampleConfigPath = path.join(templateRoot, 'aesop.config.example.json');
   let exampleConfig;
@@ -292,6 +294,7 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr) {
       brain_root: path.join(os.homedir(), '.claude'),
       scripts_root: path.join(os.homedir(), 'scripts'),
       temp_root: path.join(os.tmpdir()),
+      fleet_root: os.homedir(),
       repos: [],
       watchdog: {
         cycle_seconds: 150,
@@ -327,18 +330,26 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr) {
   exampleConfig.brain_root = '~/.claude';
   exampleConfig.scripts_root = '~/scripts';
   exampleConfig.temp_root = '~/.aesop-temp';
+  exampleConfig.fleet_root = os.homedir();
   exampleConfig._generated_note = 'This config uses portable ~ paths which expand at runtime on all platforms. Config loaders in ui/config.py (Python) and monitor/collect-signals.mjs (Node.js) automatically expand ~ paths to your home directory.';
 
   // Parse repos if provided
   if (reposStr) {
     const repos = reposStr.split(',').map(r => r.trim()).filter(r => r);
+    const repoUrls = repoUrlsStr ? repoUrlsStr.split(',').map(u => u.trim()).filter(u => u) : [];
+
     exampleConfig.repos = repos.map((repoPath, idx) => ({
       path: repoPath,
       name: path.basename(repoPath),
-      url: `https://github.com/user/${path.basename(repoPath)}.git`,
+      url: repoUrls[idx] || `https://github.com/user/${path.basename(repoPath)}.git`,
       primary_branch: 'main',
       backup_branch: 'backup/wip'
     }));
+
+    // Add _repos_note if URLs weren't provided (user must edit them)
+    if (!repoUrlsStr) {
+      exampleConfig._repos_note = 'Repository URLs are currently placeholders (https://github.com/user/<name>.git). Update each repo.url in the repos array with the actual repository URL. This is a required manual step before the daemon can clone repositories.';
+    }
   }
 
   return exampleConfig;
@@ -490,6 +501,7 @@ function installPrePushHook(targetDir, templateRoot) {
     let finalProjectName = projectName;
     let finalReposStr = reposStr;
     let finalDomainsStr = domainsStr;
+    let finalRepoUrlsStr = repoUrlsStr;
     let finalTargetDir = targetDir;
     let configPath = path.join(targetDir, 'aesop.config.json');
     let dashboardPort = 8770;
@@ -597,7 +609,7 @@ function installPrePushHook(targetDir, templateRoot) {
         console.warn(`⚠ Warning: aesop.config.json already exists at ${configPath}`);
       } else {
         // Generate aesop.config.json
-        const config = generateConfigJson(finalTargetDir, templateRoot, finalProjectName, finalReposStr);
+        const config = generateConfigJson(finalTargetDir, templateRoot, finalProjectName, finalReposStr, finalRepoUrlsStr);
         // Update dashboard port if specified in wizard mode
         if (wizardMode && dashboardPort !== 8770) {
           config.dashboard.refresh_seconds = 1;

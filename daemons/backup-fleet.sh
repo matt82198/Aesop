@@ -199,44 +199,103 @@ echo "[" > "$temp_json"
 first=1
 processed_paths=""
 
-# Discover all git repos: scan home dot-directories, root directories, dev/ subdirectory
-# This pattern includes ~/.* (dot-dirs like .claude), ~/* (home root), ~/dev/* (dev subtree)
-for dir in ~/.* ~/* ~/dev/*; do
-  base=$(basename "$dir")
-  [ "$base" = "." ] || [ "$base" = ".." ] && continue
-  [ ! -d "$dir/.git" ] && continue
+# AUDIT FIX 1: Check if aesop.config.json exists and has repos array
+repos_to_scan=""
+config_file="$AESOP_ROOT/aesop.config.json"
+if [ -f "$config_file" ]; then
+  # Parse repos array from config using Python (not grep)
+  repos_to_scan=$(python3 -c "
+import json, sys
+try:
+  with open('$config_file', 'r') as f:
+    config = json.load(f)
+    repos = config.get('repos', [])
+    if isinstance(repos, list) and len(repos) > 0:
+      for repo in repos:
+        if isinstance(repo, dict) and 'path' in repo:
+          print(repo['path'])
+except Exception as e:
+  pass
+" 2>/dev/null)
+fi
 
-  # Normalize path to detect duplicates (e.g., .claude vs .claude/)
-  real_dir=$(cd "$dir" && pwd 2>/dev/null)
-  if [ -z "$real_dir" ]; then continue; fi
-  if echo "$processed_paths" | grep -Fq "$real_dir"; then
-    continue
-  fi
-  processed_paths="$processed_paths
+if [ -n "$repos_to_scan" ]; then
+  # AUDIT FIX 1: Use explicit repos from config
+  log "Loading repos from config file"
+  while IFS= read -r dir; do
+    [ -z "$dir" ] && continue
+    # Validate repo path exists
+    if [ ! -d "$dir/.git" ]; then
+      log "WARN: configured repo not found or not a git repo (skipping): $dir"
+      continue
+    fi
+    # Normalize path to detect duplicates
+    real_dir=$(cd "$dir" && pwd 2>/dev/null)
+    if [ -z "$real_dir" ]; then continue; fi
+    if echo "$processed_paths" | grep -Fq "$real_dir"; then
+      continue
+    fi
+    processed_paths="$processed_paths
 $real_dir"
 
-  if is_touched "$dir"; then
-    # P0 FIX: Eliminate $() command substitution to preserve NUL bytes in protocol
-    # Direct redirect maintains NUL delimiters (process_repo emits STATE\0name format)
-    temp_result=$(mktemp)
-    process_repo "$dir" > "$temp_result"
-    # Read first field (state) and second field (name) using NUL delimiter
-    # Portable solution: use awk with RS="\0" instead of GNU sed \x0 (BSD/macOS compatible)
-    state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
-    name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
-    rm -f "$temp_result"
-    [ -z "$state" ] && continue
-    if [ "$first" = 1 ]; then
-      first=0
-    else
-      echo "," >> "$temp_json"
+    if is_touched "$dir"; then
+      temp_result=$(mktemp)
+      process_repo "$dir" > "$temp_result"
+      state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
+      name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
+      rm -f "$temp_result"
+      [ -z "$state" ] && continue
+      if [ "$first" = 1 ]; then
+        first=0
+      else
+        echo "," >> "$temp_json"
+      fi
+      printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
+      log "$state: $name"
     fi
-    # P2 FIX: JSON-escape all interpolated values before emitting
-    # P2 FIX: Portable date format (not GNU-only date -Iseconds)
-    printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
-    log "$state: $name"
-  fi
-done
+  done <<< "$repos_to_scan"
+else
+  # AUDIT FIX 1: Fall back to autodiscovery only when no repos configured
+  log "No repos configured, using autodiscovery"
+  # Discover all git repos: scan home dot-directories, root directories, dev/ subdirectory
+  # This pattern includes ~/.* (dot-dirs like .claude), ~/* (home root), ~/dev/* (dev subtree)
+  for dir in ~/.* ~/* ~/dev/*; do
+    base=$(basename "$dir")
+    [ "$base" = "." ] || [ "$base" = ".." ] && continue
+    [ ! -d "$dir/.git" ] && continue
+
+    # Normalize path to detect duplicates (e.g., .claude vs .claude/)
+    real_dir=$(cd "$dir" && pwd 2>/dev/null)
+    if [ -z "$real_dir" ]; then continue; fi
+    if echo "$processed_paths" | grep -Fq "$real_dir"; then
+      continue
+    fi
+    processed_paths="$processed_paths
+$real_dir"
+
+    if is_touched "$dir"; then
+      # P0 FIX: Eliminate $() command substitution to preserve NUL bytes in protocol
+      # Direct redirect maintains NUL delimiters (process_repo emits STATE\0name format)
+      temp_result=$(mktemp)
+      process_repo "$dir" > "$temp_result"
+      # Read first field (state) and second field (name) using NUL delimiter
+      # Portable solution: use awk with RS="\0" instead of GNU sed \x0 (BSD/macOS compatible)
+      state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
+      name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
+      rm -f "$temp_result"
+      [ -z "$state" ] && continue
+      if [ "$first" = 1 ]; then
+        first=0
+      else
+        echo "," >> "$temp_json"
+      fi
+      # P2 FIX: JSON-escape all interpolated values before emitting
+      # P2 FIX: Portable date format (not GNU-only date -Iseconds)
+      printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
+      log "$state: $name"
+    fi
+  done
+fi
 
 echo "" >> "$temp_json"
 echo "]" >> "$temp_json"

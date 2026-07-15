@@ -53,6 +53,8 @@ export function AlertsPanel({ alerts }: AlertsPanelProps) {
                 <span
                   className="alerts-panel__severity"
                   style={{ color: getSeverityColor(severity) }}
+                  role="status"
+                  aria-label={`Severity: ${severity.toUpperCase()}`}
                 >
                   {severity.toUpperCase()}
                 </span>

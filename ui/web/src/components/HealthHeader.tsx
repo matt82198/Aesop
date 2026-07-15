@@ -21,7 +21,7 @@ interface HealthHeaderProps {
   agents: Agent[] | null;
   alerts: Alert | null;
   connectionStatus: SSEConnectionStatus;
-  dataTimestamp: number | null; // Epoch ms when last SSE payload was received
+  dataTimestamp?: number | null; // Epoch ms when last SSE payload was received
   onThemeToggle: () => void;
   onRefresh: () => void;
 }
@@ -36,18 +36,6 @@ function formatAge(ageSeconds: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(ageSeconds / 3600);
   return `${hours}h`;
-}
-
-/**
- * Determine status color based on alert severity or status.
- */
-function getStatusColor(status: string): string {
-  if (status === 'HIGH' || status === 'SUSPICIOUS') return 'var(--color-status-error)';
-  if (status === 'MED' || status === 'DRIFT') return 'var(--color-status-warn)';
-  if (status === 'ALIVE' || status === 'running' || status === 'OK') return 'var(--color-status-ok)';
-  if (status === 'STALE') return 'var(--color-status-error)';
-  if (status === 'idle') return 'var(--color-status-info)';
-  return 'var(--color-status-neutral)';
 }
 
 /**
@@ -106,6 +94,7 @@ export function HealthHeader({
   const dataAgeMs = dataTimestamp ? Date.now() - dataTimestamp : -1;
   const isDataStale = dataAgeMs > 60000;
   const dataTimeStr = dataTimestamp ? formatRelativeTime(dataTimestamp) : 'unknown';
+  const stalenessAge = isDataStale ? formatAge(Math.floor(dataAgeMs / 1000)) : null;
 
   // Determine max severity for alerts color
   let maxAlertSeverity = 'neutral';
@@ -194,36 +183,54 @@ export function HealthHeader({
         {/* Alerts count */}
         <button
           type="button"
-          className={`health-header__cell health-header__cell--alerts ${
-            maxAlertSeverity === 'error'
-              ? 'text-status-error'
-              : maxAlertSeverity === 'warn'
-                ? 'text-status-warn'
-                : ''
-          }`}
+          className={`health-header__cell health-header__cell--alerts`}
           data-testid={TESTIDS.healthAlertsCount}
           onClick={handleAlertsClick}
-          aria-label={`${alertsCount} alerts`}
+          aria-label={`${alertsCount} alerts${alertsCount > 0 ? ': ' + maxAlertSeverity.toUpperCase() : ''}`}
         >
           <span className="health-header__label">Alerts</span>
-          <span className="health-header__count">{alertsCount}</span>
+          <span
+            className={`health-header__count ${
+              alertsCount > 0
+                ? maxAlertSeverity === 'error'
+                  ? 'text-status-error'
+                  : maxAlertSeverity === 'warn'
+                    ? 'text-status-warn'
+                    : 'text-status-info'
+                : ''
+            }`}
+          >
+            {alertsCount}
+          </span>
         </button>
 
         {/* Data timestamp */}
-        <span
-          className={`health-header__cell health-header__cell--timestamp ${
-            isDataStale ? 'health-header__cell--stale' : ''
-          }`}
-          data-testid="health-data-timestamp"
-          role="status"
-          aria-live="polite"
-          aria-label={`Data as of ${dataTimeStr}`}
-        >
-          <span className="health-header__label">Data</span>
-          <span className={`health-header__status ${isDataStale ? 'text-status-warn' : 'text-status-ok'}`}>
-            {dataTimeStr}
+        <div className="health-header__data-wrapper">
+          <span
+            className={`health-header__cell health-header__cell--timestamp ${
+              isDataStale ? 'health-header__cell--stale' : ''
+            }`}
+            data-testid="health-data-timestamp"
+            role="status"
+            aria-live="polite"
+            aria-label={`Data as of ${dataTimeStr}${isDataStale ? ` (stale by ${stalenessAge})` : ''}`}
+          >
+            <span className="health-header__label">Data</span>
+            <span className={`health-header__status ${isDataStale ? 'text-status-warn' : 'text-status-ok'}`}>
+              {dataTimeStr}
+            </span>
           </span>
-        </span>
+          {isDataStale && (
+            <div
+              className="health-header__warning-strip"
+              role="alert"
+              aria-label={`Data is stale: ${stalenessAge} old`}
+            >
+              <span className="health-header__warning-icon">⚠</span>
+              <span className="health-header__warning-text">Data stale: {stalenessAge} old</span>
+            </div>
+          )}
+        </div>
 
         {/* SSE status */}
         <span

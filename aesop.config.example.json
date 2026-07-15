@@ -14,6 +14,7 @@
   "temp_root": "~/.aesop-temp",
   "_temp_root_notes": "Portable path for temporary aesop files. ~ expands to home directory on both Windows and POSIX. Alternatively, on Windows set to %TEMP%/aesop, on POSIX set to /tmp/aesop. Config loaders expand ~ at runtime.",
   "state_root": "./state",
+  "_fleet_root_note": "SECURITY BOUNDARY: all repository clone targets must remain under fleet_root to prevent credential harvesting across account boundaries. The monitor validates clone targets on each cycle. Defaults to home directory if not specified.",
   "fleet_root": "/path/to/fleet",
   "transcripts_root": "~/.claude/projects",
   "repos": [

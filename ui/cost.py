@@ -63,6 +63,75 @@ from pathlib import Path
 import config
 
 
+def _validate_ledger_format(lines):
+    """Validate that ledger has the expected column structure.
+
+    Checks the first non-empty, non-separator, non-header line to ensure it looks like a data row
+    (has ISO timestamp, agent type, model, numeric fields, verdict). Returns (is_valid, error_message).
+
+    Expected format:
+      | ISO timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict |
+      |---|---|---|---|---|---|---|
+      | 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+    """
+    for line in lines:
+        line = line.strip()
+
+        # Skip empty lines
+        if not line:
+            continue
+
+        # Skip separator lines (all dashes and pipes)
+        if all(c in '|-' for c in line):
+            continue
+
+        # This is the first real line; validate it
+        if not line.startswith('|') or not line.endswith('|'):
+            return False, "First data line does not start/end with pipe"
+
+        parts = [p.strip() for p in line.split('|')]
+
+        # Should have 9 parts: [empty, col1, col2, col3, col4, col5, col6, col7, empty]
+        if len(parts) != 9:
+            return False, f"Expected 7 columns, got {len(parts) - 2}"
+
+        # Extract columns and validate types
+        try:
+            timestamp = parts[1]
+            agent_type = parts[2]
+            model = parts[3]
+            duration_str = parts[4]
+            tokens_in_str = parts[5]
+            tokens_out_str = parts[6]
+            verdict = parts[7]
+
+            # Skip header line if timestamp column contains "timestamp" or "ISO"
+            if 'timestamp' in timestamp.lower() or 'iso' in timestamp.lower():
+                continue
+
+            # Check if timestamp looks like ISO format (contains 'T' and '-')
+            if 'T' not in timestamp or '-' not in timestamp:
+                return False, f"First data line does not have ISO timestamp in column 1: {timestamp}"
+
+            # Check if tokens are numeric
+            try:
+                int(tokens_in_str)
+                int(tokens_out_str)
+            except ValueError:
+                return False, f"Token columns must be numeric, got tokens_in={tokens_in_str}, tokens_out={tokens_out_str}"
+
+            # Check if verdict is valid
+            if verdict not in ("OK", "FAILED", "EMPTY", "HUNG"):
+                return False, f"First data line has invalid verdict: {verdict}"
+
+            return True, ""
+        except IndexError:
+            return False, "First data line has missing columns"
+
+    # No data lines found
+    return True, ""  # Empty ledger is ok
+
+
 def get_cost_summary():
     """Parse the outcomes ledger and return cost/token/verdict aggregations.
 
@@ -70,13 +139,18 @@ def get_cost_summary():
     Returns an empty summary with documented shape if ledger is missing or empty.
     Malformed lines are skipped and counted in skipped_lines.
 
+    Validates ledger format on first data line. If format is invalid, returns
+    a summary containing {"error": "ledger format invalid"} and logs to stderr.
+
     All config paths are read at call time (not import time) to ensure
     test-fixture isolation via config.reload().
 
     Returns:
         dict: CostSummary with models, daily_totals, overall_scorecard,
-              skipped_lines, has_pricing, estimates_by_model.
+              skipped_lines, has_pricing, estimates_by_model (or error field if invalid).
     """
+    import sys
+
     # Read ledger path at call time
     ledger_file = config.STATE_DIR / "ledger" / "OUTCOMES-LEDGER.md"
 
@@ -113,6 +187,13 @@ def get_cost_summary():
 
     lines = content.strip().split('\n')
 
+    # Validate ledger format
+    is_valid, error_msg = _validate_ledger_format(lines)
+    if not is_valid:
+        print(f"[cost] Ledger format invalid: {error_msg}", file=sys.stderr, flush=True)
+        result["error"] = "ledger format invalid"
+        return result
+
     # Parse each line
     for line in lines:
         line = line.strip()
@@ -127,6 +208,7 @@ def get_cost_summary():
 
         # Parse pipe-delimited row
         if not line.startswith('|') or not line.endswith('|'):
+            print(f"[cost] Skipping malformed line (no pipe delimiters): {line[:50]}", file=sys.stderr, flush=True)
             result["skipped_lines"] += 1
             continue
 
@@ -137,6 +219,7 @@ def get_cost_summary():
         # Format: | col1 | col2 | col3 | col4 | col5 | col6 | col7 |
         # After split: ['', 'col1', 'col2', 'col3', 'col4', 'col5', 'col6', 'col7', '']
         if len(parts) < 9:  # Need at least 9 parts (empty + 7 columns + empty)
+            print(f"[cost] Skipping line with too few columns ({len(parts) - 2}): {line[:50]}", file=sys.stderr, flush=True)
             result["skipped_lines"] += 1
             continue
 
@@ -150,7 +233,12 @@ def get_cost_summary():
             tokens_out_str = parts[6]
             verdict = parts[7]
         except IndexError:
+            print(f"[cost] Skipping line with missing columns: {line[:50]}", file=sys.stderr, flush=True)
             result["skipped_lines"] += 1
+            continue
+
+        # Skip header line if timestamp column contains "timestamp" or "ISO" — silently, don't count as skipped
+        if 'timestamp' in timestamp.lower() or 'iso' in timestamp.lower():
             continue
 
         # Parse numeric fields
@@ -158,11 +246,13 @@ def get_cost_summary():
             tokens_in = int(tokens_in_str)
             tokens_out = int(tokens_out_str)
         except ValueError:
+            print(f"[cost] Skipping line with non-numeric tokens (in={tokens_in_str}, out={tokens_out_str}): {line[:50]}", file=sys.stderr, flush=True)
             result["skipped_lines"] += 1
             continue
 
         # Validate verdict
         if verdict not in ("OK", "FAILED", "EMPTY", "HUNG"):
+            print(f"[cost] Skipping line with invalid verdict ({verdict}): {line[:50]}", file=sys.stderr, flush=True)
             result["skipped_lines"] += 1
             continue
 
@@ -170,6 +260,7 @@ def get_cost_summary():
         try:
             date_str = timestamp.split('T')[0]
         except IndexError:
+            print(f"[cost] Skipping line with invalid timestamp format: {line[:50]}", file=sys.stderr, flush=True)
             result["skipped_lines"] += 1
             continue
 

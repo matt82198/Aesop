@@ -34,6 +34,30 @@ from sse import (_latest_lock, _latest_snapshots, _maybe_emit,
 # frontend's first paint is one round trip (plan D3.1).
 _STATE_SECTIONS = ("data", "backlog", "agents", "tracker", "status", "cost")
 
+
+def _path_is_contained(child, root):
+    """Check if child path is contained within root path (no traversal).
+
+    Returns True if child is under root, False if it escapes (e.g., via ..).
+    Uses Path.is_relative_to (Python 3.9+) with a fallback for older runtimes.
+
+    Args:
+        child: Path object (typically resolved)
+        root: Path object (typically resolved)
+
+    Returns:
+        bool: True if child is contained within root, False otherwise
+    """
+    try:
+        return child.is_relative_to(root.resolve())
+    except AttributeError:
+        # Path.is_relative_to requires Python 3.9+; fall back for older runtimes.
+        try:
+            child.relative_to(root.resolve())
+            return True
+        except ValueError:
+            return False
+
 # MIME types for the built dist's content-hashed assets (wave-14, plan D3.4).
 _ASSET_MIME = {
     ".js": "text/javascript; charset=utf-8",
@@ -172,17 +196,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             candidate = (assets_root / rel).resolve()
 
             # Containment check: the resolved target must stay inside
-            # WEB_DIST/assets. Same belt-and-suspenders shape as agents.py.
-            try:
-                is_contained = candidate.is_relative_to(assets_root.resolve())
-            except AttributeError:
-                # Path.is_relative_to requires Python 3.9+; fall back for older runtimes.
-                try:
-                    candidate.relative_to(assets_root.resolve())
-                    is_contained = True
-                except ValueError:
-                    is_contained = False
-            if not is_contained:
+            # WEB_DIST/assets. Uses _path_is_contained helper for clarity.
+            if not _path_is_contained(candidate, assets_root):
                 self.send_error(403)
                 return
 
@@ -239,10 +254,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(state, default=str).encode('utf-8'))
         except Exception as e:
+            print(f"[serve_api_state] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def serve_api_session(self):
         """GET /api/session — the CSRF token for same-origin JS (plan D3.3).
@@ -283,10 +299,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(summary, default=str).encode('utf-8'))
         except Exception as e:
+            print(f"[serve_api_cost] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def serve_data(self):
         """Serve dashboard data as JSON."""
@@ -321,10 +338,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(body, default=str).encode('utf-8'))
         except Exception as e:
+            print(f"[serve_tracker] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def handle_tracker_create(self):
         """Handle POST /api/tracker (create item)."""
@@ -346,10 +364,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
         except Exception as e:
+            print(f"[handle_tracker_create] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def handle_tracker_mutate(self):
         """Handle POST /api/tracker/<id> (update or delete)."""
@@ -394,10 +413,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
         except Exception as e:
+            print(f"[handle_tracker_mutate] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
 
     def serve_backlog(self):
@@ -410,10 +430,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
         except Exception as e:
+            print(f"[serve_backlog] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def serve_agents(self):
         """Serve rich agent list with metadata via GET /api/agents."""
@@ -425,10 +446,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(agents, default=str).encode('utf-8'))
         except Exception as e:
+            print(f"[serve_agents] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def serve_agent(self):
         """Serve agent dispatch prompt and metadata via GET /agent?id=<agent_id>"""
@@ -588,7 +610,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             body_bytes = self.rfile.read(content_length)
-            data = json.loads(body_bytes.decode('utf-8', errors='ignore'))
+            data = json.loads(body_bytes.decode('utf-8', errors='replace'))
             text = data.get("text", "").strip()
 
             if not text:
@@ -612,10 +634,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True}).encode('utf-8'))
         except Exception as e:
+            print(f"[handle_submit] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
 
 class QuietThreadingHTTPServer(http.server.ThreadingHTTPServer):

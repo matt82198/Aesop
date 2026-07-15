@@ -235,7 +235,7 @@ def main():
                 "tp_connection_real_credentials",
                 "# Real production DB\\ndb_url = '"
                 + "postgresql:" + "//produser:RealPassword123"
-                + "@db.prod.example.com:5432/production" + "'\\n",
+                + "@db.production.io:5432/production" + "'\\n",
                 "config_prod.py",
                 1,
                 "connection_string"

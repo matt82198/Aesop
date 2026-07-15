@@ -130,8 +130,52 @@
   }
 }
 
+.health-header__data-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.health-header__warning-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-status-warn-bg);
+  border: 1px solid var(--color-status-warn);
+  border-radius: var(--radius-md);
+  color: var(--color-status-warn);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  animation: pulse-warning 1.5s ease-in-out infinite;
+}
+
+.health-header__warning-icon {
+  display: inline-block;
+  font-size: var(--font-size-sm);
+  flex-shrink: 0;
+}
+
+.health-header__warning-text {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+@keyframes pulse-warning {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .health-header__cell {
     transition: none;
+  }
+
+  .health-header__warning-strip {
+    animation: none;
   }
 }

@@ -233,7 +233,7 @@ def get_main_thread_messages():
             return messages
 
         newest = jsonl_files[0]
-        with open(newest, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(newest, 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
             # Get last 30 lines to extract ~12 message turns
             for line in lines[-30:]:

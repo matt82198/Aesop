@@ -49,13 +49,26 @@
 }
 
 .alerts-panel__severity {
-  display: inline-block;
-  min-width: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 60px;
+  padding: var(--space-1) var(--space-2);
   font-weight: var(--font-weight-bold);
   font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   flex-shrink: 0;
+  border: 1.5px solid currentColor;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Severity badge backgrounds for dark theme */
+@media (prefers-color-scheme: dark) {
+  .alerts-panel__severity {
+    background: rgba(255, 255, 255, 0.1);
+  }
 }
 
 .alerts-panel__text {

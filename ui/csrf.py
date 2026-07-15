@@ -9,6 +9,7 @@ CRITICAL: This module reads config paths LIVE at call time via 'import config',
 never 'from config import <path>'. This ensures paths are recomputed when
 config.reload() is called (e.g., between test fixtures).
 """
+import hmac
 import os
 import secrets
 import sys
@@ -138,7 +139,7 @@ def validate_csrf_request(headers):
     if not token:
         return (False, "Missing X-Aesop-Token header")
 
-    if token != SESSION_TOKEN:
+    if not hmac.compare_digest(token, SESSION_TOKEN):
         return (False, "Invalid X-Aesop-Token")
 
     return (True, None)

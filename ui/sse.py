@@ -17,6 +17,8 @@ _sse_lock = threading.Lock()
 
 _sse_clients = []  # list[queue.Queue]
 
+_dropped_counts = {}  # dict[queue.Queue, int] — track dropped events per client
+
 _latest_lock = threading.Lock()
 
 _latest_snapshots = {"data": None, "backlog": None, "agents": None,
@@ -49,6 +51,7 @@ def reset_state():
             _latest_snapshots[k] = None
     with _sse_lock:
         _sse_clients.clear()
+        _dropped_counts.clear()
 
 
 def register_sse_client():
@@ -65,12 +68,17 @@ def unregister_sse_client(q):
     with _sse_lock:
         if q in _sse_clients:
             _sse_clients.remove(q)
+        _dropped_counts.pop(q, None)  # Clean up dropped count for this client
 
 def broadcast_sse(event_name, payload):
     """Push (event_name, payload) onto every currently-registered client queue.
 
     If a client queue is full, drop the oldest event to make room (bounded backpressure).
     This prevents one slow client from blocking the broadcast.
+
+    Tracks dropped events: when a client's queue overflows, we increment the dropped counter
+    and attach a "dropped": N field to the event being queued, so the frontend can detect
+    that it missed updates.
     """
     with _sse_lock:
         clients = list(_sse_clients)
@@ -78,10 +86,27 @@ def broadcast_sse(event_name, payload):
         try:
             q.put_nowait((event_name, payload))
         except queue.Full:
-            # Queue is full: drop the oldest event and retry
+            # Queue is full: drop oldest, track the drop, and add dropped field to new event
+            with _sse_lock:
+                _dropped_counts[q] = _dropped_counts.get(q, 0) + 1
+                dropped = _dropped_counts[q]
+
+            # Try to parse payload and add dropped field
+            effective_payload = payload
             try:
-                q.get_nowait()  # Remove oldest
-                q.put_nowait((event_name, payload))  # Add new
+                data = json.loads(payload)
+                data["dropped"] = dropped
+                effective_payload = json.dumps(data, default=str, sort_keys=True)
+            except (json.JSONDecodeError, TypeError):
+                # If payload is not JSON, can't attach dropped count; use original
+                pass
+
+            try:
+                q.get_nowait()  # Remove oldest event
+                q.put_nowait((event_name, effective_payload))  # Add new event with dropped field
+                # Reset the dropped counter after successful queue
+                with _sse_lock:
+                    _dropped_counts[q] = 0
             except Exception as e:
                 print(f"[collector_loop] Exception: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         except Exception:

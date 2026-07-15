@@ -33,7 +33,9 @@ def list_items(status=None, priority=None):
         items = get_tracker_items(status=status, priority=priority)
         return 200, items
     except Exception as e:
-        return 500, {"error": str(e)}
+        import sys
+        print(f"[tracker.list_items] Uncaught exception: {e}", file=sys.stderr)
+        return 500, {"error": "Internal server error"}
 
 
 def create(headers, body_bytes):
@@ -59,7 +61,9 @@ def create(headers, body_bytes):
     except json.JSONDecodeError:
         return 400, {"error": "Invalid JSON"}
     except Exception as e:
-        return 500, {"error": str(e)}
+        import sys
+        print(f"[tracker.create] Uncaught exception: {e}", file=sys.stderr)
+        return 500, {"error": "Internal server error"}
 
 
 def update(item_id, body_bytes):
@@ -83,14 +87,16 @@ def update(item_id, body_bytes):
             preserves the pre-split handler's behavior).
     """
     try:
-        body_str = (body_bytes or b'').decode('utf-8', errors='ignore')
+        body_str = (body_bytes or b'').decode('utf-8', errors='replace')
         update_data = json.loads(body_str)
         item = update_tracker_item(item_id, update_data)
         return 200, item
     except Exception as e:
+        import sys
         if "404" in str(e):
-            return 404, {"error": str(e)}
-        return 500, {"error": str(e)}
+            return 404, {"error": "404 Item not found"}
+        print(f"[tracker.update] Uncaught exception: {e}", file=sys.stderr)
+        return 500, {"error": "Internal server error"}
 
 
 def delete(item_id):
@@ -111,6 +117,8 @@ def delete(item_id):
         item = delete_tracker_item(item_id)
         return 200, item
     except Exception as e:
+        import sys
         if "404" in str(e):
-            return 404, {"error": str(e)}
-        return 500, {"error": str(e)}
+            return 404, {"error": "404 Item not found"}
+        print(f"[tracker.delete] Uncaught exception: {e}", file=sys.stderr)
+        return 500, {"error": "Internal server error"}
