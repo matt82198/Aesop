@@ -15,8 +15,8 @@ interface Props {
 
 // Status to CSS class mapping
 function getStatusClass(status: string): string {
-  if (status === 'running') return 'status-ok';
-  if (status === 'idle') return 'status-info';
+  if (status === 'running') return 'status-info';
+  if (status === 'idle') return 'status-neutral';
   if (status === 'SUSPICIOUS' || status === 'HIGH') return 'status-error';
   if (status === 'DRIFT' || status === 'MED') return 'status-warn';
   return 'status-neutral';
@@ -131,7 +131,7 @@ export default function Timeline({ agents }: Props) {
       </div>
       <div className={styles.footer}>
         <span className={styles.legend}>
-          Green = running · Blue = idle · Orange = warn/drift · Red = error/suspicious
+          Blue = running · Orange = warn/drift · Red = error/suspicious
         </span>
       </div>
     </div>

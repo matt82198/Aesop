@@ -51,8 +51,8 @@ function setCachedAgentDetail(id: string, data: any) {
  * Determine status color.
  */
 function getStatusColor(status: string): string {
-  if (status === 'running') return 'var(--color-status-ok)';
-  if (status === 'idle') return 'var(--color-status-info)';
+  if (status === 'running') return 'var(--color-status-info)';
+  if (status === 'idle') return 'var(--color-status-neutral)';
   if (status === 'SUSPICIOUS' || status === 'HIGH') return 'var(--color-status-error)';
   if (status === 'MED' || status === 'DRIFT') return 'var(--color-status-warn)';
   return 'var(--color-status-neutral)';

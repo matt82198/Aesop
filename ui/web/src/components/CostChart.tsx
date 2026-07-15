@@ -103,7 +103,7 @@ export function CostChart({ cost }: CostChartProps) {
               {/* Output tokens (top) */}
               <rect
                 x={xPos + BAR_WIDTH * 0.4}
-                y={SVG_HEIGHT - CHART_MARGIN - barHeight}
+                y={SVG_HEIGHT - CHART_MARGIN - (totals.tokens_out / maxTokens) * CHART_AREA_HEIGHT}
                 width={BAR_WIDTH * 0.35}
                 height={(totals.tokens_out / maxTokens) * CHART_AREA_HEIGHT}
                 className="bar-segment bar-output"
