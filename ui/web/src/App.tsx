@@ -88,8 +88,16 @@ export default function App() {
   const route = useHashRoute();
   const sseState = useSSE();
   const { toggle } = useTheme();
+  const [dataTimestamp, setDataTimestamp] = useState<number | null>(null);
 
   const connection = sseState.connectionStatus;
+
+  // Update timestamp whenever any SSE section updates
+  useEffect(() => {
+    if (sseState.data || sseState.agents || sseState.tracker || sseState.cost) {
+      setDataTimestamp(Date.now());
+    }
+  }, [sseState.data, sseState.agents, sseState.tracker, sseState.cost]);
 
   const handleRefresh = useCallback(() => {
     window.location.reload();
@@ -104,6 +112,7 @@ export default function App() {
         agents={sseState.agents ?? null}
         alerts={sseState.data?.alerts ?? null}
         connectionStatus={connection}
+        dataTimestamp={dataTimestamp}
         onThemeToggle={toggle}
         onRefresh={handleRefresh}
       />
