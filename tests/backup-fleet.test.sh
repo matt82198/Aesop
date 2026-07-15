@@ -95,11 +95,12 @@ test_item1_nul_protocol_real_loop() {
     source_backup_functions() {
       eval "$(sed -n "/^is_touched()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^json_escape()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
-      eval "$(sed -n "/^process_repo()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^scan_unpushed_commits()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^scan_tracked_files()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^get_tracked_modifications()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^get_untracked_files()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
-      eval "$(sed -n "/^scan_tracked_files()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^get_default_branch()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^process_repo()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
     }
 
     source_backup_functions

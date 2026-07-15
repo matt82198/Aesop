@@ -89,13 +89,20 @@ scan_unpushed_commits() {
 
   if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
     # No upstream or detached HEAD: fallback to scanning recent commits (last 20)
-    # Safe approach: use git log to show files changed in recent commits
-    log "WARN: Repository has no upstream or detached HEAD; falling back to recent commits scan for $repo"
+    # Use git rev-list to get the base commit 20 commits back, then use git diff
+    log "WARN: Repository has no upstream or detached HEAD; falling back to bounded commit range scan for $repo"
     unpushed_files=$(
       cd "$repo" || return 1
-      # Get files from the last 20 commits (or fewer if repository is smaller)
-      # Filter out commit hashes (lines starting with hex digits and space)
-      git log --name-only -20 --oneline 2>/dev/null | grep -v '^[a-f0-9]' | grep -v '^$' | sort -u
+      # Get the commit 20 commits ago (or earliest commit if repo is smaller)
+      local base
+      base=$(git rev-list --max-count=20 HEAD 2>/dev/null | tail -1)
+      if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD 2>/dev/null)" ]; then
+        # Multiple commits exist: scan from base to HEAD
+        git diff --name-only "$base..HEAD" 2>/dev/null | sort -u
+      elif [ -n "$base" ]; then
+        # Single commit or base == HEAD: scan just HEAD
+        git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | sort -u
+      fi
     )
   else
     # Normal case: scan commits not yet pushed to upstream
