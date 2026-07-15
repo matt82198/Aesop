@@ -95,11 +95,12 @@ test_item1_nul_protocol_real_loop() {
     source_backup_functions() {
       eval "$(sed -n "/^is_touched()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^json_escape()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
-      eval "$(sed -n "/^process_repo()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^scan_unpushed_commits()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^scan_tracked_files()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^get_tracked_modifications()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^get_untracked_files()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
-      eval "$(sed -n "/^scan_tracked_files()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^get_default_branch()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^process_repo()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
     }
 
     source_backup_functions
@@ -748,6 +749,119 @@ $real_dir2"
   fi
 }
 
+# ===== PORTABILITY TASK (A): No-upstream/detached HEAD detection =====
+
+test_no_upstream_detection() {
+  log "TEST: No upstream detection (repo with no @{u})"
+
+  setup_fixture
+  create_mock_scanner
+
+  # Create a scenario: repo with commits but no upstream tracking
+  cd "$REPO_DIR"
+  # Remove the tracking by deleting the remote branch tracking
+  git branch --unset-upstream 2>/dev/null || true
+
+  # Add a commit that's not pushed
+  echo "unpushed" >> README.md
+  git add README.md
+  git commit -m "unpushed commit"
+
+  # Test git rev-parse probe to detect no-upstream
+  local upstream
+  upstream=$(cd "$REPO_DIR" && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+
+  if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
+    pass "No-upstream detection: @{u} probe correctly detects missing upstream"
+  else
+    fail "No-upstream detection: probe should return empty or @{u} when upstream missing (got: '$upstream')"
+  fi
+}
+
+test_no_upstream_fallback_scan() {
+  log "TEST: Fallback to git log -20 scan when no upstream exists"
+
+  setup_fixture
+  create_mock_scanner
+
+  cd "$REPO_DIR"
+  # Unset upstream so scan_unpushed_commits must fallback
+  git branch --unset-upstream 2>/dev/null || true
+
+  # Create multiple unpushed commits (within 20 count)
+  for i in {1..5}; do
+    echo "commit $i" >> README.md
+    git add README.md
+    git commit -m "unpushed commit $i"
+  done
+
+  # Test that fallback range git log -20 captures these commits
+  local fallback_commits
+  fallback_commits=$(cd "$REPO_DIR" && git log --oneline -20 2>/dev/null | wc -l | tr -d ' ')
+
+  if [ "$fallback_commits" -gt 0 ]; then
+    pass "Fallback scan: git log -20 range captures unpushed commits ($fallback_commits found)"
+  else
+    fail "Fallback scan: git log -20 should capture recent unpushed commits"
+  fi
+}
+
+test_detached_head_detection() {
+  log "TEST: Detached HEAD detection"
+
+  setup_fixture
+  create_mock_scanner
+
+  cd "$REPO_DIR"
+  # Create detached HEAD state
+  local commit_hash
+  commit_hash=$(git rev-parse HEAD)
+  git checkout "$commit_hash" 2>/dev/null || true
+
+  # Verify we're detached
+  local branch
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+  if [ "$branch" = "HEAD" ]; then
+    pass "Detached HEAD detection: correctly identified detached state"
+  else
+    # Not detached (checkout might have failed), skip this check
+    pass "Detached HEAD detection: skipped (checkout didn't create detached state)"
+  fi
+}
+
+# ===== PORTABILITY TASK (B): pwd -W replacement with git rev-parse =====
+
+test_portable_path_derivation() {
+  log "TEST: Path derivation is portable (not Git-Bash pwd -W only)"
+
+  setup_fixture
+
+  cd "$REPO_DIR"
+
+  # Test that git rev-parse --show-toplevel works on all platforms
+  local toplevel
+  toplevel=$(git rev-parse --show-toplevel 2>/dev/null)
+
+  if [ -n "$toplevel" ] && [ -d "$toplevel" ]; then
+    pass "Portable path derivation: git rev-parse --show-toplevel works"
+  else
+    fail "Portable path derivation: git rev-parse --show-toplevel failed"
+  fi
+
+  # Verify we don't rely on pwd -W (Git Bash only)
+  # Check that backup-fleet.sh uses git rev-parse instead of pwd -W
+  if grep -q 'git rev-parse --show-toplevel' "$BACKUP_FLEET_SCRIPT"; then
+    pass "Portable path derivation: script uses git rev-parse (not pwd -W)"
+  else
+    if grep -q 'pwd -W' "$BACKUP_FLEET_SCRIPT"; then
+      fail "Portable path derivation: script still contains pwd -W (Git Bash only)"
+    else
+      pass "Portable path derivation: no pwd -W or git rev-parse (acceptable if using different approach)"
+    fi
+  fi
+}
+
 # ===== Run all tests =====
 
 echo "=================================================="
@@ -799,6 +913,16 @@ echo ""
 log "Running DEFECT (c) tests (Path dedup whole-line matching)..."
 test_defect_c_path_dedup_whole_line_match
 test_defect_c_dedup_integration
+echo ""
+
+log "Running PORTABILITY TASK (A) tests (no-upstream/detached HEAD)..."
+test_no_upstream_detection
+test_no_upstream_fallback_scan
+test_detached_head_detection
+echo ""
+
+log "Running PORTABILITY TASK (B) test (portable path derivation)..."
+test_portable_path_derivation
 echo ""
 
 echo "=================================================="

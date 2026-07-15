@@ -11,8 +11,8 @@
 
 ## What gets copied
 
-Files in `filesToCopy` array (cli.js line 57–69):
-- **Directories**: `daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`
+Files in `filesToCopy` array (cli.js line 209–225):
+- **Directories**: `daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`, `state_store/`, `skills/`, `mcp/`, `scan/`
 - **Files**: `aesop.config.example.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `CLAUDE-TEMPLATE.md`
 - **Brain templates** (in docs/): `MEMORY-TEMPLATE.md` (via docs/ directory copy)
 

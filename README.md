@@ -24,6 +24,7 @@ What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, le
 - **Self-healing watchdog** — Runs every 150s: backs up work, scans for secrets, detects drift, restores on reboot.
 - **Live web dashboard** — Real-time fleet health, security alerts, work-item kanban at `http://localhost:8770`.
 - **Secret-scan gates** — Pre-push hook blocks leaks; audit trail logged. Pair with GitHub branch protection for enforcement.
+- **Self-diagnosing npm publish** — OIDC token generation and publish reliability verified on each release; workflow surfaces diagnostics inline.
 
 ## Get Started (3 steps, 5 min)
 
@@ -150,7 +151,7 @@ Settings > Branches > main
   ✓ Restrict pushes to (Admins only)
 ```
 
-Private brain (`~/.claude`) is never committed to this repo. Keep `aesop.config.json` git-ignored. Implement `tools/secret_scan.py` with your security rules. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for setup.
+**Host-header validation** in the dashboard UI handler prevents HTTP header injection attacks; all requests are validated against the configured origin. Private brain (`~/.claude`) is never committed to this repo. Keep `aesop.config.json` git-ignored. Implement `tools/secret_scan.py` with your security rules. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for setup.
 
 ## Dashboard (Wave-14 Rewrite)
 

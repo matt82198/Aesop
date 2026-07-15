@@ -78,20 +78,21 @@ export function CostChart({ cost }: CostChartProps) {
       {/* Bars and labels */}
       {days.map((day, i) => {
         const totals = daily_totals[day];
-        const totalTokens = totals.tokens_in + totals.tokens_out;
-        const barHeight = (totalTokens / maxTokens) * CHART_AREA_HEIGHT;
+        const inputHeight = (totals.tokens_in / maxTokens) * CHART_AREA_HEIGHT;
+        const outputHeight = (totals.tokens_out / maxTokens) * CHART_AREA_HEIGHT;
         const xPos = CHART_MARGIN + i * BAR_GROUP_SPACING;
+        const barX = xPos + BAR_WIDTH * 0.15; // center the bar within the group spacing
 
         return (
           <g key={day} className="bar-group">
-            {/* Stacked bar */}
+            {/* Stacked bar: input at bottom, output on top */}
             <g>
-              {/* Input tokens (bottom) */}
+              {/* Input tokens (bottom of stack) */}
               <rect
-                x={xPos}
-                y={SVG_HEIGHT - CHART_MARGIN - (totals.tokens_in / maxTokens) * CHART_AREA_HEIGHT}
-                width={BAR_WIDTH * 0.35}
-                height={(totals.tokens_in / maxTokens) * CHART_AREA_HEIGHT}
+                x={barX}
+                y={SVG_HEIGHT - CHART_MARGIN - inputHeight}
+                width={BAR_WIDTH * 0.7}
+                height={inputHeight}
                 className="bar-segment bar-input"
                 data-day={day}
               >
@@ -100,12 +101,12 @@ export function CostChart({ cost }: CostChartProps) {
                 </title>
               </rect>
 
-              {/* Output tokens (top) */}
+              {/* Output tokens (top of stack, stacked on input) */}
               <rect
-                x={xPos + BAR_WIDTH * 0.4}
-                y={SVG_HEIGHT - CHART_MARGIN - (totals.tokens_out / maxTokens) * CHART_AREA_HEIGHT}
-                width={BAR_WIDTH * 0.35}
-                height={(totals.tokens_out / maxTokens) * CHART_AREA_HEIGHT}
+                x={barX}
+                y={SVG_HEIGHT - CHART_MARGIN - inputHeight - outputHeight}
+                width={BAR_WIDTH * 0.7}
+                height={outputHeight}
                 className="bar-segment bar-output"
                 data-day={day}
               >

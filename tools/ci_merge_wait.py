@@ -79,16 +79,21 @@ def check_ci_status(status_rollup):
     Handles both CheckRun (status + conclusion) and StatusContext (state) entries.
 
     CheckRun classification:
-      - status=COMPLETED + conclusion in (FAILURE, CANCELLED, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE) = failure
-      - status=COMPLETED + conclusion=None or empty = success
-      - status in (QUEUED, IN_PROGRESS) = pending
+      - status=COMPLETED + conclusion in (FAILURE, CANCELLED, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE) = FAILURE
+      - status=COMPLETED + conclusion in (NEUTRAL, SKIPPED) or None/empty = SUCCESS (non-blocking per GitHub)
+      - status in (QUEUED, IN_PROGRESS) = PENDING
+      - status not recognized = PENDING (fail-closed)
 
     StatusContext classification:
-      - state='success' = success
-      - state in ('failure', 'error') = failure
-      - state='pending' = pending
+      - state='success' = SUCCESS
+      - state in ('failure', 'error') = FAILURE
+      - state='pending' = PENDING
+      - state in ('neutral', 'skipped') = SUCCESS (non-blocking advisory checks)
+      - state not recognized = PENDING (fail-closed)
 
-    Unrecognized shapes = fail-closed (neither success nor pending, treated as pending).
+    Unrecognized check shapes (no status/state field) = PENDING (fail-closed).
+
+    GitHub semantics: NEUTRAL and SKIPPED conclusions/states are non-blocking and do not prevent merge.
 
     Returns: ("pending", None), ("success", None), or ("failure", check_name)
     """
@@ -132,6 +137,9 @@ def check_ci_status(status_rollup):
                 check_status = "failure"
             elif state == "pending":
                 check_status = "pending"
+            elif state in ("neutral", "skipped"):
+                # Non-blocking advisory or skipped checks (GitHub semantics)
+                check_status = "success"
             else:
                 # Unrecognized state value (fail-closed)
                 check_status = "pending"
@@ -295,6 +303,56 @@ def run_self_test():
         print(f"FAIL: Expected 'failure' for CANCELLED, got '{ci_status}'")
         return False
     print("[OK] CheckRun CANCELLED (failure)")
+
+    # Test 12: CheckRun neutral conclusion (non-blocking advisory, should be success)
+    neutral_check = [
+        {"name": "advisory-lint", "status": "COMPLETED", "conclusion": "NEUTRAL"},
+    ]
+    ci_status, _ = check_ci_status(neutral_check)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for NEUTRAL conclusion, got '{ci_status}'")
+        return False
+    print("[OK] CheckRun NEUTRAL conclusion (success, non-blocking)")
+
+    # Test 13: CheckRun skipped conclusion (non-blocking, should be success)
+    skipped_check = [
+        {"name": "optional-test", "status": "COMPLETED", "conclusion": "SKIPPED"},
+    ]
+    ci_status, _ = check_ci_status(skipped_check)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for SKIPPED conclusion, got '{ci_status}'")
+        return False
+    print("[OK] CheckRun SKIPPED conclusion (success, non-blocking)")
+
+    # Test 14: StatusContext neutral state (non-blocking advisory, should be success)
+    neutral_state = [
+        {"name": "advisory-check", "state": "neutral"},
+    ]
+    ci_status, _ = check_ci_status(neutral_state)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for StatusContext state=neutral, got '{ci_status}'")
+        return False
+    print("[OK] StatusContext neutral state (success, non-blocking)")
+
+    # Test 15: StatusContext skipped state (non-blocking, should be success)
+    skipped_state = [
+        {"name": "optional-check", "state": "skipped"},
+    ]
+    ci_status, _ = check_ci_status(skipped_state)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for StatusContext state=skipped, got '{ci_status}'")
+        return False
+    print("[OK] StatusContext skipped state (success, non-blocking)")
+
+    # Test 16: Fabricated unknown state (fail-closed to pending)
+    unknown_state = [
+        {"name": "mystery-state", "state": "fabricated_unknown_state"},
+    ]
+    ci_status, _ = check_ci_status(unknown_state)
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' for unknown state, got '{ci_status}'")
+        return False
+    print("[OK] Fabricated unknown state (pending, fail-closed)")
 
     print("\nAll self-tests passed!")
     return True

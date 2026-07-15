@@ -67,6 +67,12 @@ const STATE_DIR = expandPath(
   path.join(AESOP_ROOT, 'state')
 );
 
+const FLEET_LEDGER = expandPath(
+  process.env.AESOP_FLEET_LEDGER ||
+  config.fleet_ledger ||
+  path.join(BRAIN_ROOT, 'FLEET-LEDGER.md')
+);
+
 const MON = path.join(AESOP_ROOT, 'monitor');
 
 // Config-driven thresholds and feature flags
@@ -370,20 +376,89 @@ function checkSecurityAlerts() {
   }
 }
 
-// 8) Respawn watch (Rule 6 retry cap)
+// === Cursor tracking utilities (for ledger incremental read) ===
+// Helper: Load cursor state (byte offset + line hash of last processed line)
+function loadCursor() {
+  const cursorPath = path.join(MON, '.ledger-cursor.json');
+  try {
+    if (fs.existsSync(cursorPath)) {
+      return JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+    }
+  } catch {
+    // Parse error; treat as missing cursor
+  }
+  return { byteOffset: 0, lineHash: '' };
+}
+
+// Helper: Save cursor state (byte offset + line hash)
+function saveCursor(byteOffset, lineHash) {
+  const cursorPath = path.join(MON, '.ledger-cursor.json');
+  try {
+    fs.mkdirSync(MON, { recursive: true });
+    fs.writeFileSync(cursorPath, JSON.stringify({ byteOffset, lineHash }, null, 2), 'utf8');
+  } catch (e) {
+    // Fail-open: log warning but don't crash
+    console.error(`Warning: Failed to save ledger cursor: ${e.message}`);
+  }
+}
+
+// Helper: Compute a simple hash of a string (for integrity check)
+function simpleHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h) + str.charCodeAt(i);
+    h |= 0; // Convert to 32-bit integer
+  }
+  return Math.abs(h).toString(16);
+}
+
+// 8) Respawn watch (Rule 6 retry cap) — incremental read with cursor
 function detectRespawnWatch() {
   const respawnWatch = [];
-  const ledgerPath = path.join(BRAIN_ROOT, 'FLEET-LEDGER.md');
-  if (!fs.existsSync(ledgerPath)) return respawnWatch;
+  if (!fs.existsSync(FLEET_LEDGER)) return respawnWatch;
+
   try {
-    const content = fs.readFileSync(ledgerPath, 'utf8');
-    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('|'));
+    const buffer = fs.readFileSync(FLEET_LEDGER);
+    const content = buffer.toString('utf8');
+
+    // Load cursor to find starting point
+    const cursor = loadCursor();
+    let startOffset = cursor.byteOffset;
+
+    // If cursor points beyond file, reset to start (file was truncated or rotated)
+    if (startOffset > buffer.length) {
+      startOffset = 0;
+    }
+
+    // Extract only new content since last cursor position
+    const newContent = content.substring(startOffset);
+
+    // Split new content into lines, filtering empty and header lines
+    // Keep data rows (start with | and contain data), skip header rows (| --- | or column names)
+    const newLines = newContent.split('\n')
+      .filter(l => {
+        const trimmed = l.trim();
+        if (!trimmed) return false; // Skip empty lines
+        // Skip header separator rows (contain --- between pipes)
+        if (/\|\s*---/.test(trimmed)) return false;
+        // Skip column name row (has 'timestamp' or 'agent' or 'dispatch' or 'description')
+        if (trimmed.includes('timestamp') && trimmed.includes('agent')) return false;
+        // Keep all other rows starting with |
+        return trimmed.startsWith('|');
+      });
+
+    // If no new lines, return early (nothing to process)
+    if (newLines.length === 0) {
+      return respawnWatch;
+    }
+
+    // Process new lines to detect respawn violations
     const windowSize = 50;
-    const recentStart = Math.max(0, lines.length - windowSize);
+    const recentLines = newLines.slice(Math.max(0, newLines.length - windowSize));
     const signatures = {};
     const normalize = (desc) => (desc || '').substring(0, 40).toLowerCase().trim();
-    for (let i = recentStart; i < lines.length; i++) {
-      const line = lines[i];
+
+    for (const line of recentLines) {
       const parts = line.split('|').map(s => s.trim());
       if (parts.length >= 4) {
         const description = parts[3];
@@ -391,6 +466,8 @@ function detectRespawnWatch() {
         if (sig) signatures[sig] = (signatures[sig] || 0) + 1;
       }
     }
+
+    // Check for violations (count > 3)
     for (const [sig, count] of Object.entries(signatures)) {
       if (count > 3) {
         respawnWatch.push({
@@ -400,9 +477,17 @@ function detectRespawnWatch() {
         });
       }
     }
-  } catch {
-    // fail-open on error
+
+    // Update cursor to end of file
+    const lastLine = newLines[newLines.length - 1] || '';
+    const newByteOffset = buffer.length;
+    const newLineHash = simpleHash(lastLine);
+    saveCursor(newByteOffset, newLineHash);
+  } catch (e) {
+    // Fail-open on error
+    console.error(`Warning: Failed to read FLEET-LEDGER: ${e.message}`);
   }
+
   return respawnWatch;
 }
 

@@ -150,8 +150,9 @@ def _is_valid_host_header(host_header, expected_port):
             port_part = None
 
     # Check if host is on allowlist (127.0.0.1, localhost, or [::1])
+    # RFC 7230: hostnames are case-insensitive, so lowercase before comparing
     allowed_hosts = ("127.0.0.1", "localhost", "[::1]")
-    if host_part not in allowed_hosts:
+    if host_part.lower() not in allowed_hosts:
         return False
 
     # If a port was specified, it must match the server's actual bound port

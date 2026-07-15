@@ -80,12 +80,37 @@ scan_unpushed_commits() {
   local repo_win
   local unpushed_files
 
-  repo_win=$(cd "$repo" 2>/dev/null && pwd -W 2>/dev/null || echo "$repo")
+  # Portable path derivation (not Git-Bash pwd -W only)
+  repo_win=$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "$repo")
 
-  unpushed_files=$(
-    cd "$repo" || return 1
-    git diff --name-only @{u}..HEAD 2>/dev/null | sort -u
-  )
+  # Detect if upstream exists (no-upstream or detached HEAD scenario)
+  local upstream
+  upstream=$(cd "$repo" 2>/dev/null && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+
+  if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
+    # No upstream or detached HEAD: fallback to scanning recent commits (last 20)
+    # Use git rev-list to get the base commit 20 commits back, then use git diff
+    log "WARN: Repository has no upstream or detached HEAD; falling back to bounded commit range scan for $repo"
+    unpushed_files=$(
+      cd "$repo" || return 1
+      # Get the commit 20 commits ago (or earliest commit if repo is smaller)
+      local base
+      base=$(git rev-list --max-count=20 HEAD 2>/dev/null | tail -1)
+      if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD 2>/dev/null)" ]; then
+        # Multiple commits exist: scan from base to HEAD
+        git diff --name-only "$base..HEAD" 2>/dev/null | sort -u
+      elif [ -n "$base" ]; then
+        # Single commit or base == HEAD: scan just HEAD
+        git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | sort -u
+      fi
+    )
+  else
+    # Normal case: scan commits not yet pushed to upstream
+    unpushed_files=$(
+      cd "$repo" || return 1
+      git diff --name-only @{u}..HEAD 2>/dev/null | sort -u
+    )
+  fi
 
   if [ -n "$unpushed_files" ]; then
     while IFS= read -r file; do
@@ -121,8 +146,8 @@ scan_tracked_files() {
   local -a file_paths=()
   local repo_win
 
-  # Convert repo path to Windows format for Python compatibility (Git Bash on Windows)
-  repo_win=$(cd "$repo" 2>/dev/null && pwd -W 2>/dev/null || echo "$repo")
+  # Portable path derivation (not Git-Bash pwd -W only)
+  repo_win=$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "$repo")
 
   tracked_files=$(get_tracked_modifications "$repo")
   untracked_files=$(get_untracked_files "$repo")
@@ -206,7 +231,20 @@ process_repo() {
       fi
     fi
 
-    local unpushed=$(git log @{u}.. --oneline 2>/dev/null | wc -l | tr -d ' ')
+    # Detect if upstream exists before trying to count unpushed commits
+    local upstream
+    upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+
+    local unpushed
+    if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
+      # No upstream or detached HEAD: count recent commits instead (last 20)
+      log "WARN: Repository has no upstream or detached HEAD; falling back to recent commits count for $name"
+      unpushed=$(git log --oneline -20 2>/dev/null | wc -l | tr -d ' ')
+    else
+      # Normal case: count commits not yet pushed to upstream
+      unpushed=$(git log @{u}.. --oneline 2>/dev/null | wc -l | tr -d ' ')
+    fi
+
     if [ "$unpushed" -gt 0 ]; then
       local branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
       [ "$branch" = "HEAD" ] && branch="$default"

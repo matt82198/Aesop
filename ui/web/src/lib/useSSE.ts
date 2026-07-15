@@ -28,6 +28,7 @@ export interface SSEState {
   status: OrchestratorStatus | null;
   cost: CostSummary | null;
   connectionStatus: ExtendedSSEConnectionStatus;
+  lastHeartbeat: number | null; // Epoch ms of last heartbeat event from collector
 }
 
 const initialState: SSEState = {
@@ -38,6 +39,7 @@ const initialState: SSEState = {
   status: null,
   cost: null,
   connectionStatus: { status: 'reconnecting' },
+  lastHeartbeat: null,
 };
 
 export function useSSE() {
@@ -141,6 +143,20 @@ export function useSSE() {
         reconnectAttemptRef.current = 0;
       } catch (err) {
         console.error('Failed to parse SSE cost:', err);
+      }
+    });
+
+    eventSource.addEventListener('heartbeat', (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        setState((prev) => ({
+          ...prev,
+          lastHeartbeat: Date.now(),
+          connectionStatus: { status: 'live' },
+        }));
+        reconnectAttemptRef.current = 0;
+      } catch (err) {
+        console.error('Failed to parse SSE heartbeat:', err);
       }
     });
 

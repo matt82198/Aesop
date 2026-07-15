@@ -487,7 +487,11 @@ function installPrePushHook(targetDir, templateRoot) {
   try {
     fs.chmodSync(hookDest, 0o755);
   } catch (e) {
-    // On Windows, chmod may fail; that's okay
+    // On Windows, chmod fails harmlessly; on POSIX, warn the user to chmod manually
+    if (process.platform !== 'win32') {
+      console.warn('⚠ Warning: Failed to chmod +x the pre-push hook. Please run manually:');
+      console.warn(`  chmod +x "${hookDest}"`);
+    }
   }
 }
 
