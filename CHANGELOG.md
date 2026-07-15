@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-beta.5] - 2026-07-15
+
 ### Added (Wave-15)
 - **State-Sourced State Layer** (#134, #135): Event-sourced SQLite WAL backing store with projections; tracker.json re-rendered as export for git integration; dual-path mutations via StateAPI.
 - **Self-Building Stats** (#130): `tools/self_stats.py` computes verified repository metrics (merged PRs, commits, waves, files, coauthors) live from git; README stats block auto-populated via CI drift gate.
@@ -32,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (Wave-15)
 - **Socket Race** (#129): stderr noise from concurrent SSE keepalive; added locking around socket writes.
+- **State Store Concurrency Seams** (#138): Inbox-drain deduplication, render-failure recovery, migration guard.
+- **CSRF HTTPS Origins** (#137): Accept https loopback origins in CSRF validation.
+- **CI/Daemon Machinery** (#136): Dist-freshness gate enforcement; watchdog script-relative path fix.
+- **Dashboard UX Hardening** (#141): Stale-data timestamps, empty states, lane badges, a11y improvements.
+
+### Documentation (Wave-15)
+- **RELEASING.md** (#140): Release process documentation; npm publish and CI merge procedures.
+- **Currency Sweep** (#140): CHANGELOG #113–#135 documentation; README state_store and stats updates; CLAUDE.md drift correction; beta.5 preparation.
+- **Portfolio Case Study** (#139): Matt Culliton personal portfolio documentation; agent-fleet-built showcase.
 
 ### Added (Wave-14)
 - **Dashboard Rewrite**: Complete React 18 + Vite + TypeScript redesign with 4 hash-routed views (Overview, Work, Activity, Cost), sticky health header, live SSE updates, light/dark theming with WCAG AA contrast, keyboard navigation, and `aria-live` regions.
