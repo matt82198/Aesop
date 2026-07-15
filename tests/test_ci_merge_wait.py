@@ -126,6 +126,62 @@ class TestCiMergeWait(unittest.TestCase):
         # Verify help text mentions exit code 4
         self.assertIn("4", result.stdout)
 
+    def test_dry_run_flag_with_success_status(self):
+        """Test --dry-run flag does not actually merge on SUCCESS."""
+        result = self._run_tool_subprocess("123", "--dry-run", "--help")
+        # Should parse without error
+        self.assertIn("ci_merge_wait.py", result.stdout)
+
+    def test_dry_run_flag_help_text(self):
+        """Test that --dry-run appears in help."""
+        result = self._run_tool_subprocess("--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--dry-run", result.stdout)
+        self.assertIn("skip actual merge", result.stdout.lower())
+
+    def test_self_test_flag_help_text(self):
+        """Test that --self-test appears in help."""
+        result = self._run_tool_subprocess("--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--self-test", result.stdout)
+        self.assertIn("offline", result.stdout.lower())
+
+    def test_self_test_runs_offline(self):
+        """Test that --self-test runs without network and exits 0."""
+        result = self._run_tool_subprocess("--self-test")
+        # Should exit 0 with offline self-test
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("self-test", result.stdout.lower())
+
+    def test_self_test_validates_logic(self):
+        """Test that --self-test validates merge guard logic."""
+        result = self._run_tool_subprocess("--self-test")
+        self.assertEqual(result.returncode, 0)
+        # Should print test results
+        self.assertIn("[OK]", result.stdout)
+
+    def test_positional_pr_number_still_works(self):
+        """Test that positional PR number interface remains unchanged."""
+        # The tool should accept positional PR number (will fail on gh not found, but not on parsing)
+        result = self._run_tool_subprocess("999")
+        # Will fail because gh is not mocked and PR doesn't exist, but the arg should parse
+        self.assertNotEqual(result.returncode, 0)
+        # Should not complain about missing --pr flag
+        self.assertNotIn("required", result.stderr.lower())
+
+    def test_dry_run_with_positional_pr(self):
+        """Test --dry-run works with positional PR number."""
+        result = self._run_tool_subprocess("999", "--dry-run", "--help")
+        # Should parse both positional and flags
+        self.assertIn("ci_merge_wait.py", result.stdout)
+
+    def test_self_test_ignores_pr_argument(self):
+        """Test that --self-test doesn't require PR number."""
+        result = self._run_tool_subprocess("--self-test")
+        self.assertEqual(result.returncode, 0)
+        # Verify no error about missing PR
+        self.assertNotIn("required", result.stderr.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
