@@ -16,6 +16,7 @@
     "docs/",
     "hooks/",
     "skills/",
+    "state_store/",
     "aesop.config.example.json",
     "CLAUDE-TEMPLATE.md",
     "README.md",

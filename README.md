@@ -46,6 +46,8 @@ python ui/serve.py
 
 Pre-push hook auto-installed. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for branch protection pairing.
 
+**State Store**: Aesop uses an event-sourced SQLite WAL backing store (`state_store/`) for durable state persistence. The `tracker.json` file is automatically re-rendered as an export for git-friendly checkpointing. Mutations follow a dual-path model: append new events via the StateAPI, then rendered exports for external consumption.
+
 ### Or: git clone for hacking
 
 ```bash
@@ -85,13 +87,13 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 124 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 342 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 2 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 130 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 354 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 3 days <!-- metrics-verified: self_stats.py (git log) --> |
 | Waves | 13 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 67,648 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 245 <!-- metrics-verified: self_stats.py (git log) --> |
-| Distinct Co-authors | 6 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 68,270 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 253 <!-- metrics-verified: self_stats.py (git log) --> |
+| Distinct Co-authors | 7 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- SELF-STATS:END -->
 
@@ -199,6 +201,7 @@ For deeper docs, see `docs/`:
 - `DISPATCH-MODEL.md` — cost analysis and patterns
 - `CHECKPOINTING.md` — how STATE.md + BUILDLOG.md survive wipes
 - `GOVERNANCE.md` — AUTO/PROPOSE tiers
+- `case-study-portfolio.md` — How Aesop built its own portfolio site; full audit trail and cost breakdown
 
 See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 

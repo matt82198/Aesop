@@ -17,6 +17,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Wave-15)
+- **State-Sourced State Layer** (#134, #135): Event-sourced SQLite WAL backing store with projections; tracker.json re-rendered as export for git integration; dual-path mutations via StateAPI.
+- **Self-Building Stats** (#130): `tools/self_stats.py` computes verified repository metrics (merged PRs, commits, waves, files, coauthors) live from git; README stats block auto-populated via CI drift gate.
+- **MCP Fleet Server** (#121): Read-only MCP server exposing fleet status, agents, tracker, costs for external Claude integrations.
+- **Alert Webhook Bridge** (#120): Incoming HTTP webhook relay to monitor alerts; configurable signing + filtering.
+- **Onboarding Wizard** (#127): Interactive CLI scaffolder with guided config, hook setup, repo discovery.
+- **Healthcheck Skill** (#126): Liveness probe skill for orchestrator health; integrated into monitor signal collection.
+- **Symlink/Junction Coverage** (#125): Test coverage for path-traversal guards; validates symlink/junction rejection in backup and UI handlers.
+
+### Changed (Wave-15)
+- **Agent Detail Rendering** (#128): Transcript lookup fixed for parallel agent teams; handles multi-file agent logs.
+- **CI Cascade** (#122, #131, #132, #133): Tools-index alert bridge integration; SSE transcript fixture isolation; favicon verification; node_modules secret-scan gate.
+
+### Fixed (Wave-15)
+- **Socket Race** (#129): stderr noise from concurrent SSE keepalive; added locking around socket writes.
+
 ### Added (Wave-14)
 - **Dashboard Rewrite**: Complete React 18 + Vite + TypeScript redesign with 4 hash-routed views (Overview, Work, Activity, Cost), sticky health header, live SSE updates, light/dark theming with WCAG AA contrast, keyboard navigation, and `aria-live` regions.
 - **Frontend Architecture**: Zero runtime dependencies beyond React/React-dom; Vite dev server with API proxy; committed `dist/` serves as authoritative build with content-hashed assets and immutable cache headers.
@@ -29,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Render Module**: `render.py` requires `template_path` parameter (no legacy default); raises TypeError if called without it.
 - **API Contract**: SSE emits 6 sections (added `cost`); `/api/state` returns consolidated snapshot for optimal first paint.
 
-### Fixed
+### Fixed (Wave-14)
 - **Wave-12 Stability**: Swallowed failures now loud; `sse.reset_state()` locked for concurrent test isolation; tracker writes in tempdir; symlink/path-injection guards in rotate-logs.
 - **Wave-11 Security**: Dangling symlink inbox rejection; real handler exercise over HTTP; staged merge tier + model policy hook.
 

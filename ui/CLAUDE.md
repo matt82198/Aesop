@@ -15,6 +15,21 @@
 - **handler.py** — `DashboardHandler` (HTTP routing + all GET/POST endpoints incl. /api/tracker) and `run_server()`. Wave-14 additions: static serving (`GET /assets/*` from `ui/web/dist/assets/`), `/api/state` consolidated snapshot, `/api/session` for Vite dev server, `/api/cost` scorecard. Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
 - **cost.py** — Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model and per-day aggregates, verdict scorecards, and optional dollar estimates (only if `aesop.config.json` supplies `pricing` map).
 
+## State Store Integration (Wave-15)
+
+The tracker uses a **dual-path mutation model** backed by an event-sourced SQLite WAL store:
+
+- **Write path**: Mutations append events to `tracker_events.db` (WAL mode) via the StateAPI layer (`state_store/api.py`). Each mutation (create/update/delete) produces an immutable event in the event log.
+- **Read path**: `tracker.json` is re-rendered as an export (projection) from the event log on every read. This export is committed to git for checkpoint durability.
+- **Location**: `state/tracker_events.db` (SQLite WAL, never committed). `tracker.json` (rendered export, committed).
+- **Render-failure recovery**: If projection rendering fails, the UI falls back to the last-known good `tracker.json`; no data loss. Stale renders are repaired on the next successful mutation (idempotent re-render).
+
+This design provides:
+- **Durable event audit trail** (append-only events in WAL)
+- **Git-friendly checkpoints** (rendered tracker.json snapshots)
+- **Atomic mutations** (events append, projection re-renders)
+- **Graceful degradation** (fallback to last-known-good on render failure)
+
 **Frontend (React 18 + Vite + TypeScript, wave-14 U1–U8)**:
 - **ui/web/** — Complete React application (TypeScript, Vite, TypeScript strict mode).
   - **src/main.tsx** — Vite entry point; renders `<App />` to `#root`.
