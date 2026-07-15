@@ -12,9 +12,9 @@ updates:
       include: scope
     groups:
       minor-and-patch:
-        dependency-types:
-          - minor
-          - patch
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: npm
     directory: "/ui/web"
@@ -28,9 +28,9 @@ updates:
       include: scope
     groups:
       minor-and-patch:
-        dependency-types:
-          - minor
-          - patch
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: github-actions
     directory: "/"
