@@ -90,6 +90,75 @@ def _is_local_origin(origin):
     )
 
 
+def _is_valid_host_header(host_header):
+    """True if Host header value is on the loopback allowlist.
+
+    DNS-rebinding mitigation (wave-19): validates that the Host header
+    matches one of the allowed loopback addresses with the correct port.
+
+    Allowed forms (where port matches config.PORT):
+    - 127.0.0.1 (no port, implies http default)
+    - 127.0.0.1:<port>
+    - localhost (no port)
+    - localhost:<port>
+    - [::1] (IPv6 loopback, no port)
+    - [::1]:<port>
+
+    Args:
+        host_header: The value of the Host header (may be None/empty)
+
+    Returns:
+        bool: True if host is on the local allowlist, False otherwise
+    """
+    if not host_header:
+        return False
+
+    host_header = host_header.strip()
+
+    # Extract host and port from the header value
+    # Handle IPv6 format [::1]:port
+    if host_header.startswith("["):
+        # IPv6 format: [::1] or [::1]:port
+        if "]" not in host_header:
+            return False
+        bracket_end = host_header.index("]")
+        host_part = host_header[:bracket_end + 1]  # Include brackets
+        remainder = host_header[bracket_end + 1:]
+        if remainder:
+            # Port must follow immediately with a colon
+            if not remainder.startswith(":"):
+                return False
+            try:
+                port_part = int(remainder[1:])
+            except (ValueError, IndexError):
+                return False
+        else:
+            port_part = None
+    else:
+        # IPv4 or hostname format: 127.0.0.1, 127.0.0.1:port, localhost, localhost:port
+        if ":" in host_header:
+            host_part, port_str = host_header.rsplit(":", 1)
+            try:
+                port_part = int(port_str)
+            except ValueError:
+                return False
+        else:
+            host_part = host_header
+            port_part = None
+
+    # Check if host is on allowlist (127.0.0.1, localhost, or [::1])
+    allowed_hosts = ("127.0.0.1", "localhost", "[::1]")
+    if host_part not in allowed_hosts:
+        return False
+
+    # If a port was specified, it must match config.PORT
+    if port_part is not None:
+        if port_part != config.PORT:
+            return False
+
+    return True
+
+
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler for dashboard."""
 
@@ -99,6 +168,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Handle GET requests."""
+        # DNS-rebinding mitigation: validate Host header against allowlist
+        host_header = self.headers.get("Host", "").strip()
+        if not _is_valid_host_header(host_header):
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(
+                {"error": "Forbidden: invalid Host header"}
+            ).encode('utf-8'))
+            return
+
         if self.path == "/":
             self.serve_html()
         elif self.path == "/data":
@@ -131,6 +211,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle POST requests."""
+        # DNS-rebinding mitigation: validate Host header against allowlist
+        host_header = self.headers.get("Host", "").strip()
+        if not _is_valid_host_header(host_header):
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(
+                {"error": "Forbidden: invalid Host header"}
+            ).encode('utf-8'))
+            return
+
         if self.path == "/submit":
             self.handle_submit()
         elif self.path == "/api/tracker":
