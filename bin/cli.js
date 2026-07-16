@@ -11,6 +11,13 @@ const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
 
+// Check for doctor subcommand
+const doctorCommand = args[0] === 'doctor';
+if (doctorCommand) {
+  require('../tools/doctor.js');
+  process.exit(0);
+}
+
 // Detect if stdin is a TTY (interactive terminal)
 function isInteractive() {
   return process.stdin.isTTY && process.stdout.isTTY;
@@ -69,8 +76,10 @@ aesop — Multi-agent orchestration template scaffolder
 Usage:
   npx @matt82198/aesop [target-dir] [options]
   npx @matt82198/aesop wizard [options]
+  npx @matt82198/aesop doctor
 
 Commands:
+  doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port)
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
 Arguments:
@@ -86,6 +95,7 @@ Options:
   --repo-urls <urls>      Comma-separated repo URLs (e.g., "https://github.com/user/repo1.git,https://github.com/user/repo2.git")
 
 Examples:
+  npx @matt82198/aesop doctor                               # Run preflight checks before starting
   npx @matt82198/aesop                                      # Creates ./aesop-fleet/ with template
   npx @matt82198/aesop my-fleet                             # Creates ./my-fleet/ with template
   npx @matt82198/aesop wizard                               # Interactive onboarding (60-second setup)
