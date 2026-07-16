@@ -10,6 +10,7 @@ Stdlib only (sqlite3, json, time) per aesop's no-external-deps invariant.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import sys
@@ -48,6 +49,22 @@ class EventStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_stream_version "
                 "ON events(stream, version)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts           REAL    NOT NULL,
+                    stream       TEXT    NOT NULL,
+                    event_version INTEGER NOT NULL,
+                    projection   TEXT    NOT NULL,
+                    checksum     TEXT    NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_snapshots_stream_version "
+                "ON snapshots(stream, event_version)"
             )
             conn.commit()
         finally:
@@ -107,5 +124,74 @@ class EventStore:
                         file=sys.stderr,
                     )
             return rows
+        finally:
+            conn.close()
+
+    def save_snapshot(self, stream: str, event_version: int, projection: dict) -> None:
+        """Save a materialized projection snapshot at a specific event version.
+
+        The snapshot enables tail-replay: instead of replaying from event 1,
+        project() can resume from this snapshot's version and fold only newer events.
+
+        Args:
+            stream: the stream name (e.g. "tracker")
+            event_version: the per-stream event version this snapshot was computed through
+            projection: the materialized state dict (e.g. the full tracker projection)
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            projection_json = json.dumps(projection, separators=(",", ":"), sort_keys=True)
+            checksum = hashlib.sha256(projection_json.encode()).hexdigest()
+            conn.execute(
+                "INSERT INTO snapshots (ts, stream, event_version, projection, checksum) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (time.time(), stream, event_version, projection_json, checksum),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def read_snapshot(self, stream: str) -> tuple | None:
+        """Read the most recent snapshot for a stream.
+
+        Returns:
+            A tuple (event_version, projection_dict, checksum) if a valid snapshot exists,
+            or None if no snapshot found.
+
+        On corrupt/unreadable snapshot, logs a warning and returns None (falls back to
+        full replay).
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            cur = conn.execute(
+                "SELECT event_version, projection, checksum FROM snapshots "
+                "WHERE stream = ? ORDER BY event_version DESC LIMIT 1",
+                (stream,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            event_version, projection_json, checksum = row
+            try:
+                projection = json.loads(projection_json)
+                # Verify checksum
+                computed_checksum = hashlib.sha256(projection_json.encode()).hexdigest()
+                if computed_checksum != checksum:
+                    print(
+                        f"WARNING: snapshot checksum mismatch for stream={stream} "
+                        f"version={event_version}; falling back to full replay",
+                        file=sys.stderr,
+                    )
+                    return None
+                return (event_version, projection, checksum)
+            except json.JSONDecodeError as e:
+                print(
+                    f"WARNING: corrupt JSON in snapshot for stream={stream} "
+                    f"version={event_version}: {e}; falling back to full replay",
+                    file=sys.stderr,
+                )
+                return None
         finally:
             conn.close()
