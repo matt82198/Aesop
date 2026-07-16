@@ -394,4 +394,74 @@ rm -f "$OUT_FAIL" "$FAIL_MOCK"
 echo "PASS: Exit status capture and error logging (P1 fix)"
 
 echo ""
+echo "=== Test 6: AUDIT FIX 2 - Lock dir without timestamp file ==="
+# Clean state
+rm -rf "${TEST_STATE_DIR}"
+mkdir -p "${TEST_STATE_DIR}"
+echo "0" > "${CYCLE_COUNTER}"
+
+# Create lock dir with ONLY pid file (no timestamp) - should be treated as stale-eligible
+BROKEN_LOCK="${TEST_STATE_DIR}/.watchdog-lock"
+mkdir -p "$BROKEN_LOCK"
+echo "9999" > "$BROKEN_LOCK/pid"
+# NOTE: no timestamp file!
+
+echo "Created broken lock with pid but no timestamp:"
+ls -la "$BROKEN_LOCK"
+
+OUT_BROKEN=$(mktemp)
+AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_BROKEN" 2>&1
+EXIT_BROKEN=$?
+
+CYCLE_RUN_COUNT=$(cat "${CYCLE_COUNTER}")
+echo "After lock without timestamp: exit code=$EXIT_BROKEN, cycle_run_count=$CYCLE_RUN_COUNT"
+echo "Output:"
+cat "$OUT_BROKEN"
+
+if [ "$CYCLE_RUN_COUNT" != "1" ]; then
+  echo "FAIL: AUDIT FIX 2 - Lock without timestamp should be treated as stale, but count=$CYCLE_RUN_COUNT"
+  exit 1
+fi
+echo "PASS: AUDIT FIX 2 - Lock dir without timestamp file was treated as stale"
+
+rm -f "$OUT_BROKEN"
+
+echo ""
+echo "=== Test 7: AUDIT FIX 2 - Lock dir without pid file ==="
+# Clean state
+rm -rf "${TEST_STATE_DIR}"
+mkdir -p "${TEST_STATE_DIR}"
+echo "0" > "${CYCLE_COUNTER}"
+
+# Create lock dir with ONLY timestamp file (no pid) - should be treated as stale-eligible
+BROKEN_LOCK2="${TEST_STATE_DIR}/.watchdog-lock"
+mkdir -p "$BROKEN_LOCK2"
+echo $(($(date +%s) - 500)) > "$BROKEN_LOCK2/timestamp"
+# NOTE: no pid file!
+
+echo "Created broken lock with timestamp but no pid:"
+ls -la "$BROKEN_LOCK2"
+
+OUT_BROKEN2=$(mktemp)
+AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_BROKEN2" 2>&1
+EXIT_BROKEN2=$?
+
+CYCLE_RUN_COUNT=$(cat "${CYCLE_COUNTER}")
+echo "After lock without pid: exit code=$EXIT_BROKEN2, cycle_run_count=$CYCLE_RUN_COUNT"
+echo "Output:"
+cat "$OUT_BROKEN2"
+
+if [ "$CYCLE_RUN_COUNT" != "1" ]; then
+  echo "FAIL: AUDIT FIX 2 - Lock without pid should be treated as stale, but count=$CYCLE_RUN_COUNT"
+  exit 1
+fi
+echo "PASS: AUDIT FIX 2 - Lock dir without pid file was treated as stale"
+
+rm -f "$OUT_BROKEN2"
+
+echo ""
 echo "=== All tests passed ==="

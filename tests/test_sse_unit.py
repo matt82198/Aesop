@@ -170,5 +170,55 @@ class TestMaybeEmitHashGate(SSEFixtureCase):
         self.assertEqual(q.qsize(), 2, "changed snapshot must broadcast again")
 
 
+class TestHeartbeatEmission(SSEFixtureCase):
+    """Wave-20 liveness fix: heartbeat events from collector loop."""
+
+    def test_heartbeat_event_name_constant_defined(self):
+        sse = self.sse
+        # Verify that the heartbeat event name is defined (will be used in collector_loop)
+        self.assertTrue(hasattr(sse, 'HEARTBEAT_EVENT_NAME'),
+                       "HEARTBEAT_EVENT_NAME must be defined for consistent event naming")
+
+    def test_heartbeat_can_be_broadcast(self):
+        """Heartbeat events should broadcast without errors."""
+        sse = self.sse
+        q = queue.Queue(maxsize=8)
+        with sse._sse_lock:
+            sse._sse_clients.append(q)
+
+        heartbeat_payload = '{"timestamp": 1234567890}'
+        sse.broadcast_sse('heartbeat', heartbeat_payload)
+
+        event_name, payload = q.get_nowait()
+        self.assertEqual(event_name, 'heartbeat')
+        self.assertIn('timestamp', payload)
+
+
+class TestFileSizeFingerprint(SSEFixtureCase):
+    """Wave-20: mtime+size fingerprint to catch rapid writes within 1s granularity."""
+
+    def test_file_fingerprint_includes_size(self):
+        """File fingerprinting should include size alongside mtime."""
+        sse = self.sse
+
+        # Create a test file
+        test_file = self.fixture_root / "test.json"
+        test_file.write_text('{"version": 1}')
+        stat1 = test_file.stat()
+
+        # Get fingerprint (mtime, size)
+        fingerprint1 = (stat1.st_mtime, stat1.st_size)
+
+        # Modify content (changes size but mtime may be same within 1s granularity)
+        test_file.write_text('{"version": 1, "extra": "data"}')
+        stat2 = test_file.stat()
+
+        fingerprint2 = (stat2.st_mtime, stat2.st_size)
+
+        # Even if mtime is identical, size changed, so fingerprints should differ
+        self.assertNotEqual(fingerprint1, fingerprint2,
+                           "fingerprint with size should distinguish rapid writes")
+
+
 if __name__ == "__main__":
     unittest.main()

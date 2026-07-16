@@ -141,4 +141,42 @@ describe('CostChart', () => {
     const groups = svg.querySelectorAll('g');
     expect(groups.length).toBeGreaterThan(0);
   });
+
+  it('bars are stacked (output offset by input height, not grouped side-by-side)', () => {
+    const stackedCost = {
+      overall_scorecard: { total_runs: 1 },
+      daily_totals: {
+        '2026-07-15': {
+          tokens_in: 1000,
+          tokens_out: 2000,
+        },
+      },
+    };
+    render(<CostChart cost={stackedCost} />);
+    const container = screen.getByTestId(TESTIDS.costChart);
+    const svg = container.querySelector('svg') as SVGElement;
+
+    // Should have exactly 2 bars for one day (input + output stacked)
+    const rects = svg.querySelectorAll('rect[data-day="2026-07-15"]');
+    expect(rects.length).toBe(2);
+
+    const inputBar = rects[0] as SVGRectElement;
+    const outputBar = rects[1] as SVGRectElement;
+
+    const inputX = parseFloat(inputBar.getAttribute('x') || '0');
+    const outputX = parseFloat(outputBar.getAttribute('x') || '0');
+    const inputY = parseFloat(inputBar.getAttribute('y') || '0');
+    const outputY = parseFloat(outputBar.getAttribute('y') || '0');
+    const inputHeight = parseFloat(inputBar.getAttribute('height') || '0');
+
+    // For stacked bars: both must have the same x position (same column)
+    expect(inputX).toEqual(outputX);
+
+    // Output bar Y should be above input bar Y (smaller Y in SVG coords)
+    // Output Y should equal: input Y - outputHeight (since taller output is higher up)
+    // OR: outputY + outputHeight = inputY (output bar ends where input bar starts)
+    const outputHeight = parseFloat(outputBar.getAttribute('height') || '0');
+    const expectedOutputY = inputY - outputHeight;
+    expect(outputY).toBeCloseTo(expectedOutputY, 1);
+  });
 });

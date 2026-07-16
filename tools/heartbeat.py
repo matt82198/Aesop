@@ -20,13 +20,10 @@ import time
 from pathlib import Path
 import argparse
 
-
-def get_state_dir():
-    """Resolve state directory from env var or current working directory."""
-    if os.environ.get("AESOP_STATE_ROOT"):
-        return Path(os.environ["AESOP_STATE_ROOT"])
-    # Default to ./state (relative to cwd)
-    return Path.cwd() / "state"
+try:
+    from common import get_state_dir
+except ImportError:
+    from tools.common import get_state_dir
 
 
 def beat(name, status=None, state_dir=None, brain=False):

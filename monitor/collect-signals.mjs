@@ -33,8 +33,8 @@ function expandPath(pathStr) {
   if (pathStr.startsWith('~')) {
     return path.join(os.homedir(), pathStr.slice(1));
   }
-  // Expand environment variables like $VAR or %VAR%
-  return pathStr.replace(/\$\{?([A-Z_]+)\}?/gi, (match, varName) => {
+  // Expand environment variables like $VAR, $VAR_1, or ${myVar}
+  return pathStr.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (match, varName) => {
     return process.env[varName] || match;
   });
 }
@@ -65,6 +65,12 @@ const STATE_DIR = expandPath(
   process.env.AESOP_STATE_ROOT ||
   config.state_root ||
   path.join(AESOP_ROOT, 'state')
+);
+
+const FLEET_LEDGER = expandPath(
+  process.env.AESOP_FLEET_LEDGER ||
+  config.fleet_ledger ||
+  path.join(BRAIN_ROOT, 'FLEET-LEDGER.md')
 );
 
 const MON = path.join(AESOP_ROOT, 'monitor');
@@ -345,8 +351,10 @@ function detectStrayRepoScripts() {
       .map(s => s.trim())
       .filter(Boolean);
     for (const f of new Set(recent)) {
-      if (/^[^/\\]+\.(py|mjs|js|sql)$/.test(f)) {
-        strayRepo.push(`${path.basename(repoPath)}: ${f}`);
+      // Normalize git-output paths to forward slashes immediately after read
+      const normalized = f.replace(/\\/g, '/');
+      if (/^[^/]+\.(py|mjs|js|sql)$/.test(normalized)) {
+        strayRepo.push(`${path.basename(repoPath)}: ${normalized}`);
       }
     }
   }
@@ -368,20 +376,89 @@ function checkSecurityAlerts() {
   }
 }
 
-// 8) Respawn watch (Rule 6 retry cap)
+// === Cursor tracking utilities (for ledger incremental read) ===
+// Helper: Load cursor state (byte offset + line hash of last processed line)
+function loadCursor() {
+  const cursorPath = path.join(MON, '.ledger-cursor.json');
+  try {
+    if (fs.existsSync(cursorPath)) {
+      return JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+    }
+  } catch {
+    // Parse error; treat as missing cursor
+  }
+  return { byteOffset: 0, lineHash: '' };
+}
+
+// Helper: Save cursor state (byte offset + line hash)
+function saveCursor(byteOffset, lineHash) {
+  const cursorPath = path.join(MON, '.ledger-cursor.json');
+  try {
+    fs.mkdirSync(MON, { recursive: true });
+    fs.writeFileSync(cursorPath, JSON.stringify({ byteOffset, lineHash }, null, 2), 'utf8');
+  } catch (e) {
+    // Fail-open: log warning but don't crash
+    console.error(`Warning: Failed to save ledger cursor: ${e.message}`);
+  }
+}
+
+// Helper: Compute a simple hash of a string (for integrity check)
+function simpleHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h) + str.charCodeAt(i);
+    h |= 0; // Convert to 32-bit integer
+  }
+  return Math.abs(h).toString(16);
+}
+
+// 8) Respawn watch (Rule 6 retry cap) — incremental read with cursor
 function detectRespawnWatch() {
   const respawnWatch = [];
-  const ledgerPath = path.join(BRAIN_ROOT, 'FLEET-LEDGER.md');
-  if (!fs.existsSync(ledgerPath)) return respawnWatch;
+  if (!fs.existsSync(FLEET_LEDGER)) return respawnWatch;
+
   try {
-    const content = fs.readFileSync(ledgerPath, 'utf8');
-    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('|'));
+    const buffer = fs.readFileSync(FLEET_LEDGER);
+    const content = buffer.toString('utf8');
+
+    // Load cursor to find starting point
+    const cursor = loadCursor();
+    let startOffset = cursor.byteOffset;
+
+    // If cursor points beyond file, reset to start (file was truncated or rotated)
+    if (startOffset > buffer.length) {
+      startOffset = 0;
+    }
+
+    // Extract only new content since last cursor position
+    const newContent = content.substring(startOffset);
+
+    // Split new content into lines, filtering empty and header lines
+    // Keep data rows (start with | and contain data), skip header rows (| --- | or column names)
+    const newLines = newContent.split('\n')
+      .filter(l => {
+        const trimmed = l.trim();
+        if (!trimmed) return false; // Skip empty lines
+        // Skip header separator rows (contain --- between pipes)
+        if (/\|\s*---/.test(trimmed)) return false;
+        // Skip column name row (has 'timestamp' or 'agent' or 'dispatch' or 'description')
+        if (trimmed.includes('timestamp') && trimmed.includes('agent')) return false;
+        // Keep all other rows starting with |
+        return trimmed.startsWith('|');
+      });
+
+    // If no new lines, return early (nothing to process)
+    if (newLines.length === 0) {
+      return respawnWatch;
+    }
+
+    // Process new lines to detect respawn violations
     const windowSize = 50;
-    const recentStart = Math.max(0, lines.length - windowSize);
+    const recentLines = newLines.slice(Math.max(0, newLines.length - windowSize));
     const signatures = {};
     const normalize = (desc) => (desc || '').substring(0, 40).toLowerCase().trim();
-    for (let i = recentStart; i < lines.length; i++) {
-      const line = lines[i];
+
+    for (const line of recentLines) {
       const parts = line.split('|').map(s => s.trim());
       if (parts.length >= 4) {
         const description = parts[3];
@@ -389,6 +466,8 @@ function detectRespawnWatch() {
         if (sig) signatures[sig] = (signatures[sig] || 0) + 1;
       }
     }
+
+    // Check for violations (count > 3)
     for (const [sig, count] of Object.entries(signatures)) {
       if (count > 3) {
         respawnWatch.push({
@@ -398,9 +477,17 @@ function detectRespawnWatch() {
         });
       }
     }
-  } catch {
-    // fail-open on error
+
+    // Update cursor to end of file
+    const lastLine = newLines[newLines.length - 1] || '';
+    const newByteOffset = buffer.length;
+    const newLineHash = simpleHash(lastLine);
+    saveCursor(newByteOffset, newLineHash);
+  } catch (e) {
+    // Fail-open on error
+    console.error(`Warning: Failed to read FLEET-LEDGER: ${e.message}`);
   }
+
   return respawnWatch;
 }
 
@@ -453,6 +540,70 @@ function checkUnreviewedPrompts() {
   // Without fleet_prompt_extractor.py available, emit 0
   // In production, invoke spawnSync('python', [...fleet_prompt_extractor.py...])
   return 0;
+}
+
+// 11) Isolation violation detection (rec #5: git-tracked dirs don't flag)
+// Detects worktrees created INSIDE repo root (violation) vs sanctioned ../sibling-wt-* (OK)
+// FP fix: git-tracked source directories (new modules) do NOT flag as violations
+function detectIsolationViolations() {
+  if (!fs.existsSync(AESOP_ROOT)) return { violations: [], count: 0 };
+
+  const violations = [];
+  const trackedFiles = new Set();
+
+  // Get list of git-tracked files to exclude legitimate source dirs
+  try {
+    const tracked = sh('git ls-files', AESOP_ROOT);
+    tracked.split('\n').forEach(f => {
+      if (f) {
+        const dir = f.split('/')[0];
+        trackedFiles.add(dir);
+      }
+    });
+  } catch {
+    // If git ls-files fails, proceed without tracked set (less precise but fail-open)
+  }
+
+  // Walk AESOP_ROOT (shallow) looking for dirs with nested .git
+  try {
+    const entries = fs.readdirSync(AESOP_ROOT, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.')) continue;
+      if (entry.name === 'node_modules') continue;
+
+      const dirPath = path.join(AESOP_ROOT, entry.name);
+      const gitPath = path.join(dirPath, '.git');
+
+      // Check if this directory has a .git file or .git dir (worktree indicator)
+      try {
+        const gitStat = fs.statSync(gitPath);
+        // It has .git — check if it's a worktree (contains "gitdir:" or is a symlink)
+        const isWorktree = gitStat.isFile() || gitStat.isSymbolicLink();
+
+        if (isWorktree) {
+          // This looks like a worktree. Check if it's git-tracked (FP fix)
+          const isTracked = trackedFiles.has(entry.name);
+
+          if (!isTracked) {
+            // Untracked worktree inside repo root = VIOLATION
+            violations.push({
+              path: entry.name,
+              type: 'untracked-worktree-in-root',
+              message: `Worktree '${entry.name}' found inside repo root (untracked). Should use sanctioned ../aesop-wt-* sibling instead.`,
+            });
+          }
+          // If tracked, it's a legitimate source directory; don't flag
+        }
+      } catch (e) {
+        // Entry doesn't have .git or is inaccessible; skip
+      }
+    }
+  } catch (e) {
+    // Directory read failed; fail-open with no violations
+  }
+
+  return { violations, count: violations.length };
 }
 
 // === AUTO Actions ===
@@ -609,6 +760,14 @@ function emitProposal(signalKey, problem, suggestedChange) {
 
   // If lock acquisition failed (fail-closed), skip emission for this cycle
   if (!lockDir) {
+    // On lock timeout, append a one-line MISSED-PROPOSAL record to ACTIONS.log (append-only)
+    // so the condition surfaces next cycle
+    const actionsLogPath = path.join(MON, 'ACTIONS.log');
+    try {
+      fs.appendFileSync(actionsLogPath, `[${timestamp}] MISSED-PROPOSAL: ${signalKey} (lock timeout)\n`, 'utf8');
+    } catch (e) {
+      // Fail-open: ignore write errors to ACTIONS.log
+    }
     return;
   }
 
@@ -661,6 +820,7 @@ const staleLoops = checkHeartbeats();
 const gitState = checkGitState();
 const memory = checkMemoryFreshness();
 const logFiles = checkLogFiles();
+const isolationViolations = detectIsolationViolations();
 
 // Extended signal checks (5, 6, 8, 10) — skipped if extended_signals is OFF
 const junk = extendedSignals ? detectJunkScripts() : { skipped: true };
@@ -709,6 +869,7 @@ const signals = {
   respawnWatch,
   costTick,
   unreviewedPrompts,
+  isolationViolations,
 };
 
 const brief = [];
@@ -752,6 +913,17 @@ if (needsRotation.length === 0) {
   brief.push(`⚠ **${needsRotation.length} log(s) need rotation:**`);
   for (const l of needsRotation) {
     brief.push(`  - ${l.name}: ${l.lineCount} lines, ${l.sizeKb}kb`);
+  }
+}
+brief.push('');
+
+brief.push('## Isolation violations');
+if (isolationViolations.count === 0) {
+  brief.push('✓ No worktrees detected inside repo root (sanctioned siblings OK).');
+} else {
+  brief.push(`🚨 **${isolationViolations.count} isolation violation(s)** detected (worktrees inside repo root):`);
+  for (const v of isolationViolations.violations) {
+    brief.push(`  - ${v.path}: ${v.message}`);
   }
 }
 brief.push('');
@@ -839,6 +1011,14 @@ if (extendedSignals) {
 }
 
 // Core proposals (always emitted)
+if (isolationViolations.count > 0) {
+  emitProposal(
+    'isolation-violation-detected',
+    `${isolationViolations.count} worktree(s) detected inside repo root. Agents should create worktrees as sanctioned siblings (../aesop-wt-*), not inside the repo root to maintain isolation.`,
+    `Review the violation(s): ${isolationViolations.violations.map(v => v.path).join(', ')}. Move worktrees to ../aesop-wt-<name> location outside repo root. Add pre-commit hook or monitoring to prevent future in-root worktrees.`
+  );
+}
+
 if (alerts.highMedCount > 0) {
   emitProposal(
     'security-alerts-high-med',

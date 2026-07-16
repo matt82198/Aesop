@@ -3,9 +3,10 @@
 secret_scan.py — Pre-push secret/credential detection gate.
 
 Modes:
-  secret_scan.py --staged [--repo PATH]  Scan git staged files (default repo=cwd)
-  secret_scan.py --history [--repo PATH] Scan all blobs in git history
-  secret_scan.py PATH [PATH...]          Scan files/dirs directly (recurse dirs)
+  secret_scan.py --staged [--repo PATH]              Scan git staged files (default repo=cwd)
+  secret_scan.py --range COMMIT_RANGE [--repo PATH]  Scan files changed in range (e.g., main..HEAD or abc123..def456)
+  secret_scan.py --history [--repo PATH]             Scan all blobs in git history
+  secret_scan.py PATH [PATH...]                      Scan files/dirs directly (recurse dirs)
 
 Exit codes: 0=clean, 1=findings, 2=usage error
 Output: one line per finding or summary (never prints full secrets)
@@ -50,10 +51,30 @@ PATTERNS = {
     "slack_token": (r"xox[baprs]-[A-Za-z0-9-]{10,}", 0),
     "openai_anthropic_key": (r"sk-[A-Za-z0-9_\-]{20,}", 0),
     "generic_secret_assignment": (
-        r"(password|passwd|secret|api[_-]?key|token|authorization)\s*[:=]\s*[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']",
+        # Unquoted branch requires 8+ contiguous chars from a bare-literal charset
+        # (no '.', '(', ')' — real code expressions like `secrets.token_urlsafe(32)`,
+        # `self.serve.SESSION_TOKEN`, or `headers.get(...)` all contain one of those)
+        # followed by whitespace/EOL, so an assignment from a variable/attribute/call
+        # doesn't false-positive as a hardcoded secret the way a bare env-file value
+        # (`API_TOKEN=verylongtokenvalue123456789`) legitimately does.
+        r"\b(password|passwd|secret|api[_-]?key|token|authorization)\b\s*(?::=|=)\s*(?:[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']|(?!['\"]|xxx|changeme|your-|example)[^\s\$\<\{\n\(\)\.\"']{8,}(?=\s|$))",
         re.IGNORECASE,
     ),
-    "connection_string": (r"://[^:]+:[^@/\s]+@(?!localhost(?:[:/]|$)|127\.0\.0\.1(?:[:/]|$)|example\.com(?:[:/]|$))[^\s]+", 0),
+    "connection_string": (
+        (r"://"
+         r"[^:]+:[^@/\s]+@"
+         r"(?!"
+            r"localhost(?:[:/]|$)|"
+            r"127\.0\.0\.1(?:[:/]|$)|"
+            r"127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:[:/]|$)|"
+            r"[a-zA-Z0-9.-]*\.local(?:[:/]|$)|"
+            r"[a-zA-Z0-9.-]*\.localdomain(?:[:/]|$)|"
+            r"(?:[a-zA-Z0-9-]+\.)*example(?:\.[a-zA-Z]{2,})?(?:[:/]|$)|"
+            r"(?:[a-zA-Z0-9-]+\.)*test(?:\.[a-zA-Z]{2,})?(?:[:/]|$)"
+         r")"
+         r"[^\s]+"),
+        0
+    ),
     "env_access": (
         r"(?i:(?:os\.getenv|os\.environ|System\.getenv|process\.env)\s*[\[\(][\"']?[A-Z_]*(?:password|secret|api[_-]?key|token|auth|key)[A-Z_0-9]*[\"']?[\)\]])",
         0,
@@ -204,35 +225,8 @@ def scan_file(filepath):
         is_binary = is_binary_file(filepath)
         is_large = file_size > SIZE_THRESHOLD
 
-        if is_large:
-            # Scan first 1MB of large file for FATAL_RULES
-            with open(filepath, "rb") as f:
-                content = f.read(SCAN_PREFIX_SIZE)
-
-            # Decode as latin-1 (handles any binary content)
-            try:
-                content_str = content.decode("latin-1")
-            except Exception:
-                content_str = content.decode("utf-8", errors="ignore")
-
-            # Emit skip notice to stderr
-            print(f"SKIPPED-LARGE {filepath} (scanned first {SCAN_PREFIX_SIZE // 1024}KB)", file=sys.stderr)
-
-            # Scan content for FATAL_RULES only
-            for line_num, line in enumerate(content_str.split("\n"), start=1):
-                for rule_name in FATAL_RULES:
-                    if rule_name not in PATTERNS:
-                        continue
-                    pattern, flags = PATTERNS[rule_name]
-                    matches = re.finditer(pattern, line, flags)
-                    for match in matches:
-                        match_str = match.group(0)
-                        if is_placeholder(match_str):
-                            continue
-                        findings.append((line_num, rule_name, match_str, True))
-
-        elif is_binary:
-            # Scan binary file as latin-1 for FATAL_RULES only
+        if is_binary:
+            # Binary file (any size): scan as-is for FATAL_RULES only
             with open(filepath, "rb") as f:
                 content = f.read(MAX_READ_SIZE)
 
@@ -258,8 +252,48 @@ def scan_file(filepath):
                             continue
                         findings.append((line_num, rule_name, match_str, True))
 
+        elif is_large:
+            # Large text file: scan entire file in chunks for all rules
+            print(f"SKIPPED-LARGE {filepath} (scanned in chunks)", file=sys.stderr)
+            line_num = 0
+            try:
+                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                    # Read in 1MB chunks to avoid loading entire large file into memory
+                    for chunk in iter(lambda: f.read(1024 * 1024), ""):
+                        for chunk_line in chunk.split("\n"):
+                            line_num += 1
+                            for rule_name, (pattern, flags) in PATTERNS.items():
+                                # Skip env_assignment rule if not an .env-like file
+                                if rule_name == "env_assignment" and not is_env_file(filepath):
+                                    continue
+
+                                matches = re.finditer(pattern, chunk_line, flags)
+                                for match in matches:
+                                    match_str = match.group(0)
+
+                                    # Skip if it's a placeholder
+                                    if is_placeholder(match_str):
+                                        continue
+
+                                    # Determine fatality based on rule category
+                                    if rule_name in FATAL_RULES:
+                                        # These are always fatal, pragma never applies
+                                        is_fatal = True
+                                    elif has_file_pragma and rule_name in SOFTENED_BY_PRAGMA:
+                                        # Only these rules can be softened by pragma
+                                        is_fatal = False
+                                    else:
+                                        # Other rules are fatal unless pragma and softened
+                                        is_fatal = not has_file_pragma if rule_name in SOFTENED_BY_PRAGMA else True
+
+                                    findings.append((line_num, rule_name, match_str, is_fatal))
+            except (IOError, OSError) as e:
+                # FAIL CLOSED: if we cannot fully scan a large text file, exit with error
+                print(f"FATAL: Cannot fully scan large text file {filepath}: {e}", file=sys.stderr)
+                sys.exit(1)
+
         else:
-            # Normal text file: scan all rules
+            # Normal small text file: scan all rules
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 for line_num, line in enumerate(f, start=1):
                     for rule_name, (pattern, flags) in PATTERNS.items():
@@ -299,6 +333,27 @@ def get_staged_files(repo_path):
     try:
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+        return [
+            Path(repo_path) / f
+            for f in result.stdout.strip().split("\n")
+            if f.strip()
+        ]
+    except Exception:
+        return []
+
+
+def get_range_files(repo_path, commit_range):
+    """Get list of files changed in commit range (e.g., 'main..HEAD' or 'abc123..def456')."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", commit_range],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -386,6 +441,11 @@ def main():
         help="Scan git staged files (requires --repo or uses cwd)",
     )
     parser.add_argument(
+        "--range",
+        metavar="COMMIT_RANGE",
+        help="Scan files changed in commit range (e.g., 'main..HEAD' or 'abc123..def456')",
+    )
+    parser.add_argument(
         "--history",
         action="store_true",
         help="Scan all blobs in git history (requires --repo or uses cwd)",
@@ -401,14 +461,17 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate usage
-    if sum([args.staged, args.history, bool(args.paths)]) != 1:
-        print("ERROR: Use exactly one of --staged, --history, or path arguments", file=sys.stderr)
+    # Validate usage: exactly one of --staged, --range, --history, or paths
+    mode_count = sum([args.staged, bool(args.range), args.history, bool(args.paths)])
+    if mode_count != 1:
+        print("ERROR: Use exactly one of --staged, --range, --history, or path arguments", file=sys.stderr)
         sys.exit(2)
 
     # Collect files to scan
     if args.staged:
         files = get_staged_files(args.repo)
+    elif args.range:
+        files = get_range_files(args.repo, args.range)
     elif args.history:
         # History mode: scan all files from git log
         history_files = get_history_files(args.repo)

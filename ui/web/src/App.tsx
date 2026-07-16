@@ -89,8 +89,17 @@ export default function App() {
   const sseState = useSSE();
   const { toggle } = useTheme();
   const [dataTimestamp, setDataTimestamp] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(Date.now());
 
   const connection = sseState.connectionStatus;
+
+  // Wall-clock ticker (~5s) for staleness re-evaluation without SSE traffic
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Update timestamp whenever any SSE section updates
   useEffect(() => {
@@ -113,6 +122,8 @@ export default function App() {
         alerts={sseState.data?.alerts ?? null}
         connectionStatus={connection}
         dataTimestamp={dataTimestamp}
+        heartbeatTimestamp={sseState.lastHeartbeat}
+        now={now}
         onThemeToggle={toggle}
         onRefresh={handleRefresh}
       />
@@ -132,7 +143,9 @@ export default function App() {
             repos={sseState.data?.repos ?? null}
           />
         )}
-        {route === '#/work' && <Work />}
+        {route === '#/work' && (
+          <Work tracker={sseState.tracker ?? null} backlog={sseState.backlog ?? null} />
+        )}
         {route === '#/activity' && <Activity state={sseState} />}
         {route === '#/cost' &&
           (sseState.cost ? <Cost cost={sseState.cost} /> : <Placeholder name="Cost" testid={TESTIDS.viewCost} />)}

@@ -158,8 +158,8 @@ def main():
             (
                 # Doc-shaped rule: generic assignment IS softened by pragma.
                 "tp_pragma_generic_softened",
-                "# secretscan: allow-pattern-docs\\n"
-                + "pass" + "word = \"this_is_a_doc_sample_value_12345\"\\n",
+                "# secretscan: allow-pattern-docs\n"
+                + "password = \"this_is_a_doc_sample_value_12345\"\n",
                 "pattern_docs.py",
                 0,
                 "ALLOWED-DOC"
@@ -235,7 +235,7 @@ def main():
                 "tp_connection_real_credentials",
                 "# Real production DB\\ndb_url = '"
                 + "postgresql:" + "//produser:RealPassword123"
-                + "@db.prod.example.com:5432/production" + "'\\n",
+                + "@db.production.io:5432/production" + "'\\n",
                 "config_prod.py",
                 1,
                 "connection_string"
@@ -265,6 +265,31 @@ def main():
                 "bigclean.log",
                 0,
                 "SKIPPED-LARGE"
+            ),
+            (
+                # REGRESSION: Unquoted password assignment should be detected
+                # (previously required quotes to match the pattern)
+                "tp_unquoted_password_assignment",
+                "password = supersecretvalue123\n",
+                "config.py",
+                1,
+                "generic_secret_assignment"
+            ),
+            (
+                # REGRESSION: Unquoted API key assignment should be detected
+                "tp_unquoted_api_key_assignment",
+                "api_key = longsecretapikey1234567890\n",
+                "settings.py",
+                1,
+                "generic_secret_assignment"
+            ),
+            (
+                # REGRESSION: Unquoted token in .env should be detected
+                "tp_unquoted_token_env_file",
+                "API_TOKEN=verylongtokenvalue123456789\n",
+                ".env",
+                1,
+                "env_assignment"
             ),
         ]
 

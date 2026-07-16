@@ -5,17 +5,22 @@ All notable changes to Aesop are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0-beta.4] - 2026-07-14
-
-### Added (Wave-13)
-- UI correctness hardening: a11y improvements, contrast fixes, dead marquee removal, monitor-status class.
-- Dashboard UX: accessibility fixes, keyboard navigation improvements.
-- npm packaging fixes: dependency alignment, build optimization.
-- Docs currency: dead-link sweep, reference updates, HOW-THE-LOOP-WORKS clarifications.
-- Test/CI wiring: doc-drift and domain-map test verification.
-- Machinery gates: secret-scan enforcement, pre-push hook gating.
-
 ## [Unreleased]
+
+### Added (Wave-19)
+- **Secret-scan range push gate** (#165): Enhanced push hook with per-range verification to block partial/corrupted scans.
+- **Host-header guard** (#163): HTTP host validation in UI handler to prevent header injection attacks.
+- **CI merge classification** (#162): `ci_merge_wait` now distinguishes real CI status (success/failure) vs timed out waits.
+- **Scaffolder manifest completeness** (#161): All 10 template directories (state_store, skills, mcp, scan added) verified in npm package.
+- **UI collector efficiency** (#164): Optimized agent and cost data collection; improved freshness and reduced polling overhead.
+- **Stall-check test rewrite** (#160): Migrated bare test functions to unittest.TestCase for CI compatibility.
+- **npm publish OIDC diagnostics** (#158): Self-diagnosing workflow for OIDC token generation and publish reliability.
+
+### Added (Wave-16/17 in-flight)
+- CLAUDE.md minimization and domain map refinements (PR #151).
+- Isolation detector and machinery/scripts port (PR #150).
+- MCP server and scan/ directory shipping in npm package.
+- README stats refresh and agent-catalog reference.
 
 ## [0.1.0-beta.5] - 2026-07-15
 
@@ -43,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **RELEASING.md** (#140): Release process documentation; npm publish and CI merge procedures.
 - **Currency Sweep** (#140): CHANGELOG #113–#135 documentation; README state_store and stats updates; CLAUDE.md drift correction; beta.5 preparation.
 - **Portfolio Case Study** (#139): Matt Culliton personal portfolio documentation; agent-fleet-built showcase.
+
+## [0.1.0-beta.4] - 2026-07-14
+
+### Added (Wave-13)
+- UI correctness hardening: a11y improvements, contrast fixes, dead marquee removal, monitor-status class.
+- Dashboard UX: accessibility fixes, keyboard navigation improvements.
+- npm packaging fixes: dependency alignment, build optimization.
+- Docs currency: dead-link sweep, reference updates, HOW-THE-LOOP-WORKS clarifications.
+- Test/CI wiring: doc-drift and domain-map test verification.
+- Machinery gates: secret-scan enforcement, pre-push hook gating.
 
 ### Added (Wave-14)
 - **Dashboard Rewrite**: Complete React 18 + Vite + TypeScript redesign with 4 hash-routed views (Overview, Work, Activity, Cost), sticky health header, live SSE updates, light/dark theming with WCAG AA contrast, keyboard navigation, and `aria-live` regions.

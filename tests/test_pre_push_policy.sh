@@ -158,10 +158,36 @@ printf '\n=== Finding 5: json_escape missing control chars (\\n, \\r, \\t, C0) =
 
   # Should be valid JSON after proper escaping
   if printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
-    printf 'PASS: Control character escaping produces valid JSON\n'
+    printf 'PASS: Control character escaping produces valid JSON (newline test)\n'
   else
     printf 'FAIL: JSON with control char is invalid\n'
     printf 'Entry: %s\n' "$audit_line"
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Finding 5b: json_escape all C0 control characters ===\n'
+(
+  # Direct test: Pass string with various C0 control chars to json_escape
+  # Test chars: BEL (\x07), BS (\x08), VT (\x0b), FF (\x0c), SO (\x0e), ESC (\x1b)
+  test_string=$(printf 'Alice\x07\x08\x0b\x0c\x0e\x1bAdmin')
+  escaped=$(json_escape "$test_string")
+
+  # The escaped output should be JSON-safe (no bare control chars)
+  # Create a minimal JSON object with the escaped string and validate
+  json_obj=$(printf '{"user":"%s"}' "$escaped")
+
+  if printf '%s' "$json_obj" | python3 -m json.tool >/dev/null 2>&1; then
+    printf 'PASS: All C0 control characters properly escaped to valid JSON\n'
+  else
+    printf 'FAIL: JSON with escaped C0 control chars is invalid\n'
+    printf 'Escaped string: %s\n' "$escaped"
+    printf 'JSON object: %s\n' "$json_obj"
     exit 1
   fi
 )
@@ -477,6 +503,56 @@ printf '\n=== P1 Bug1: verify_audit_log holds the write lock (no false truncatio
   printf 'PASS: verify_audit_log serializes via the write lock; no false truncation, lock released\n'
 )
 if [ $? -eq 0 ]; then test_passed=$((test_passed + 1)); else test_failed=$((test_failed + 1)); fi
+
+printf '\n=== SECURITY P1: check_secret_scan fails CLOSED on malformed stdin ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_malformed_stdin"
+  mkdir -p "$AESOP_ROOT/state"
+  mkdir -p "$AESOP_ROOT/tools"
+
+  # Create a dummy scanner script so we get past the "scanner not found" check
+  # and actually test the stdin parsing logic
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+if '--range' in sys.argv:
+    sys.exit(0)
+sys.exit(1)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  # Test 1: Empty stdin (malformed)
+  stderr_output=$( { printf '' | check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: check_secret_scan should return 1 (nonzero) when stdin is empty (fail-closed)\n'
+    exit 1
+  fi
+
+  # Should print a clear reason to stderr
+  if ! printf '%s' "$stderr_output" | grep -qi 'malformed\|parse.*fail\|unable.*parse'; then
+    printf 'FAIL: No clear error message to stderr on malformed stdin\n'
+    printf 'stderr was: %s\n' "$stderr_output"
+    exit 1
+  fi
+
+  # Test 2: Garbage stdin with insufficient tokens (will not parse as valid ref)
+  stderr_output=$( { printf 'garbage garbage\n' | check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: check_secret_scan should return 1 on unparseable stdin (fail-closed)\n'
+    exit 1
+  fi
+
+  printf 'PASS: check_secret_scan correctly blocks push when stdin is malformed\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
 
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"

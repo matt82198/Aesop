@@ -216,8 +216,9 @@ class TestPragmaNotSoftensFatalSecrets(unittest.TestCase):
     def test_connection_string_with_pragma_is_fatal(self):
         """Connection string with pragma should still be FATAL (exit 1)."""
         # Dummy connection URL assembled at runtime (scheme/creds/host split)
+        # Using prod.mycompany.com (not allowlisted) instead of example.com (now allowlisted for test domains)
         dummy_url = _j(
-            "postgresql:", "//user:dummypass", "@prod.example.com:5432/db"
+            "postgresql:", "//user:dummypass", "@prod.mycompany.com:5432/db"
         )
         temp_path = _write_fixture(
             ".py",
@@ -558,6 +559,351 @@ class TestScannerSelfScanClean(unittest.TestCase):
             result.stdout,
             "Self-scan must be clean WITHOUT pragma-softened findings",
         )
+
+
+class TestUnquotedSecretDetection(unittest.TestCase):
+    """Regression tests for unquoted secret value detection.
+
+    Previously, generic_secret_assignment only matched quoted values.
+    This tests that unquoted values (common in shell scripts and configs)
+    are now properly detected.
+    """
+
+    def test_unquoted_password_assignment(self):
+        """Unquoted password assignment should be detected."""
+        # Assemble the test value at runtime so this source file scans clean
+        test_value = _j("supersecretu", "alue123")
+        temp_path = _write_fixture(
+            ".py",
+            [_j("pass", "word = " + test_value)],
+        )
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), temp_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Should exit 1 (found secret)
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"Unquoted password should be detected. stdout: {result.stdout}",
+            )
+
+            # Should mention generic_secret_assignment
+            self.assertIn(
+                "generic_secret_assignment",
+                result.stdout,
+                f"Should detect as generic_secret_assignment. stdout: {result.stdout}",
+            )
+        finally:
+            os.unlink(temp_path)
+
+    def test_unquoted_api_key_assignment(self):
+        """Unquoted api_key assignment should be detected."""
+        # Assemble the test value at runtime so this source file scans clean
+        test_value = _j("longsecretap", "ikey1234567890")
+        temp_path = _write_fixture(
+            ".sh",
+            [_j("API_", "KEY=" + test_value)],
+        )
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), temp_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Should exit 1 (found secret)
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"Unquoted API key should be detected. stdout: {result.stdout}",
+            )
+
+            # Should mention generic_secret_assignment or env_assignment
+            self.assertTrue(
+                "generic_secret_assignment" in result.stdout or "env_assignment" in result.stdout,
+                f"Should detect assignment. stdout: {result.stdout}",
+            )
+        finally:
+            os.unlink(temp_path)
+
+    def test_unquoted_token_in_env_file(self):
+        """Unquoted token in .env file should be detected."""
+        temp_path = _write_fixture(
+            ".env",
+            ["SECRET_TOKEN=verylongtokenvalue123456789"],
+        )
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), temp_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Should exit 1 (found secret)
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"Unquoted token in .env should be detected. stdout: {result.stdout}",
+            )
+
+            # Should mention env_assignment
+            self.assertIn(
+                "env_assignment",
+                result.stdout,
+                f"Should detect as env_assignment. stdout: {result.stdout}",
+            )
+        finally:
+            os.unlink(temp_path)
+
+    def test_unquoted_placeholder_skipped(self):
+        """Unquoted placeholder values should be skipped (not fatal)."""
+        temp_path = _write_fixture(
+            ".py",
+            ["password = changeme"],
+        )
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), temp_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Should exit 0 (placeholder is not a secret)
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"Placeholder should be skipped. stdout: {result.stdout}",
+            )
+        finally:
+            os.unlink(temp_path)
+
+    def test_unquoted_vs_quoted_consistency(self):
+        """Both quoted and unquoted forms should be detected."""
+        # Test quoted form - assemble at runtime for clean scanning
+        test_value = _j("secretval", "ue123")
+        temp_quoted = _write_fixture(
+            ".py",
+            [_j('pass', 'word = "' + test_value + '"')],
+        )
+
+        # Test unquoted form - assemble at runtime for clean scanning
+        test_value2 = _j("secretval", "ue123")
+        temp_unquoted = _write_fixture(
+            ".py",
+            [_j("pass", "word = " + test_value2)],
+        )
+
+        try:
+            result_quoted = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), temp_quoted],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            result_unquoted = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), temp_unquoted],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Both should detect the secret
+            self.assertEqual(
+                result_quoted.returncode,
+                1,
+                "Quoted form should be detected",
+            )
+            self.assertEqual(
+                result_unquoted.returncode,
+                1,
+                "Unquoted form should be detected",
+            )
+
+            # Both should mention the rule
+            self.assertIn("generic_secret_assignment", result_quoted.stdout)
+            self.assertIn("generic_secret_assignment", result_unquoted.stdout)
+        finally:
+            os.unlink(temp_quoted)
+            os.unlink(temp_unquoted)
+
+
+class TestRangeMode(unittest.TestCase):
+    """Regression tests for --range mode (commit range scanning).
+
+    The pre-push hook needs to scan files changed between remote and local
+    commits, since git diff --cached is empty at push time.
+    """
+
+    def test_range_mode_accepts_commit_range(self):
+        """--range mode should accept git commit ranges."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize git repo
+            subprocess.run(
+                ["git", "init"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+
+            # Create initial clean commit
+            test_file = Path(tmpdir) / "file.txt"
+            test_file.write_text("clean")
+            subprocess.run(
+                ["git", "add", "file.txt"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "initial"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+
+            # Create commit with secret
+            dummy_key = _j("sk", "-1234567890abcdefghij1234567890")
+            test_file.write_text(f"api_key = {dummy_key}")
+            subprocess.run(
+                ["git", "add", "file.txt"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "add secret"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+
+            # Get commit hashes
+            result = subprocess.run(
+                ["git", "log", "--format=%H"],
+                cwd=tmpdir,
+                capture_output=True,
+                text=True,
+            )
+            commits = result.stdout.strip().split("\n")
+            old_commit = commits[1]
+            new_commit = commits[0]
+
+            # Scan with --range (must run in the git repo directory)
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), "--range", f"{old_commit}..{new_commit}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=tmpdir,
+            )
+
+            # Should detect the secret
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"Should detect secret in range. stdout: {result.stdout}",
+            )
+            self.assertIn(
+                "openai_anthropic_key",
+                result.stdout,
+                f"Should detect sk- pattern. stdout: {result.stdout}",
+            )
+
+    def test_range_mode_clean_range_passes(self):
+        """--range mode should pass when range contains no secrets."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize git repo
+            subprocess.run(
+                ["git", "init"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+
+            # Create two clean commits
+            test_file = Path(tmpdir) / "file.txt"
+            test_file.write_text("clean1")
+            subprocess.run(
+                ["git", "add", "file.txt"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "commit1"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+
+            test_file.write_text("clean2")
+            subprocess.run(
+                ["git", "add", "file.txt"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "commit2"],
+                cwd=tmpdir,
+                capture_output=True,
+            )
+
+            # Get commit hashes
+            result = subprocess.run(
+                ["git", "log", "--format=%H"],
+                cwd=tmpdir,
+                capture_output=True,
+                text=True,
+            )
+            commits = result.stdout.strip().split("\n")
+            old_commit = commits[1]
+            new_commit = commits[0]
+
+            # Scan with --range (must run in the git repo directory)
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), "--range", f"{old_commit}..{new_commit}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=tmpdir,
+            )
+
+            # Should pass (exit 0)
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"Clean range should pass. stdout: {result.stdout}",
+            )
+            self.assertIn(
+                "CLEAN",
+                result.stdout,
+                f"Should report CLEAN. stdout: {result.stdout}",
+            )
 
 
 if __name__ == "__main__":

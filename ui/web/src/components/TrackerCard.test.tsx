@@ -81,14 +81,14 @@ describe('TrackerCard', () => {
   it('renders pr_link as clickable anchor when URL is https://', async () => {
     const item = {
       ...fixtureTrackerItems[0],
-      pr_link: 'https://github.com/matt82198/aesop/pull/113',
+      pr_link: 'https://example.com/pull/123',
     };
 
     render(<TrackerCard item={item} />);
     fireEvent.click(screen.getByRole('button', { name: /expand/i }));
 
     await waitFor(() => {
-      const link = screen.getByRole('link', { name: /github.com/ });
+      const link = screen.getByRole('link', { name: /example.com/ });
       expect(link).toHaveAttribute('href', item.pr_link);
       expect(link).toHaveAttribute('target', '_blank');
     });

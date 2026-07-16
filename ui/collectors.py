@@ -233,7 +233,7 @@ def get_main_thread_messages():
             return messages
 
         newest = jsonl_files[0]
-        with open(newest, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(newest, 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
             # Get last 30 lines to extract ~12 message turns
             for line in lines[-30:]:
@@ -639,6 +639,85 @@ def _snapshot_orchestrator_status():
         print(f"[status] Snapshot error: {e}", file=sys.stderr)
         return {"orchestrators": []}
 
+def _recover_stranded_inbox_files():
+    """Defect 3 fix: Recovery sweep for .tracker-inbox.jsonl.processing-* files.
+
+    If drain_tracker_inbox crashes mid-process, it leaves a .processing-* file.
+    This sweep re-ingests those files on the next drain call, preventing silent
+    data loss. Returns list of items recovered.
+    """
+    recovered = []
+    try:
+        for processing_file in sorted(config.STATE_DIR.glob(".tracker-inbox.jsonl.processing-*")):
+            if not processing_file.exists():
+                continue
+            try:
+                content = processing_file.read_text(encoding='utf-8')
+                if not content.strip():
+                    try:
+                        processing_file.unlink()
+                    except Exception:
+                        pass
+                    continue
+
+                # Build dedup hash set from both tracker.json and event store
+                existing_hashes = set()
+
+                # Check rendered tracker.json
+                tracker_json = load_tracker()
+                for item in tracker_json.get("items", []):
+                    source = item.get("source", "")
+                    title = item.get("title", "")
+                    h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
+                    existing_hashes.add(h)
+
+                # Check event store projection
+                try:
+                    api = _tracker_api()
+                    projected = api.project("tracker")
+                    for item in projected.get("items", []):
+                        source = item.get("source", "")
+                        title = item.get("title", "")
+                        h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
+                        existing_hashes.add(h)
+                except Exception as e:
+                    print(f"[inbox] Recovery: failed to project tracker state: {e}", file=sys.stderr)
+
+                # Reprocess lines from the recovered file
+                lines = content.strip().splitlines()
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        if not isinstance(entry, dict):
+                            continue
+                        source = entry.get("source", "")
+                        title = entry.get("title", "")
+                        h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
+
+                        if h not in existing_hashes:
+                            item = create_tracker_item(entry)
+                            recovered.append(item)
+                            existing_hashes.add(h)
+                    except (json.JSONDecodeError, Exception):
+                        pass
+
+                # Only delete after successful re-ingest
+                try:
+                    processing_file.unlink()
+                except Exception as e:
+                    print(f"[inbox] Recovery: failed to unlink {processing_file}: {e}", file=sys.stderr)
+
+            except Exception as e:
+                print(f"[inbox] Recovery sweep error on {processing_file}: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"[inbox] Recovery sweep failed: {e}", file=sys.stderr)
+
+    return recovered
+
+
 def drain_tracker_inbox():
     """Drain .tracker-inbox.jsonl, create items idempotently.
 
@@ -646,31 +725,40 @@ def drain_tracker_inbox():
     to ensure only one caller processes it under concurrent access. Strengthen
     dedup to check both tracker.json AND api.project("tracker") so items
     in the event store but not yet rendered are also excluded.
+
+    Defect 3 fix: Before processing the current inbox, perform a recovery sweep
+    to re-ingest leftover .tracker-inbox.jsonl.processing-* files from any
+    previous crashes. This prevents silent data loss if a crash happens
+    mid-drain: stranded files are recovered on the next drain call.
     """
     inbox_file = config.STATE_DIR / ".tracker-inbox.jsonl"
+
+    # Defect 3: Recovery sweep for stranded .processing-* files from prior crashes.
+    created = _recover_stranded_inbox_files()
+
+    # Now process the current inbox if it exists
     if not inbox_file.exists():
-        return []
+        return created
 
-    created = []
+    # Defect 1: Atomically rename inbox to unique processing name first.
+    # This ensures only one caller wins; others see no file.
+    processing_file = inbox_file.with_name(
+        f".tracker-inbox.jsonl.processing-{secrets.token_hex(8)}"
+    )
     try:
-        # Defect 1: Atomically rename inbox to unique processing name first.
-        # This ensures only one caller wins; others see no file.
-        processing_file = inbox_file.with_name(
-            f".tracker-inbox.jsonl.processing-{secrets.token_hex(8)}"
-        )
-        try:
-            os.replace(str(inbox_file), str(processing_file))
-        except FileNotFoundError:
-            # Another caller already renamed it; nothing to process
-            return []
-        except Exception as e:
-            print(f"[inbox] Failed to rename inbox: {e}", file=sys.stderr)
-            return []
+        os.replace(str(inbox_file), str(processing_file))
+    except FileNotFoundError:
+        # Another caller already renamed it; nothing to process
+        return created
+    except Exception as e:
+        print(f"[inbox] Failed to rename inbox: {e}", file=sys.stderr)
+        return created
 
+    try:
         content = processing_file.read_text(encoding='utf-8')
         if not content.strip():
             processing_file.unlink()
-            return []
+            return created
 
         lines = content.strip().splitlines()
 
@@ -707,29 +795,34 @@ def drain_tracker_inbox():
                 continue
             try:
                 entry = json.loads(line)
-                if not isinstance(entry, dict):
-                    rejects.append(line)
-                    continue
-
-                source = entry.get("source", "")
-                title = entry.get("title", "")
-                h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
-
-                if h not in existing_hashes:
-                    item = create_tracker_item(entry)
-                    created.append(item)
-                    existing_hashes.add(h)
             except json.JSONDecodeError:
                 rejects.append(line)
-            except Exception as e:
-                rejects.append(line + " # " + str(e))
+                continue
+
+            if not isinstance(entry, dict):
+                rejects.append(line)
+                continue
+
+            source = entry.get("source", "")
+            title = entry.get("title", "")
+            h = hashlib.sha256((source + ":" + title).encode()).hexdigest()
+
+            if h not in existing_hashes:
+                # create_tracker_item can raise real errors (not malformed JSON)
+                # let those bubble up rather than silently adding to rejects
+                item = create_tracker_item(entry)
+                created.append(item)
+                existing_hashes.add(h)
 
         if rejects:
             rejects_file = inbox_file.with_name(".tracker-inbox.rejects")
             rejects_file.write_text("\n".join(rejects) + "\n", encoding='utf-8')
 
+        # Only delete the processing file after successful completion.
+        # If an exception occurs, the file is left behind for recovery.
         processing_file.unlink()
     except Exception as e:
-        print(f"[inbox] Drain error: {e}", file=sys.stderr)
+        print(f"[inbox] Drain error: {e}; processing file {processing_file.name} left for recovery", file=sys.stderr)
+        # Don't delete the file on error; let recovery sweep handle it next time
 
     return created

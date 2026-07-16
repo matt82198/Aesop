@@ -1,38 +1,41 @@
 /**
  * Work view — tracker kanban board + backlog panel + form.
  * Binds TrackerBoard, TrackerCard, TrackerForm, BacklogPanel.
- * Reads tracker + backlog from SSE, allows mutations.
+ * Reads tracker + backlog from SSE (via App props), allows mutations.
  */
 
 import { useEffect, useState } from 'react';
-import { useSSE } from '../lib/useSSE';
 import { TrackerBoard } from '../components/TrackerBoard';
 import { TrackerForm } from '../components/TrackerForm';
 import { BacklogPanel } from '../components/BacklogPanel';
 import { TESTIDS } from '../test/fixtures';
-import type { TrackerItem, AuditBacklog } from '../lib/types';
+import type { TrackerItem, AuditBacklog, SSEState } from '../lib/types';
 import '../styles/work.css';
 
-export function Work() {
-  const sse = useSSE();
+interface WorkProps {
+  tracker: SSEState['tracker'] | null;
+  backlog: SSEState['backlog'] | null;
+}
+
+export function Work({ tracker, backlog: backlogProp }: WorkProps) {
   const [trackerItems, setTrackerItems] = useState<TrackerItem[]>([]);
   const [backlog, setBacklog] = useState<AuditBacklog | null>(null);
   const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
-    if (sse.tracker?.items !== undefined && sse.tracker?.items !== null) {
-      setTrackerItems(sse.tracker.items);
-    } else if (sse.tracker === null) {
+    if (tracker?.items !== undefined && tracker?.items !== null) {
+      setTrackerItems(tracker.items);
+    } else if (tracker === null) {
       // Treat null items as empty array
       setTrackerItems([]);
     }
-  }, [sse.tracker]);
+  }, [tracker]);
 
   useEffect(() => {
-    if (sse.backlog) {
-      setBacklog(sse.backlog);
+    if (backlogProp) {
+      setBacklog(backlogProp);
     }
-  }, [sse.backlog]);
+  }, [backlogProp]);
 
   const handleItemUpdate = (updated: TrackerItem) => {
     setTrackerItems((prev) =>

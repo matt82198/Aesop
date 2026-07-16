@@ -12,7 +12,7 @@
   <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-**Aesop** is an open-source orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
+**Aesop** is an open-source orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
 
 What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator), **durable state** (git-committed checkpoints survive wipes), **observable machinery** (every agent run logged, every cost tracked), **live dashboard** (real-time fleet health at http://localhost:8770), and **security gates** (secret-scan blocks pushes, CI validates each merge).
 
@@ -24,10 +24,11 @@ What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, le
 - **Self-healing watchdog** — Runs every 150s: backs up work, scans for secrets, detects drift, restores on reboot.
 - **Live web dashboard** — Real-time fleet health, security alerts, work-item kanban at `http://localhost:8770`.
 - **Secret-scan gates** — Pre-push hook blocks leaks; audit trail logged. Pair with GitHub branch protection for enforcement.
+- **Self-diagnosing npm publish** — OIDC token generation and publish reliability verified on each release; workflow surfaces diagnostics inline.
 
 ## Get Started (3 steps, 5 min)
 
-**Note:** Aesop is in beta. Install the `@beta` tag for the latest prerelease (0.1.0-beta.1+).
+**Note:** Aesop is in beta. Install the `@beta` tag for the latest prerelease (v0.1.0-beta.5).
 
 ### Quickest path: npx scaffold
 
@@ -70,7 +71,7 @@ orchestrator (via Claude Code)  Reads backlog, dispatches Haiku subagents in par
   ↓
 parallel Haiku fleet            Tiny, scoped domains (tests, build, review, docs, etc.)
   ↓
-watchdog verifies & merges      GREEN → push to main
+watchdog backs up & gates        Heartbeat, secret-scan, push to backup branch; merging is orchestrator/human-driven
   ↓
 monitor/collect-signals.mjs     Audits orchestration health, feeds next wave's backlog
   ↓
@@ -87,15 +88,19 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 130 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 354 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 143 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 390 <!-- metrics-verified: self_stats.py (git log) --> |
 | Project Age | 3 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Waves | 13 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 68,270 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 253 <!-- metrics-verified: self_stats.py (git log) --> |
+| Waves | 16 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 72,168 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 268 <!-- metrics-verified: self_stats.py (git log) --> |
 | Distinct Co-authors | 7 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- SELF-STATS:END -->
+
+## Recommended Agents
+
+Aesop pairs well with the open-source catalog of ~130 community-authored specialized agent definitions (TDD orchestrators, security reviewers, performance engineers, etc.). For optimal results, install agents from the upstream source and pair them with Aesop's cost-optimized Haiku dispatch. This is optional; Aesop works standalone with general-purpose Claude Code agents.
 
 ## Use with Claude Code
 
@@ -146,7 +151,7 @@ Settings > Branches > main
   ✓ Restrict pushes to (Admins only)
 ```
 
-Private brain (`~/.claude`) is never committed to this repo. Keep `aesop.config.json` git-ignored. Implement `tools/secret_scan.py` with your security rules. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for setup.
+**Host-header validation** in the dashboard UI handler prevents HTTP header injection attacks; all requests are validated against the configured origin. Private brain (`~/.claude`) is never committed to this repo. Keep `aesop.config.json` git-ignored. Implement `tools/secret_scan.py` with your security rules. See [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) for setup.
 
 ## Dashboard (Wave-14 Rewrite)
 

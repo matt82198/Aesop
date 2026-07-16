@@ -8,19 +8,23 @@ status is SUCCESS — this is the whole point (prevents merge-on-CI-failure edge
 
 Usage:
   python ci_merge_wait.py <PR-number> [--timeout SECONDS] [--poll SECONDS] [--merge-method merge|squash|rebase]
+                          [--dry-run] [--self-test]
 
 Options:
   --timeout SECONDS      Max seconds to wait for CI to conclude (default: 3600)
   --poll SECONDS         Poll interval in seconds (default: 10)
   --merge-method METHOD  Merge strategy: merge, squash, rebase (default: merge)
+  --dry-run              Skip actual merge, just verify CI status and report what would happen
+  --self-test            Run offline self-test of polling/decision logic (no network, no PR required)
 
 Exit codes:
-  0 = PR merged successfully
+  0 = PR merged successfully, dry-run verified, or self-test passed
+  1 = General error or self-test failed
   2 = CI checks failed (do NOT merge, prints which check failed)
   3 = Timeout waiting for CI to conclude
   4 = PR not mergeable or has merge conflicts
 
-Requires: gh CLI available on PATH. Gracefully exits with error if gh is missing.
+Requires: gh CLI available on PATH (unless --self-test). Gracefully exits with error if gh is missing.
 """
 
 import argparse
@@ -71,7 +75,26 @@ def get_pr_status(pr_number):
 
 def check_ci_status(status_rollup):
     """
-    Analyze status check rollup.
+    Analyze status check rollup from gh pr view --json statusCheckRollup.
+    Handles both CheckRun (status + conclusion) and StatusContext (state) entries.
+
+    CheckRun classification:
+      - status=COMPLETED + conclusion in (FAILURE, CANCELLED, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE) = FAILURE
+      - status=COMPLETED + conclusion in (NEUTRAL, SKIPPED) or None/empty = SUCCESS (non-blocking per GitHub)
+      - status in (QUEUED, IN_PROGRESS) = PENDING
+      - status not recognized = PENDING (fail-closed)
+
+    StatusContext classification:
+      - state='success' = SUCCESS
+      - state in ('failure', 'error') = FAILURE
+      - state='pending' = PENDING
+      - state in ('neutral', 'skipped') = SUCCESS (non-blocking advisory checks)
+      - state not recognized = PENDING (fail-closed)
+
+    Unrecognized check shapes (no status/state field) = PENDING (fail-closed).
+
+    GitHub semantics: NEUTRAL and SKIPPED conclusions/states are non-blocking and do not prevent merge.
+
     Returns: ("pending", None), ("success", None), or ("failure", check_name)
     """
     if not status_rollup:
@@ -83,11 +106,53 @@ def check_ci_status(status_rollup):
     failed_checks = []
 
     for check in status_rollup:
-        status = check.get("status", "").upper()
-        if status == "PENDING":
-            pending_checks.append(check.get("name", "unknown"))
-        elif status == "FAILURE":
-            failed_checks.append(check.get("name", "unknown"))
+        check_name = check.get("name", "unknown")
+        check_status = None
+
+        # Determine check classification (CheckRun or StatusContext or unrecognized)
+        if "status" in check:
+            # CheckRun entry (has 'status' field)
+            status = check.get("status", "").upper()
+            conclusion = check.get("conclusion", "")
+
+            if status == "COMPLETED":
+                # Check conclusion for failure indicators
+                if conclusion and conclusion.upper() in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"):
+                    check_status = "failure"
+                else:
+                    # COMPLETED with no/empty conclusion or other conclusion = success
+                    check_status = "success"
+            elif status in ("QUEUED", "IN_PROGRESS"):
+                check_status = "pending"
+            else:
+                # Unrecognized status value (fail-closed)
+                check_status = "pending"
+
+        elif "state" in check:
+            # StatusContext entry (has 'state' field)
+            state = check.get("state", "").lower()
+            if state == "success":
+                check_status = "success"
+            elif state in ("failure", "error"):
+                check_status = "failure"
+            elif state == "pending":
+                check_status = "pending"
+            elif state in ("neutral", "skipped"):
+                # Non-blocking advisory or skipped checks (GitHub semantics)
+                check_status = "success"
+            else:
+                # Unrecognized state value (fail-closed)
+                check_status = "pending"
+
+        else:
+            # Unrecognized shape (no status or state field) - fail-closed
+            check_status = "pending"
+
+        # Collect check status
+        if check_status == "failure":
+            failed_checks.append(check_name)
+        elif check_status == "pending":
+            pending_checks.append(check_name)
 
     # Determine overall status
     if failed_checks:
@@ -98,12 +163,17 @@ def check_ci_status(status_rollup):
         return ("success", None)
 
 
-def merge_pr(pr_number, merge_method):
+def merge_pr(pr_number, merge_method, dry_run=False):
     """
     Merge the PR using gh pr merge.
     This call is STRUCTURALLY UNREACHABLE unless CI is SUCCESS.
+    If dry_run is True, report what would be done without actually merging.
     Returns True on success, False on error.
     """
+    if dry_run:
+        print(f"[DRY-RUN] Would merge PR #{pr_number} with --{merge_method}")
+        return True
+
     result = subprocess.run(
         ["gh", "pr", "merge", str(pr_number), f"--{merge_method}"],
         capture_output=True,
@@ -113,12 +183,193 @@ def merge_pr(pr_number, merge_method):
     return result.returncode == 0
 
 
+def run_self_test():
+    """
+    Run self-test with real GitHub API payload structures.
+    No network calls; verifies the merge guard logic with CheckRun and StatusContext payloads.
+    Returns True if all tests pass, False otherwise.
+    """
+    print("Running self-test with real GitHub API payloads...")
+
+    # Test 1: CheckRun success case (COMPLETED with no conclusion)
+    checkrun_success = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": None},
+        {"name": "test-integration", "status": "COMPLETED", "conclusion": ""},
+        {"name": "lint", "status": "COMPLETED", "conclusion": None},
+    ]
+    ci_status, failed_check = check_ci_status(checkrun_success)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for CheckRun COMPLETED, got '{ci_status}'")
+        return False
+    print("[OK] CheckRun success case (COMPLETED + no conclusion)")
+
+    # Test 2: CheckRun in-progress case (should be pending)
+    checkrun_pending = [
+        {"name": "test-unit", "status": "IN_PROGRESS", "conclusion": None},
+        {"name": "test-integration", "status": "COMPLETED", "conclusion": None},
+    ]
+    ci_status, failed_check = check_ci_status(checkrun_pending)
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' for IN_PROGRESS, got '{ci_status}'")
+        return False
+    print("[OK] CheckRun pending case (IN_PROGRESS)")
+
+    # Test 3: CheckRun failure case (COMPLETED with FAILURE conclusion)
+    checkrun_failure = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": "FAILURE"},
+        {"name": "test-integration", "status": "COMPLETED", "conclusion": None},
+    ]
+    ci_status, failed_check = check_ci_status(checkrun_failure)
+    if ci_status != "failure" or failed_check != "test-unit":
+        print(f"FAIL: Expected 'failure' with 'test-unit', got '{ci_status}' / '{failed_check}'")
+        return False
+    print("[OK] CheckRun failure case (COMPLETED + FAILURE)")
+
+    # Test 4: StatusContext success case (state=success)
+    statuscontext_success = [
+        {"name": "continuous-integration/travis-ci/push", "state": "success"},
+    ]
+    ci_status, failed_check = check_ci_status(statuscontext_success)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for StatusContext state=success, got '{ci_status}'")
+        return False
+    print("[OK] StatusContext success case (state=success)")
+
+    # Test 5: StatusContext failure case (state=failure)
+    statuscontext_failure = [
+        {"name": "continuous-integration/travis-ci/push", "state": "failure"},
+    ]
+    ci_status, failed_check = check_ci_status(statuscontext_failure)
+    if ci_status != "failure" or failed_check != "continuous-integration/travis-ci/push":
+        print(f"FAIL: Expected 'failure' with StatusContext, got '{ci_status}' / '{failed_check}'")
+        return False
+    print("[OK] StatusContext failure case (state=failure)")
+
+    # Test 6: StatusContext pending case (state=pending)
+    statuscontext_pending = [
+        {"name": "continuous-integration/travis-ci/push", "state": "pending"},
+    ]
+    ci_status, failed_check = check_ci_status(statuscontext_pending)
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' for StatusContext state=pending, got '{ci_status}'")
+        return False
+    print("[OK] StatusContext pending case (state=pending)")
+
+    # Test 7: Mixed CheckRun and StatusContext (all success)
+    mixed_success = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": None},
+        {"name": "travis-ci", "state": "success"},
+    ]
+    ci_status, _ = check_ci_status(mixed_success)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for mixed payloads, got '{ci_status}'")
+        return False
+    print("[OK] Mixed CheckRun + StatusContext success case")
+
+    # Test 8: Mixed payloads with pending (should block merge)
+    mixed_pending = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": None},
+        {"name": "lint", "status": "QUEUED", "conclusion": None},
+    ]
+    ci_status, _ = check_ci_status(mixed_pending)
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' for QUEUED check, got '{ci_status}'")
+        return False
+    print("[OK] Mixed payloads with QUEUED (pending)")
+
+    # Test 9: No checks (treat as success)
+    ci_status, _ = check_ci_status([])
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for no checks, got '{ci_status}'")
+        return False
+    print("[OK] No-checks case: treated as success")
+
+    # Test 10: Unrecognized shape (fail-closed: should not succeed)
+    unrecognized = [
+        {"name": "mystery-check"},
+    ]
+    ci_status, _ = check_ci_status(unrecognized)
+    if ci_status == "success":
+        print(f"FAIL: Expected not 'success' for unrecognized shape, got '{ci_status}'")
+        return False
+    print("[OK] Unrecognized check shape (fail-closed)")
+
+    # Test 11: CheckRun cancelled (counts as failure)
+    cancelled_check = [
+        {"name": "test-unit", "status": "COMPLETED", "conclusion": "CANCELLED"},
+    ]
+    ci_status, _ = check_ci_status(cancelled_check)
+    if ci_status != "failure":
+        print(f"FAIL: Expected 'failure' for CANCELLED, got '{ci_status}'")
+        return False
+    print("[OK] CheckRun CANCELLED (failure)")
+
+    # Test 12: CheckRun neutral conclusion (non-blocking advisory, should be success)
+    neutral_check = [
+        {"name": "advisory-lint", "status": "COMPLETED", "conclusion": "NEUTRAL"},
+    ]
+    ci_status, _ = check_ci_status(neutral_check)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for NEUTRAL conclusion, got '{ci_status}'")
+        return False
+    print("[OK] CheckRun NEUTRAL conclusion (success, non-blocking)")
+
+    # Test 13: CheckRun skipped conclusion (non-blocking, should be success)
+    skipped_check = [
+        {"name": "optional-test", "status": "COMPLETED", "conclusion": "SKIPPED"},
+    ]
+    ci_status, _ = check_ci_status(skipped_check)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for SKIPPED conclusion, got '{ci_status}'")
+        return False
+    print("[OK] CheckRun SKIPPED conclusion (success, non-blocking)")
+
+    # Test 14: StatusContext neutral state (non-blocking advisory, should be success)
+    neutral_state = [
+        {"name": "advisory-check", "state": "neutral"},
+    ]
+    ci_status, _ = check_ci_status(neutral_state)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for StatusContext state=neutral, got '{ci_status}'")
+        return False
+    print("[OK] StatusContext neutral state (success, non-blocking)")
+
+    # Test 15: StatusContext skipped state (non-blocking, should be success)
+    skipped_state = [
+        {"name": "optional-check", "state": "skipped"},
+    ]
+    ci_status, _ = check_ci_status(skipped_state)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for StatusContext state=skipped, got '{ci_status}'")
+        return False
+    print("[OK] StatusContext skipped state (success, non-blocking)")
+
+    # Test 16: Fabricated unknown state (fail-closed to pending)
+    unknown_state = [
+        {"name": "mystery-state", "state": "fabricated_unknown_state"},
+    ]
+    ci_status, _ = check_ci_status(unknown_state)
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' for unknown state, got '{ci_status}'")
+        return False
+    print("[OK] Fabricated unknown state (pending, fail-closed)")
+
+    print("\nAll self-tests passed!")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("pr_number", type=int, help="GitHub PR number")
+    parser.add_argument(
+        "pr_number",
+        type=int,
+        nargs="?",
+        default=None,
+        help="GitHub PR number (required unless using --self-test)"
+    )
     parser.add_argument(
         "--timeout",
         type=int,
@@ -137,8 +388,30 @@ def main():
         default="merge",
         help="Merge strategy (default: merge)"
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip actual merge, just verify CI status and report what would happen"
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run offline self-test of polling/decision logic (no network)"
+    )
 
     args = parser.parse_args()
+
+    # Handle self-test mode
+    if args.self_test:
+        if run_self_test():
+            sys.exit(0)
+        else:
+            sys.exit(1)
+
+    # Validate PR is provided for non-self-test mode
+    if args.pr_number is None:
+        print("ERROR: PR number is required (unless using --self-test)")
+        sys.exit(1)
 
     # Validate inputs
     if args.pr_number <= 0:
@@ -185,11 +458,32 @@ def main():
             print(f"CI FAILED: {failed_check}")
             sys.exit(2)
         elif ci_status == "success":
-            # SUCCESS: CI is green, proceed to merge
+            # SUCCESS: CI is green, re-check immediately before proceeding
+            print(f"CI GREEN: All checks passed. Re-checking status before merge...")
+            final_check = get_pr_status(args.pr_number)
+            if final_check is None:
+                print("ERROR: final status check failed")
+                sys.exit(1)
+
+            final_rollup = final_check.get("statusCheckRollup", [])
+            final_ci_status, final_failed = check_ci_status(final_rollup)
+
+            if final_ci_status != "success":
+                print(f"CI STATUS CHANGED: {final_failed}")
+                sys.exit(2)
+
+            # SUCCESS: CI is still green, proceed to merge
             # This merge call is STRUCTURALLY UNREACHABLE unless ci_status == "success"
-            print(f"CI GREEN: All checks passed. Merging PR #{args.pr_number}...")
-            if merge_pr(args.pr_number, args.merge_method):
-                print(f"MERGED: PR #{args.pr_number} merged successfully")
+            if args.dry_run:
+                print(f"[DRY-RUN] PR #{args.pr_number} CI is green, would merge...")
+            else:
+                print(f"CI CONFIRMED GREEN. Merging PR #{args.pr_number}...")
+
+            if merge_pr(args.pr_number, args.merge_method, dry_run=args.dry_run):
+                if args.dry_run:
+                    print(f"[DRY-RUN] PR #{args.pr_number} merge command would succeed")
+                else:
+                    print(f"MERGED: PR #{args.pr_number} merged successfully")
                 sys.exit(0)
             else:
                 print("ERROR: merge failed (PR state changed?)")

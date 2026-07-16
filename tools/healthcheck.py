@@ -24,6 +24,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import time
 
+try:
+    from common import check_heartbeat_staleness
+except ImportError:
+    from tools.common import check_heartbeat_staleness
+
 # Import UI config for state path resolution
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:
@@ -94,31 +99,29 @@ def _check_heartbeat(name, heartbeat_file, threshold=300):
     Returns:
         tuple (severity, message) or None if all OK
     """
-    if not heartbeat_file.exists():
-        return ("YELLOW", f"no {name} heartbeat file")
+    is_stale, age_seconds, info = check_heartbeat_staleness(heartbeat_file, threshold)
 
-    try:
-        content = heartbeat_file.read_text(encoding="utf-8").strip()
-        if not content:
+    if not is_stale:
+        return None
+
+    # Stale: determine severity and message
+    if age_seconds == 0:
+        # File missing/empty/unreadable - use generic message
+        if "missing" in info.lower():
+            return ("YELLOW", f"no {name} heartbeat file")
+        elif "empty" in info.lower():
             return ("YELLOW", f"{name} heartbeat empty")
-
-        try:
-            timestamp = int(content)
-        except ValueError:
+        else:
             return ("YELLOW", f"{name} heartbeat unparseable")
 
-        age_seconds = int(time()) - timestamp
-        if age_seconds >= threshold * 2:
-            # Watchdog dead while orchestrator might be active
-            if name == "watchdog" and age_seconds >= 600:
-                return ("RED", f"watchdog dead ({age_seconds}s)")
-            return ("YELLOW", f"{name} stale ({age_seconds}s > {threshold}s threshold)")
-        elif age_seconds > threshold:
-            return ("YELLOW", f"{name} stale ({age_seconds}s)")
-
-        return None
-    except Exception as e:
-        return ("YELLOW", f"{name} heartbeat read error: {e}")
+    # File exists but is stale
+    if age_seconds >= threshold * 2:
+        # Watchdog dead while orchestrator might be active
+        if name == "watchdog" and age_seconds >= 600:
+            return ("RED", f"watchdog dead ({age_seconds}s)")
+        return ("YELLOW", f"{name} stale ({age_seconds}s > {threshold}s threshold)")
+    else:
+        return ("YELLOW", f"{name} stale ({age_seconds}s)")
 
 
 def _check_alerts(alerts_file):

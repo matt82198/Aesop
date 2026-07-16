@@ -30,6 +30,11 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+try:
+    from common import check_heartbeat_staleness as check_hb_staleness
+except ImportError:
+    from tools.common import check_heartbeat_staleness as check_hb_staleness
+
 
 # ==============================================================================
 # Configuration Loading
@@ -181,19 +186,18 @@ def check_heartbeat_staleness(state_root, stall_threshold_s):
         return False, None
 
     hb_file = state_root / ".watchdog-heartbeat"
-    if not hb_file.exists():
-        return True, "Watchdog heartbeat missing"
+    is_stale, age_seconds, info = check_hb_staleness(hb_file, stall_threshold_s)
 
-    try:
-        timestamp = int(hb_file.read_text(encoding="utf-8").strip())
-    except (ValueError, IOError):
-        return True, "Watchdog heartbeat unreadable"
+    if not is_stale:
+        return False, None
 
-    age_seconds = int(time.time()) - timestamp
-    if age_seconds >= stall_threshold_s:
+    # Map the common function's result to our return format
+    if age_seconds == 0:
+        # File missing/empty/unreadable
+        return True, info
+    else:
+        # File exists but is stale
         return True, f"Watchdog heartbeat stale ({age_seconds}s >= {stall_threshold_s}s)"
-
-    return False, None
 
 
 # ==============================================================================

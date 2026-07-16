@@ -3,14 +3,45 @@ set -uo pipefail
 
 json_escape() {
   # Escape backslashes first, then quotes, then control chars for valid JSON
-  # Finding 5: Handle control characters (\n, \r, \t, C0)
+  # Finding 5: Handle ALL C0 control characters (\x00-\x08, \x0b-\x0c, \x0e-\x1f)
   local s="$1"
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
   s="${s//$'\n'/\\n}"
   s="${s//$'\r'/\\r}"
   s="${s//$'\t'/\\t}"
-  printf '%s' "$s"
+  # Escape remaining C0 control characters as \u00XX
+  # Using sed with explicit byte mappings for each C0 char not yet escaped
+  printf '%s' "$s" | sed \
+    -e 's/[\x00]/\\u0000/g' \
+    -e 's/[\x01]/\\u0001/g' \
+    -e 's/[\x02]/\\u0002/g' \
+    -e 's/[\x03]/\\u0003/g' \
+    -e 's/[\x04]/\\u0004/g' \
+    -e 's/[\x05]/\\u0005/g' \
+    -e 's/[\x06]/\\u0006/g' \
+    -e 's/[\x07]/\\u0007/g' \
+    -e 's/[\x08]/\\u0008/g' \
+    -e 's/[\x0b]/\\u000b/g' \
+    -e 's/[\x0c]/\\u000c/g' \
+    -e 's/[\x0e]/\\u000e/g' \
+    -e 's/[\x0f]/\\u000f/g' \
+    -e 's/[\x10]/\\u0010/g' \
+    -e 's/[\x11]/\\u0011/g' \
+    -e 's/[\x12]/\\u0012/g' \
+    -e 's/[\x13]/\\u0013/g' \
+    -e 's/[\x14]/\\u0014/g' \
+    -e 's/[\x15]/\\u0015/g' \
+    -e 's/[\x16]/\\u0016/g' \
+    -e 's/[\x17]/\\u0017/g' \
+    -e 's/[\x18]/\\u0018/g' \
+    -e 's/[\x19]/\\u0019/g' \
+    -e 's/[\x1a]/\\u001a/g' \
+    -e 's/[\x1b]/\\u001b/g' \
+    -e 's/[\x1c]/\\u001c/g' \
+    -e 's/[\x1d]/\\u001d/g' \
+    -e 's/[\x1e]/\\u001e/g' \
+    -e 's/[\x1f]/\\u001f/g'
 }
 compute_sha256() {
   # P1-Bug2 fix: Single helper for sha256sum with fallback to shasum
@@ -250,6 +281,43 @@ check_branch_policy() {
   return 0
 }
 
+get_commit_range() {
+  # Parse pre-push stdin to build commit range for scanning.
+  # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+  # Returns: "remote-sha..local-sha" for diff, or empty if unable to parse
+  local local_ref local_sha remote_ref remote_sha
+
+  if [ -t 0 ]; then
+    # Running interactively on a tty; no stdin to parse
+    return 1
+  fi
+
+  # Read first (and typically only) ref tuple from stdin
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
+    # Skip empty lines
+    if [ -z "$remote_ref" ]; then
+      continue
+    fi
+
+    # Found a valid ref tuple; build the range
+    # If remote_sha is all zeros (new branch), use merge-base with default branch
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+      # New branch: find merge-base with main/master
+      local default_branch="main"
+      if ! git rev-parse "$default_branch" >/dev/null 2>&1; then
+        default_branch="master"
+      fi
+      printf '%s..%s' "$default_branch" "$local_sha"
+    else
+      # Existing branch: use remote sha as base
+      printf '%s..%s' "$remote_sha" "$local_sha"
+    fi
+    return 0
+  done
+
+  return 1
+}
+
 check_secret_scan() {
   local scan_bin
   if command -v python >/dev/null 2>&1; then
@@ -270,17 +338,30 @@ check_secret_scan() {
     return 0
   fi
 
-  # Run scanner and capture output; surface ALLOWED-DOC lines to stderr for visibility
+  # Parse pre-push stdin to get commit range, then scan files in that range
+  local commit_range
+  commit_range=$(get_commit_range)
+  local parse_exit_code=$?
+
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_range" ]; then
+    # Malformed stdin or unable to parse: fail-CLOSED (security P1 fix)
+    # Only fail-open for missing scanner tool, not for malformed input
+    log_block "secret_scan_stdin_parse_failed"
+    printf 'Error: Could not parse pre-push stdin for commit range (malformed or empty)\n' >&2
+    return 1
+  fi
+
+  # Run scanner on commit range and capture output
   local scan_output
-  scan_output=$("$scan_bin" "$scan_script" --staged 2>&1)
-  local exit_code=$?
+  scan_output=$("$scan_bin" "$scan_script" --range "$commit_range" 2>&1)
+  local scan_exit_code=$?
 
   # Surface all output including ALLOWED-DOC findings to stderr
   if [ -n "$scan_output" ]; then
     printf '%s\n' "$scan_output" >&2
   fi
 
-  return $exit_code
+  return $scan_exit_code
 }
 
 log_event() {

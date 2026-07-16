@@ -30,20 +30,64 @@ acquire_lock() {
   fi
 
   # Lock directory already exists; check if it's stale
-  if [ -d "$lock_dir" ] && [ -f "$lock_dir/timestamp" ]; then
-    local lock_mtime=$(cat "$lock_dir/timestamp" 2>/dev/null || echo 0)
-    local now=$(date +%s)
-    local lock_age=$((now - lock_mtime))
+  # AUDIT FIX 2: Verify both timestamp AND pid files exist before the stale comparison
+  if [ -d "$lock_dir" ]; then
+    # Try to read pid file to check if process is still running
+    local lock_pid=""
+    if [ -f "$lock_dir/pid" ]; then
+      lock_pid=$(cat "$lock_dir/pid" 2>/dev/null)
+    fi
 
-    if [ "$lock_age" -gt "$stale_threshold" ]; then
-      # Lock is stale; try to reclaim it
-      rm -rf "$lock_dir" 2>/dev/null || true
-      if mkdir "$lock_dir" 2>/dev/null; then
-        date +%s > "$lock_dir/timestamp" 2>/dev/null
-        echo $$ > "$lock_dir/pid" 2>/dev/null
-        echo "watchdog lock was stale (${lock_age}s) — reclaimed." >&2
-        return 2
+    # Check if both required files exist
+    if [ -f "$lock_dir/timestamp" ] && [ -f "$lock_dir/pid" ] && [ -n "$lock_pid" ]; then
+      # Both files present and pid is readable - use timestamp for stale check
+      local lock_mtime=$(cat "$lock_dir/timestamp" 2>/dev/null || echo 0)
+      local now=$(date +%s)
+      local lock_age=$((now - lock_mtime))
+
+      if [ "$lock_age" -gt "$stale_threshold" ]; then
+        # Lock is stale; try to reclaim it
+        rm -rf "$lock_dir" 2>/dev/null || true
+        if mkdir "$lock_dir" 2>/dev/null; then
+          date +%s > "$lock_dir/timestamp" 2>/dev/null
+          echo $$ > "$lock_dir/pid" 2>/dev/null
+          echo "watchdog lock was stale (${lock_age}s) — reclaimed." >&2
+          return 2
+        fi
       fi
+    else
+      # AUDIT FIX 2: Timestamp or pid file missing, or pid is empty - lock is incomplete
+      # Reclaim only if we can verify it's abandoned: dead pid OR stale timestamp
+      local should_reclaim=0
+
+      # Case 1: pid file exists and is readable - check if process is running
+      if [ -f "$lock_dir/pid" ] && [ -n "$lock_pid" ]; then
+        if ! kill -0 "$lock_pid" 2>/dev/null; then
+          should_reclaim=1
+        fi
+      fi
+
+      # Case 2: no pid file, but timestamp exists and is old (definitely abandoned)
+      if [ $should_reclaim -eq 0 ] && [ -f "$lock_dir/timestamp" ]; then
+        local lock_mtime=$(cat "$lock_dir/timestamp" 2>/dev/null || echo 0)
+        local now=$(date +%s)
+        local lock_age=$((now - lock_mtime))
+        if [ "$lock_age" -gt "$stale_threshold" ]; then
+          should_reclaim=1
+        fi
+      fi
+
+      if [ $should_reclaim -eq 1 ]; then
+        # Lock is abandoned - reclaim it
+        rm -rf "$lock_dir" 2>/dev/null || true
+        if mkdir "$lock_dir" 2>/dev/null; then
+          date +%s > "$lock_dir/timestamp" 2>/dev/null
+          echo $$ > "$lock_dir/pid" 2>/dev/null
+          echo "watchdog lock was stale (incomplete) — reclaimed." >&2
+          return 2
+        fi
+      fi
+      # If lock is incomplete but fresh, hold it (process might be in progress)
     fi
   fi
 

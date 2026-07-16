@@ -91,10 +91,15 @@
 }
 
 .empty-state {
-  padding: var(--space-4);
+  padding: var(--space-2) var(--space-3);
   text-align: center;
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
+  display: inline-block;
+  background: var(--color-bg-inset);
+  border-radius: var(--radius-sm);
+  width: fit-content;
+  margin: 0 auto;
 }
 
 @media (max-width: 768px) {
