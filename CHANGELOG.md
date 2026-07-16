@@ -10,6 +10,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - (No unreleased items currently in-flight)
 
+## [0.1.0-wave.23] - 2026-07-15
+
+### Added
+- **Adopter-focused documentation restructure** (#164): Reorganized docs into adopter journey with architecture diagram (Mermaid) to improve onboarding clarity.
+- **Runtime CLI subcommands** (#164): Added `aesop watch`, `aesop dash`, and `aesop status` to CLI for real-time fleet monitoring.
+- **Pre-commit waveguard hook** (#164): New write-guard hook prevents stray primary-tree writes during active wave builds; blocks commits outside worktrees.
+
+### Fixed
+- **Tracker projection snapshotting** (#164): Fixed O(n²) replay latency in tracker-snapshotting by caching projection state (wave-19 P2).
+- **Log rotation race condition** (#164): Made `rotate_logs` atomic to prevent concurrent write race when logs exceed size limits.
+- **Dashboard transcript cache** (#164): Optimized `dash-extra.mjs` by caching transcript metadata (path, size, mtime) to reduce redundant reads.
+- **Monitor signal deduplication** (#164): Eliminated double-read of SECURITY-ALERTS.log in monitor signal collector to reduce noise.
+
+### Documentation
+- **Architecture diagram** (#164): Added Mermaid diagram showing fleet machinery layers (orchestrator → monitor → daemons → state).
+- **Adopter journey** (#164): Restructured README and docs to guide new adopters through setup → operations → troubleshooting workflows.
+
+## [0.1.0-wave.22] - 2026-07-15
+
+### Added
+- **GitHub docs overhaul** (#163): Complete README rewrite with "Why Aesop?" problem statement and architectural overview for discoverability.
+- **Aesop doctor preflight** (#163): New `aesop doctor` subcommand validates configuration, hooks, and state-store health before running waves.
+- **Self-building stats automation** (#163): Extended `self_stats.py` to regenerate `stats.json` and detect README stats drift; auto-regenerate in CI.
+- **TypeScript type safety** (#163): Added `tsc --noEmit` CI gate to catch UI type errors before merge.
+
+### Changed
+- **Stats drift enforcement** (#163): README stats block now auto-reconciled by CI; stale stats block push gate enforces freshness.
+
+### Fixed
+- **TypeScript compiler warnings** (#163): Resolved unused variable and type mismatch warnings in UI layer.
+
+### Documentation
+- **README landing rewrite** (#163): Replaced generic boilerplate with concrete "Why Aesop exists" section explaining multi-agent durability and cost optimization.
+- **CHANGELOG reconciliation** (#163): Added missing wave 16-20 dated entries and reorganized unreleased backlog to reflect actual shipped state.
+
+## [0.1.0-wave.21] - 2026-07-15
+
+### Added
+- **CI performance optimization** (#161): Implemented path-based build filters to skip CI on docs-only changes; added Python test parallelization for faster feedback.
+- **Fleet ledger instrumentation** (#161): Added phase and wave tagging to cost ledger for better fleet operations analytics and wave closure reporting.
+
+### Changed
+- **CI trigger-level filtering** (#161): Removed `paths-ignore` from trigger layer (was silently blocking required checks) and moved filtering to job level for correctness.
+
+### Fixed
+- **Python test parallelization** (#161): Parallel test runner now properly isolates test fixtures and state to prevent race conditions.
+
+### Documentation
+- **CI filtering best practices** (#161): Documented correct pattern for docs-only CI bypass (job-level, not trigger-level, to preserve required-check semantics).
+
 ## [0.1.0-wave.20] - 2026-07-15
 
 ### Added
