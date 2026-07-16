@@ -9,7 +9,8 @@ import { TrackerBoard } from '../components/TrackerBoard';
 import { TrackerForm } from '../components/TrackerForm';
 import { BacklogPanel } from '../components/BacklogPanel';
 import { TESTIDS } from '../test/fixtures';
-import type { TrackerItem, AuditBacklog, SSEState } from '../lib/types';
+import type { TrackerItem, AuditBacklog } from '../lib/types';
+import type { SSEState } from '../lib/useSSE';
 import '../styles/work.css';
 
 interface WorkProps {

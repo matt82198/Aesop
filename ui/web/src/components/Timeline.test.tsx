@@ -217,7 +217,7 @@ describe('Timeline', () => {
     const agents: Agent[] = [
       { ...fixtureAgents[0], status: 'running' },
     ];
-    const { container } = render(<Timeline agents={agents} />);
+    render(<Timeline agents={agents} />);
     const bar = screen.getByTestId(TESTIDS.timelineBar);
 
     // Check that the bar's className contains status-info (CSS modules will hash it)
