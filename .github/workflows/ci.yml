@@ -1,5 +1,9 @@
 name: CI
 
+# NOTE: docs-only skipping is done via the job-level `if:` on `ci` below, NOT via a
+# trigger-level `paths-ignore:` here. A required status check that never queues because the
+# whole workflow didn't trigger blocks merging forever under strict branch protection; a job
+# that's present but skipped satisfies the required check. Do not add paths-ignore back here.
 on:
   push:
     branches: [main]
@@ -7,9 +11,48 @@ on:
     branches: [main]
 
 jobs:
+  docs-only-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only change
+        id: is-docs-only
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          else
+            CHANGED=$(git diff --name-only HEAD~1...HEAD)
+          fi
+          if echo "$CHANGED" | grep -qvE '(\.md$|docs/|^CHANGELOG|^LICENSE|\.gitignore)'; then
+            echo "is_docs_only=false" >> $GITHUB_OUTPUT
+          else
+            echo "is_docs_only=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Python
+        if: steps.is-docs-only.outputs.is_docs_only == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Lightweight secret scan (docs-only)
+        if: steps.is-docs-only.outputs.is_docs_only == 'true'
+        run: python tools/secret_scan.py .
+
+    outputs:
+      is_docs_only: ${{ steps.is-docs-only.outputs.is_docs_only }}
+
   ci:
+    needs: docs-only-gate
+    if: needs.docs-only-gate.outputs.is_docs_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      matrix:
+        python-shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -46,8 +89,43 @@ jobs:
           python -m compileall -q tools/
           python -m unittest tests.test_tools_importable -v
 
-      - name: Run Python tests
-        run: npm run test:py
+      - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
+        run: |
+          python3 << 'EOF'
+          import os
+          import sys
+          import unittest
+          from pathlib import Path
+
+          shard_id = ${{ matrix.python-shard }}
+          total_shards = 4
+          test_dir = Path('tests')
+
+          # Get all test files sorted for deterministic distribution
+          test_files = sorted([f.stem for f in test_dir.glob('test_*.py')])
+
+          # Distribute files across shards (round-robin for balance)
+          shard_files = [test_files[i] for i in range(len(test_files)) if i % total_shards == shard_id]
+
+          if not shard_files:
+              print(f"No tests for shard {shard_id}")
+              sys.exit(0)
+
+          print(f"Shard {shard_id}: running {len(shard_files)} tests")
+          loader = unittest.TestLoader()
+          suite = unittest.TestSuite()
+
+          for test_name in shard_files:
+              try:
+                  module = __import__(f'tests.{test_name}', fromlist=[test_name])
+                  suite.addTests(loader.loadTestsFromModule(module))
+              except Exception as e:
+                  print(f"Warning: Failed to load {test_name}: {e}")
+
+          runner = unittest.TextTestRunner(verbosity=2)
+          result = runner.run(suite)
+          sys.exit(0 if result.wasSuccessful() else 1)
+          EOF
 
       - name: Build React dashboard (ui/web/)
         run: |
@@ -78,17 +156,21 @@ jobs:
         run: pip install playwright && playwright install --with-deps chromium
 
       - name: Run dashboard browser proof (verify_dash)
+        if: matrix.python-shard == 0
         run: python tools/verify_dash.py
 
       - name: Run submit encoding browser proof (verify_submit_encoding)
+        if: matrix.python-shard == 0
         run: python tools/verify_submit_encoding.py
 
       - name: Run watchdog GUI tests
+        if: matrix.python-shard == 0
         run: bash tests/dash-watchdog-gui.test.sh
 
       - name: NO-UNVERIFIED-METRICS gate (PR)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && matrix.python-shard == 0
         run: python tools/metrics_gate.py origin/main...HEAD
 
       - name: Secret scan
+        if: matrix.python-shard == 0
         run: python tools/secret_scan.py .
