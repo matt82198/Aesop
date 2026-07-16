@@ -7,20 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (Wave-19)
-- **Secret-scan range push gate** (#165): Enhanced push hook with per-range verification to block partial/corrupted scans.
-- **Host-header guard** (#163): HTTP host validation in UI handler to prevent header injection attacks.
-- **CI merge classification** (#162): `ci_merge_wait` now distinguishes real CI status (success/failure) vs timed out waits.
-- **Scaffolder manifest completeness** (#161): All 10 template directories (state_store, skills, mcp, scan added) verified in npm package.
-- **UI collector efficiency** (#164): Optimized agent and cost data collection; improved freshness and reduced polling overhead.
-- **Stall-check test rewrite** (#160): Migrated bare test functions to unittest.TestCase for CI compatibility.
-- **npm publish OIDC diagnostics** (#158): Self-diagnosing workflow for OIDC token generation and publish reliability.
+### Added
+- (No unreleased items currently in-flight)
 
-### Added (Wave-16/17 in-flight)
-- CLAUDE.md minimization and domain map refinements (PR #151).
-- Isolation detector and machinery/scripts port (PR #150).
-- MCP server and scan/ directory shipping in npm package.
-- README stats refresh and agent-catalog reference.
+## [0.1.0-wave.20] - 2026-07-15
+
+### Added
+- **Fail-closed push gate** (#160): Secret-scan gate now blocks pushes on timeout, preventing silent failures that allow commits to bypass scanning.
+- **UI liveness improvements** (#160): Enhanced SSE cost collection and HealthHeader status display with better timeout handling.
+- **CI state classification** (#160): Improved `ci_merge_wait` handling to distinguish real CI status (success/failure) from temporary waits.
+- **Daemon portability fixes** (#160): Fixed `backup-fleet` and `run-watchdog` for Linux CI environments (path handling, process detection).
+- **Host normalization** (#160): Added consistent URL normalization in UI handler and monitor collectors to reduce false positives.
+- **Monitor cursor improvements** (#160): Enhanced monitor signal collection with better state tracking and recovery.
+
+### Documentation
+- **Currency updates** (#160): README and docs refresh for wave 20 machinery improvements.
+
+### Fixed
+- **UI handler robustness** (#160): Improved error handling in SSE cost collection and API state rendering.
+- **Test harness** (#160): Additional coverage for CI merge state handling and daemon portability.
+
+## [0.1.0-wave.19] - 2026-07-15
+
+### Added
+- **Secret-scan range push gate** (#165): Enhanced push hook with per-range verification to block partial/corrupted scans and prevent silent gate bypasses.
+- **Host-header guard** (#163): HTTP host validation in UI handler to prevent header injection attacks.
+- **CI merge classification** (#162): `ci_merge_wait` now distinguishes real CI status (success/failure) vs temporary waits, improving integration reliability.
+- **Scaffolder manifest completeness** (#161): All 10 template directories (state_store, skills, mcp, scan) verified in npm package; consistent onboarding experience.
+- **UI collector efficiency** (#164): Optimized agent and cost data collection for better freshness and reduced polling overhead; improved SSE contract.
+- **Stall-check test rewrite** (#160): Migrated bare test functions to unittest.TestCase for CI compatibility and better failure reporting.
+- **npm publish OIDC diagnostics** (#158): Self-diagnosing workflow for OIDC token generation and npm publish reliability.
+
+## [0.1.0-wave.18] - 2026-07-15
+
+### Added
+- **Comprehensive audit fixes**: 8-lens security, correctness, a11y, density, shippability, docs, and tools audit with 13 targeted fixes.
+- **Watchdog robustness** (#155): Improved `backup-fleet` and `run-watchdog` daemon stability with better error handling and signal detection.
+- **Pre-push policy hardening** (#155): Enhanced branch protection and secret-scan enforcement in hook execution.
+- **Config management** (#155): Improved aesop.config.json parsing and CLI handling for reliability.
+- **State store hardening** (#155): Fixed concurrency edge cases, improved error recovery, and validated persistence.
+
+### Fixed
+- **Security gates** (#155): Fixed secret-scan coverage gaps (node_modules, dynamic content); improved push hook reliability.
+- **a11y and UI hardening** (#155): Fixed contrast, keyboard navigation, and state-update timing issues.
+- **Test infrastructure** (#155): Added comprehensive test coverage for daemons, state store, SSE reliability, UI hardening, and tools.
+
+## [0.1.0-wave.17] - 2026-07-15
+
+### Added
+- **Fleet-ops templates** (#153): Example documents for fleet analysis, recommendations, and proposal tracking to guide operations workflows.
+- **Tools suite expansion** (#153): New Python and Node tools for fleet operations:
+  - `transcript_replay.py`: Replay agent transcripts with event timing
+  - `transcript_timeline.py`: Extract and visualize agent activity timelines
+  - `fleet_prompt_extractor.py`: Extract and categorize fleet prompts for analysis
+  - `svg_to_png.mjs`: Convert SVG charts to PNG for documentation
+  - `session_usage_summary.py`: Aggregate session token usage across fleet
+- **CI merge wait improvements** (#153): Enhanced `ci_merge_wait` detection with better status classification.
+- **Machinery port** (#153): Completed isolation violation detector, health checks, and signal collection for orchestration monitor.
+- **Shippability fixes** (#153): Fixed daemon portability and improved bootstrap process.
+
+### Documentation
+- **Fleet-ops guidance** (#153): Added templates and examples for monitoring, analysis, and recommendations workflows.
+
+## [0.1.0-wave.16] - 2026-07-15
+
+### Added
+- **Isolation-violation detector** (#152): Monitor now detects and reports when worktrees modify shared state (repository contamination checker).
+- **Monitor signal collection** (#152): Enhanced `collect-signals.mjs` with isolation detection and improved signal accuracy.
+
+### Documentation
+- **CLAUDE.md minimization** (#151): Streamlined domain-specific documentation; archived cancelled tiered-cognition spike; improved maintainability.
+- **Domain map refinement** (#151): Clarified tool, test, and UI layer responsibilities and ownership.
 
 ## [0.1.0-beta.5] - 2026-07-15
 
