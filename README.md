@@ -109,15 +109,16 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 142 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 388 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 3 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Waves | 16 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 72,071 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 266 <!-- metrics-verified: self_stats.py (git log) --> |
-| Distinct Co-authors | 7 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 153 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 465 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 4 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Waves | 20 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 81,687 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 282 <!-- metrics-verified: self_stats.py (git log) --> |
+| Distinct Co-authors | 8 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
+
 
 ## Recommended Agents
 
