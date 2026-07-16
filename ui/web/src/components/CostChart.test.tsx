@@ -144,7 +144,7 @@ describe('CostChart', () => {
 
   it('bars are stacked (output offset by input height, not grouped side-by-side)', () => {
     const stackedCost = {
-      overall_scorecard: { total_runs: 1 },
+      ...fixtureCost,
       daily_totals: {
         '2026-07-15': {
           tokens_in: 1000,
@@ -167,7 +167,6 @@ describe('CostChart', () => {
     const outputX = parseFloat(outputBar.getAttribute('x') || '0');
     const inputY = parseFloat(inputBar.getAttribute('y') || '0');
     const outputY = parseFloat(outputBar.getAttribute('y') || '0');
-    const inputHeight = parseFloat(inputBar.getAttribute('height') || '0');
 
     // For stacked bars: both must have the same x position (same column)
     expect(inputX).toEqual(outputX);

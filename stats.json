@@ -1,12 +1,12 @@
 {
   "git": {
-    "merged_prs": 142,
-    "total_commits": 388,
-    "project_age_days": 3,
-    "wave_count": 16,
-    "insertions_deletions": 72071,
-    "files_tracked": 266,
-    "distinct_coauthors": 7
+    "merged_prs": 153,
+    "total_commits": 465,
+    "project_age_days": 4,
+    "wave_count": 20,
+    "insertions_deletions": 81687,
+    "files_tracked": 282,
+    "distinct_coauthors": 8
   },
   "telemetry": {
     "total_sessions": null,
@@ -17,6 +17,6 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-07-15T07:47:21.101680+00:00",
-  "loc": 39243
+  "generated_at": "2026-07-16T08:35:16.385153+00:00",
+  "loc": 57793
 }

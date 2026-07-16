@@ -148,7 +148,7 @@ export function useSSE() {
 
     eventSource.addEventListener('heartbeat', (e) => {
       try {
-        const payload = JSON.parse(e.data);
+        JSON.parse(e.data);
         setState((prev) => ({
           ...prev,
           lastHeartbeat: Date.now(),

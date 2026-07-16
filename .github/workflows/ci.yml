@@ -133,6 +133,11 @@ jobs:
           npm ci
           npm run build
 
+      - name: TypeScript type check (ui/web/)
+        run: |
+          cd ui/web
+          npx tsc --noEmit
+
       - name: Dist drift gate (committed ui/web/dist must match fresh build)
         run: |
           cd ui/web
@@ -170,6 +175,10 @@ jobs:
       - name: NO-UNVERIFIED-METRICS gate (PR)
         if: github.event_name == 'pull_request' && matrix.python-shard == 0
         run: python tools/metrics_gate.py origin/main...HEAD
+
+      - name: README stats freshness gate
+        if: matrix.python-shard == 0
+        run: python tools/self_stats.py --check
 
       - name: Secret scan
         if: matrix.python-shard == 0

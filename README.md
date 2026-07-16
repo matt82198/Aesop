@@ -16,6 +16,27 @@
 
 What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator), **durable state** (git-committed checkpoints survive wipes), **observable machinery** (every agent run logged, every cost tracked), **live dashboard** (real-time fleet health at http://localhost:8770), and **security gates** (secret-scan blocks pushes, CI validates each merge).
 
+## Why Aesop?
+
+Multi-agent AI fleets hit a wall: all-Opus orchestrators cost $10k+ per wave, and machine crashes lose state—losing work and context on restart. Aesop solves both: **Haiku-first** dispatch cuts costs to 1/3 of Opus, and **git-committed state** (STATE.md, BUILDLOG.md) survives machine wipes with zero data loss. See the wave cycle below: ranked backlog → parallel worktree-isolated fleet → merge train → checkpoint → audit feeds next wave.
+
+```
+ranked backlog
+     ↓
+parallel haiku fleet (worktree-isolated)
+  [test] [build] [docs] [ui] [review] ...
+     ↓
+integration-branch merge train
+     ↓
+checkpoint (STATE.md + BUILDLOG.md)
+     ↓
+audit + fleet-ops monitoring
+     ↓
+(feeds next wave's backlog)
+```
+
+(See [assets/wave-cycle-diagram.txt](./assets/wave-cycle-diagram.txt) for the cycle reference.)
+
 ## What You Get
 
 - **Parallel Haiku fleets** — Cheap, scoped subagents dispatch in parallel; orchestrator stays lean on main thread.
@@ -80,7 +101,7 @@ STATE.md + BUILDLOG.md          Git-committed, survives machine wipes
 
 See [docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md) for cost analysis and parallel patterns.
 
-<!-- SELF-STATS:START -->
+<!-- STATS:START -->
 
 ## Aesop builds itself
 
@@ -88,15 +109,16 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 143 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 390 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 3 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Waves | 16 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 72,168 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 268 <!-- metrics-verified: self_stats.py (git log) --> |
-| Distinct Co-authors | 7 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 153 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 465 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 4 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Waves | 20 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 81,687 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 282 <!-- metrics-verified: self_stats.py (git log) --> |
+| Distinct Co-authors | 8 <!-- metrics-verified: self_stats.py (git log) --> |
 
-<!-- SELF-STATS:END -->
+<!-- STATS:END -->
+
 
 ## Recommended Agents
 
