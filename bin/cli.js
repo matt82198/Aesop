@@ -190,7 +190,7 @@ const repoUrlsStr = getFlag('--repo-urls');
 if (fs.existsSync(targetDir)) {
   const contents = fs.readdirSync(targetDir);
   // Allow .git and aesop scaffolded files to already exist (for idempotency)
-  const aesopDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui', 'docs', 'state_store', 'skills', 'mcp', 'scan', '.git', 'state'];
+  const aesopDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui', 'docs', 'state_store', 'skills', 'mcp', 'scan', 'hooks', '.git', 'state'];
   const aesopFiles = [
     'aesop.config.example.json',
     'aesop.config.json',
@@ -247,6 +247,7 @@ const filesToCopy = [
   'skills',
   'mcp',
   'scan',
+  'hooks',
   'aesop.config.example.json',
   'README.md',
   'LICENSE',
@@ -419,6 +420,133 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
       resolve();
     });
   });
+}
+
+function installPreCommitWaveguard(targetDir, templateRoot) {
+  // Install the pre-commit waveguard hook to prevent commits during a wave
+  // Try to locate .git directory
+  const gitDir = path.join(targetDir, '.git');
+  if (!fs.existsSync(gitDir)) {
+    // No git repo, skip hook installation silently
+    return;
+  }
+
+  // SECURITY: Check if .git itself is a symlink/junction (refuse to follow it outside targetDir)
+  try {
+    const gitDirLstat = fs.lstatSync(gitDir);
+    if (gitDirLstat.isSymbolicLink()) {
+      console.warn('⚠ Warning: .git is a symlink (security risk)');
+      console.warn('  Skipping pre-commit hook installation. Please remove the symlink and re-run scaffold.');
+      return;
+    }
+  } catch (e) {
+    // lstat failed; proceed (may be a permission issue)
+  }
+
+  // Ensure hooks directory exists
+  const gitHooksDir = path.join(gitDir, 'hooks');
+  if (!fs.existsSync(gitHooksDir)) {
+    fs.mkdirSync(gitHooksDir, { recursive: true });
+  }
+
+  // SECURITY: Check if gitHooksDir is a symlink (refuse to install through symlinked dir)
+  try {
+    const hooksLstat = fs.lstatSync(gitHooksDir);
+    if (hooksLstat.isSymbolicLink()) {
+      console.warn('⚠ Warning: .git/hooks directory is a symlink (security risk)');
+      console.warn('  Skipping pre-commit hook installation. Please remove the symlink and re-run scaffold.');
+      return;
+    }
+  } catch (e) {
+    // lstat failed; proceed (may be a permission issue)
+  }
+
+  const waveguardSource = path.join(templateRoot, 'hooks', 'pre-commit-waveguard.sh');
+  const preCommitDest = path.join(gitHooksDir, 'pre-commit');
+
+  if (!fs.existsSync(waveguardSource)) {
+    // Waveguard source doesn't exist, skip
+    return;
+  }
+
+  // Check if pre-commit hook already exists
+  if (fs.existsSync(preCommitDest)) {
+    // SECURITY: Check if existing pre-commit is a symlink (refuse to follow it)
+    try {
+      const destLstat = fs.lstatSync(preCommitDest);
+      if (destLstat.isSymbolicLink()) {
+        console.warn('⚠ Warning: Existing .git/hooks/pre-commit is a symlink (security risk)');
+        console.warn('  Skipping pre-commit hook installation. Please remove the symlink and re-run scaffold.');
+        return;
+      }
+    } catch (e) {
+      // lstat failed; proceed
+    }
+
+    // Backup existing pre-commit hook
+    const backupPath = path.join(gitHooksDir, 'pre-commit.waveguard-backup');
+    if (!fs.existsSync(backupPath)) {
+      // Only backup if we haven't already
+      try {
+        const existingContent = fs.readFileSync(preCommitDest, 'utf8');
+        // Check if waveguard is already in the hook
+        if (existingContent.includes('pre-commit-waveguard')) {
+          console.log('✓ Pre-commit waveguard already installed (no changes)');
+          return;
+        }
+        // Backup the existing hook
+        fs.copyFileSync(preCommitDest, backupPath);
+        console.log('✓ Backed up existing pre-commit hook to .git/hooks/pre-commit.waveguard-backup');
+      } catch (e) {
+        // Failed to backup, still try to install
+      }
+    }
+  }
+
+  // Create wrapper script that calls the waveguard hook
+  const wrapperScript = `#!/usr/bin/env bash
+set -uo pipefail
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+if [ -z "$repo_root" ]; then
+  exit 1
+fi
+
+waveguard_hook="$repo_root/hooks/pre-commit-waveguard.sh"
+if [ -f "$waveguard_hook" ]; then
+  bash "$waveguard_hook"
+  waveguard_exit=$?
+  if [ $waveguard_exit -ne 0 ]; then
+    exit $waveguard_exit
+  fi
+fi
+
+backup_hook="$repo_root/.git/hooks/pre-commit.waveguard-backup"
+if [ -f "$backup_hook" ] && [ -x "$backup_hook" ]; then
+  bash "$backup_hook"
+  exit $?
+fi
+
+exit 0
+`;
+
+  // Install the hook using copyFileSync (not symlink) to avoid dangling links
+  if (fs.existsSync(preCommitDest)) {
+    fs.unlinkSync(preCommitDest);
+  }
+  fs.writeFileSync(preCommitDest, wrapperScript);
+  console.log('✓ Installed pre-commit waveguard hook to .git/hooks/pre-commit');
+
+  // Ensure hook is executable
+  try {
+    fs.chmodSync(preCommitDest, 0o755);
+  } catch (e) {
+    // On Windows, chmod fails harmlessly; on POSIX, warn the user to chmod manually
+    if (process.platform !== 'win32') {
+      console.warn('⚠ Warning: Failed to chmod +x the pre-commit hook. Please run manually:');
+      console.warn(`  chmod +x "${preCommitDest}"`);
+    }
+  }
 }
 
 function installPrePushHook(targetDir, templateRoot) {
@@ -656,6 +784,9 @@ if (!isRuntimeCommand) {
 
     // Install the pre-push hook
     installPrePushHook(finalTargetDir, templateRoot);
+
+    // Install the pre-commit waveguard hook
+    installPreCommitWaveguard(finalTargetDir, templateRoot);
 
     console.log(`\n✅ Scaffolded aesop template into "${finalTargetDir}" (${copiedCount} files)`);
 

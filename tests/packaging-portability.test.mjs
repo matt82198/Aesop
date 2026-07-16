@@ -372,3 +372,136 @@ test('chmod failure on non-Windows platforms warns user (TASK C)', () => {
     );
   }
 });
+
+test('hooks directory is copied to scaffolded target (wave-24 scaffolder-hooks)', () => {
+  // Verify that the hooks/ directory is included in filesToCopy
+  const cli = fs.readFileSync(CLI, 'utf8');
+
+  const filesCopyStart = cli.indexOf('const filesToCopy = [');
+  const filesCopyEnd = cli.indexOf('];', filesCopyStart);
+  assert.ok(filesCopyStart > -1 && filesCopyEnd > -1, 'Should find filesToCopy array');
+
+  const filesArrayText = cli.substring(filesCopyStart, filesCopyEnd + 2);
+
+  assert.ok(
+    filesArrayText.includes("'hooks'") || filesArrayText.includes('"hooks"'),
+    'filesToCopy should include "hooks" directory'
+  );
+});
+
+test('aesopDirs allowlist includes hooks directory (wave-24 scaffolder-hooks)', () => {
+  // Verify that the hooks/ directory is in the aesopDirs allowlist for idempotency
+  const cli = fs.readFileSync(CLI, 'utf8');
+
+  const aesopDirsStart = cli.indexOf('const aesopDirs = [');
+  const aesopDirsEnd = cli.indexOf('];', aesopDirsStart);
+  assert.ok(aesopDirsStart > -1 && aesopDirsEnd > -1, 'Should find aesopDirs array');
+
+  const aesopDirsText = cli.substring(aesopDirsStart, aesopDirsEnd + 2);
+
+  assert.ok(
+    aesopDirsText.includes("'hooks'") || aesopDirsText.includes('"hooks"'),
+    'aesopDirs should include "hooks" directory for idempotency'
+  );
+});
+
+test('pre-commit waveguard hook is installed in scaffolded fleet (wave-24 scaffolder-hooks)', () => {
+  // Verify that the pre-commit waveguard hook is properly installed during scaffolding
+  // This test scaffolds into a git repo and then checks if the pre-commit hook is installed
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-hooks-test-'));
+
+  try {
+    // Run scaffold with --name into a fresh directory
+    const targetDir = path.join(tempDir, 'fleet');
+    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet'], {
+      encoding: 'utf8',
+      cwd: tempDir,
+      timeout: 30000
+    });
+
+    assert.equal(result.status, 0, `Scaffold should succeed: ${result.stderr}`);
+
+    // Check that hooks directory was copied
+    const hooksDir = path.join(targetDir, 'hooks');
+    assert.ok(
+      fs.existsSync(hooksDir) && fs.statSync(hooksDir).isDirectory(),
+      'hooks/ directory should be copied to scaffolded target'
+    );
+
+    // Check that pre-commit-waveguard.sh exists
+    const waveguardSource = path.join(hooksDir, 'pre-commit-waveguard.sh');
+    assert.ok(
+      fs.existsSync(waveguardSource),
+      'hooks/pre-commit-waveguard.sh should exist in scaffolded target'
+    );
+
+    // Check that install-waveguard.sh exists
+    const installWaveguard = path.join(hooksDir, 'install-waveguard.sh');
+    assert.ok(
+      fs.existsSync(installWaveguard),
+      'hooks/install-waveguard.sh should exist in scaffolded target'
+    );
+
+    // Check that pre-push-policy.sh exists
+    const prePushPolicy = path.join(hooksDir, 'pre-push-policy.sh');
+    assert.ok(
+      fs.existsSync(prePushPolicy),
+      'hooks/pre-push-policy.sh should exist in scaffolded target'
+    );
+
+    // Now initialize git in the scaffolded directory
+    execSync('git init', { cwd: targetDir, stdio: 'ignore' });
+    execSync('git config user.email "test@example.com"', { cwd: targetDir, stdio: 'ignore' });
+    execSync('git config user.name "Test User"', { cwd: targetDir, stdio: 'ignore' });
+
+    // Re-run scaffold with --force to install hooks in the newly initialized git repo
+    const result2 = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--force'], {
+      encoding: 'utf8',
+      cwd: tempDir,
+      timeout: 30000
+    });
+
+    assert.equal(result2.status, 0, `Re-scaffold with --force should succeed: ${result2.stderr}`);
+
+    // Check that .git/hooks/pre-commit was installed
+    const preCommitHook = path.join(targetDir, '.git', 'hooks', 'pre-commit');
+    assert.ok(
+      fs.existsSync(preCommitHook),
+      '.git/hooks/pre-commit hook should be installed'
+    );
+
+    // Verify the hook content contains the waveguard logic
+    const hookContent = fs.readFileSync(preCommitHook, 'utf8');
+    assert.ok(
+      hookContent.includes('pre-commit-waveguard'),
+      '.git/hooks/pre-commit should reference the waveguard hook'
+    );
+
+    // Check that .git/hooks/pre-push was also installed
+    const prePushHook = path.join(targetDir, '.git', 'hooks', 'pre-push');
+    assert.ok(
+      fs.existsSync(prePushHook),
+      '.git/hooks/pre-push hook should be installed'
+    );
+
+  } finally {
+    // Cleanup
+    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+  }
+});
+
+test('installPreCommitWaveguard function exists (wave-24 scaffolder-hooks)', () => {
+  // Verify that the installPreCommitWaveguard function is defined and called
+  const cli = fs.readFileSync(CLI, 'utf8');
+
+  assert.ok(
+    cli.includes('function installPreCommitWaveguard'),
+    'cli.js should define installPreCommitWaveguard function'
+  );
+
+  assert.ok(
+    cli.includes('installPreCommitWaveguard(finalTargetDir, templateRoot)'),
+    'cli.js should call installPreCommitWaveguard during scaffolding'
+  );
+});
