@@ -265,7 +265,8 @@ function checkMemoryFreshness() {
 }
 
 // 4) Log file status check
-function checkLogFiles() {
+// Optional: accepts pre-read content for SECURITY-ALERTS.log to avoid redundant read
+function checkLogFiles(securityAlertsContent = null) {
   const logFiles = [
     path.join(STATE_DIR, 'FLEET-BACKUP.log'),
     path.join(STATE_DIR, 'SECURITY-ALERTS.log'),
@@ -279,7 +280,11 @@ function checkLogFiles() {
     if (st) {
       sizeKb = (st.size / 1024).toFixed(1);
       try {
-        const content = fs.readFileSync(logPath, 'utf8');
+        // Use pre-read content for SECURITY-ALERTS.log if provided
+        const isSecurityAlerts = logPath === path.join(STATE_DIR, 'SECURITY-ALERTS.log');
+        const content = isSecurityAlerts && securityAlertsContent !== null
+          ? securityAlertsContent
+          : fs.readFileSync(logPath, 'utf8');
         lineCount = content.split('\n').filter(l => l.trim()).length;
       } catch {
         // skip
@@ -362,12 +367,14 @@ function detectStrayRepoScripts() {
 }
 
 // 7) Security alert review
-function checkSecurityAlerts() {
+// Optional: accepts pre-read content to avoid redundant file read
+function checkSecurityAlerts(securityAlertsContent = null) {
   const alertLog = path.join(STATE_DIR, 'SECURITY-ALERTS.log');
   const st = stat(alertLog);
   if (!st) return { count: 0, highMedCount: 0 };
   try {
-    const content = fs.readFileSync(alertLog, 'utf8');
+    // Use pre-read content if provided, otherwise read file
+    const content = securityAlertsContent !== null ? securityAlertsContent : fs.readFileSync(alertLog, 'utf8');
     const lines = content.split('\n');
     const highMedCount = lines.filter(l => /HIGH|MED/.test(l) && !l.includes('SUPPRESSED-FP')).length;
     return { count: lines.filter(l => l.trim()).length, highMedCount };
@@ -816,17 +823,28 @@ ${suggestedChange}
 }
 
 // === Main ===
+// Read SECURITY-ALERTS.log once and share the content with both consumers to avoid redundant file read
+let securityAlertsContent = null;
+const securityAlertsPath = path.join(STATE_DIR, 'SECURITY-ALERTS.log');
+try {
+  if (fs.existsSync(securityAlertsPath)) {
+    securityAlertsContent = fs.readFileSync(securityAlertsPath, 'utf8');
+  }
+} catch {
+  // File exists but is unreadable; consumers will handle gracefully
+}
+
 const staleLoops = checkHeartbeats();
 const gitState = checkGitState();
 const memory = checkMemoryFreshness();
-const logFiles = checkLogFiles();
+const logFiles = checkLogFiles(securityAlertsContent);
 const isolationViolations = detectIsolationViolations();
 
 // Extended signal checks (5, 6, 8, 10) — skipped if extended_signals is OFF
 const junk = extendedSignals ? detectJunkScripts() : { skipped: true };
 const strayRepo = extendedSignals ? detectStrayRepoScripts() : { skipped: true };
 
-const alerts = checkSecurityAlerts();
+const alerts = checkSecurityAlerts(securityAlertsContent);
 
 const respawnWatch = extendedSignals ? detectRespawnWatch() : { skipped: true };
 const { cycleCount, costTick } = trackCostCadence();
