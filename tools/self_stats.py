@@ -7,11 +7,19 @@ from docs/self-stats-data.json. All hard metrics in output carry verification ma
 
 Usage:
   python self_stats.py [--repo PATH] [--data-file PATH] [--markdown|--json]
+  python self_stats.py --regenerate [--repo PATH] [--data-file PATH] [--stats-file PATH]
+  python self_stats.py --update-readme [--repo PATH] [--stats-file PATH] [--readme PATH]
+  python self_stats.py --check [--repo PATH] [--stats-file PATH] [--readme PATH]
 
 Output modes:
   default  - Human-readable table
   --markdown - README block with <!-- SELF-STATS:START/END --> markers (markdown verification comments)
   --json   - Machine-readable JSON object
+
+Special modes:
+  --regenerate - Regenerate stats.json from live git state
+  --update-readme - Update README.md between <!-- STATS:START/END --> markers with stats from stats.json
+  --check - Exit non-zero if README's marked block doesn't match current stats.json (drift gate)
 
 All hard metrics (percentages, multipliers, dollar amounts) in markdown output include
 <!-- metrics-verified: <source> --> markers for the metrics_gate.py CI gate.
@@ -20,6 +28,7 @@ All hard metrics (percentages, multipliers, dollar amounts) in markdown output i
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -40,6 +49,7 @@ class GitStats:
         self._insertions_deletions = None
         self._files_tracked = None
         self._distinct_coauthors = None
+        self._lines_of_code = None
 
     def _run_git(self, *args, check=True) -> str:
         """Run git command in repo, return stdout."""
@@ -136,7 +146,6 @@ class GitStats:
             output = self._run_git("log", "--format=%B", check=False)
             if output:
                 # Count lines like "wave-N" (case insensitive)
-                import re
                 waves = set()
                 for match in re.finditer(r"wave[_-]?(\d+)", output, re.IGNORECASE):
                     waves.add(int(match.group(1)))
@@ -218,7 +227,6 @@ class GitStats:
             # Get all co-authors from commit messages
             commit_msg = self._run_git("log", "--format=%B", check=False)
             if commit_msg:
-                import re
                 for match in re.finditer(r"Co-Authored-By:\s*(.+?)(?:\n|$)", commit_msg):
                     coauthor = match.group(1).strip()
                     if coauthor:
@@ -229,6 +237,38 @@ class GitStats:
             return count
         except Exception:
             self._distinct_coauthors = 0
+            return 0
+
+    @property
+    def lines_of_code(self) -> int:
+        """Count total lines in tracked files."""
+        if self._lines_of_code is not None:
+            return self._lines_of_code
+
+        try:
+            # Get list of tracked files
+            output = self._run_git("ls-files", check=False)
+            if not output:
+                self._lines_of_code = 0
+                return 0
+
+            files = [f.strip() for f in output.split("\n") if f.strip()]
+            total_lines = 0
+
+            for file_path in files:
+                try:
+                    file_full_path = self.repo_root / file_path
+                    if file_full_path.is_file():
+                        with open(file_full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            total_lines += sum(1 for _ in f)
+                except Exception:
+                    # Skip files we can't read
+                    continue
+
+            self._lines_of_code = total_lines
+            return total_lines
+        except Exception:
+            self._lines_of_code = 0
             return 0
 
 
@@ -325,6 +365,8 @@ class StatsCounter:
             lines.append(f"  Files Tracked:        {self.git.files_tracked}")
         if self.git.distinct_coauthors > 0:
             lines.append(f"  Distinct Co-authors:  {self.git.distinct_coauthors}")
+        if self.git.lines_of_code > 0:
+            lines.append(f"  Lines of Code:        {self.git.lines_of_code}")
 
         # Session telemetry (only if present)
         if any([
@@ -455,6 +497,193 @@ class StatsCounter:
         }
         return json.dumps(data, indent=2)
 
+    def to_dict_with_metadata(self) -> Dict[str, Any]:
+        """Export stats as dict with metadata (for stats.json)."""
+        data = json.loads(self.json())
+        data["generated_at"] = datetime.now(timezone.utc).isoformat()
+        data["loc"] = self.git.lines_of_code
+        return data
+
+    def save_stats(self, output_file: str = "stats.json") -> None:
+        """Regenerate stats.json from live git state."""
+        output_path = Path(output_file)
+        data = self.to_dict_with_metadata()
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+
+    def load_stats(self, stats_file: str = "stats.json") -> Optional[Dict[str, Any]]:
+        """Load previously saved stats from stats.json."""
+        stats_path = Path(stats_file)
+        if not stats_path.exists():
+            return None
+
+        try:
+            with open(stats_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return None
+
+    def markdown_from_dict(self, stats_dict: Dict[str, Any]) -> str:
+        """Generate markdown block from a stats dictionary (e.g., from stats.json)."""
+        lines = []
+        lines.append("<!-- STATS:START -->")
+        lines.append("")
+        lines.append("## Aesop builds itself")
+        lines.append("")
+        lines.append(
+            "Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel Haiku fleets "
+            "across ranked backlog items, verifying merges, auditing orchestration health. "
+            "These stats are the receipts: all numbers computed LIVE from git, verified by anyone who clones."
+        )
+        lines.append("")
+
+        # Extract git stats from dict
+        git_stats = stats_dict.get("git", {})
+        rows = []
+
+        if git_stats.get("merged_prs", 0) > 0:
+            rows.append(
+                f"| Merged PRs | {git_stats['merged_prs']} <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+        if git_stats.get("total_commits", 0) > 0:
+            rows.append(
+                f"| Total Commits | {git_stats['total_commits']} <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+        if git_stats.get("project_age_days") is not None and git_stats.get("project_age_days", 0) >= 0:
+            rows.append(
+                f"| Project Age | {git_stats['project_age_days']} days <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+        if git_stats.get("wave_count", 0) > 0:
+            rows.append(
+                f"| Waves | {git_stats['wave_count']} <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+        if git_stats.get("insertions_deletions", 0) > 0:
+            rows.append(
+                f"| Insertions + Deletions | {git_stats['insertions_deletions']:,} <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+        if git_stats.get("files_tracked", 0) > 0:
+            rows.append(
+                f"| Files Tracked | {git_stats['files_tracked']} <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+        if git_stats.get("distinct_coauthors", 0) > 0:
+            rows.append(
+                f"| Distinct Co-authors | {git_stats['distinct_coauthors']} <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+
+        # Session telemetry
+        telemetry = stats_dict.get("telemetry", {})
+        if telemetry.get("total_sessions") is not None:
+            rows.append(
+                f"| Sessions | {telemetry['total_sessions']} <!-- metrics-verified: docs/self-stats-data.json --> |"
+            )
+        if telemetry.get("total_turns") is not None:
+            rows.append(
+                f"| Total Turns | {telemetry['total_turns']} <!-- metrics-verified: docs/self-stats-data.json --> |"
+            )
+        if telemetry.get("cumulative_tokens") is not None:
+            rows.append(
+                f"| Cumulative Tokens | {telemetry['cumulative_tokens']:,} <!-- metrics-verified: docs/self-stats-data.json --> |"
+            )
+        if telemetry.get("total_coding_hours") is not None:
+            rows.append(
+                f"| Coding Hours | {telemetry['total_coding_hours']} <!-- metrics-verified: docs/self-stats-data.json --> |"
+            )
+
+        # Only add table if we have rows
+        if rows:
+            lines.append("| Metric | Value |")
+            lines.append("| --- | --- |")
+            lines.extend(rows)
+            lines.append("")
+
+        lines.append("<!-- STATS:END -->")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    def update_readme(self, readme_path: str = "README.md", stats_file: str = "stats.json") -> bool:
+        """Update README.md between <!-- STATS:START --> and <!-- STATS:END --> markers.
+
+        Returns True if updated, False if markers not found (gracefully no-op).
+        """
+        # Load stats from file
+        stats_dict = self.load_stats(stats_file)
+        if stats_dict is None:
+            # stats.json doesn't exist, regenerate it first
+            self.save_stats(stats_file)
+            stats_dict = self.load_stats(stats_file)
+
+        readme_file = Path(readme_path)
+        if not readme_file.exists():
+            return False
+
+        with open(readme_file, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+
+        # Look for markers
+        start_marker = "<!-- STATS:START -->"
+        end_marker = "<!-- STATS:END -->"
+
+        if start_marker not in content or end_marker not in content:
+            # Markers not found, gracefully no-op
+            return False
+
+        # Generate new markdown block
+        new_block = self.markdown_from_dict(stats_dict)
+
+        # Replace the block
+        start_idx = content.find(start_marker)
+        end_idx = content.find(end_marker) + len(end_marker)
+
+        new_content = content[:start_idx] + new_block + content[end_idx:]
+
+        with open(readme_file, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+
+        return True
+
+    def check_readme(self, readme_path: str = "README.md", stats_file: str = "stats.json") -> bool:
+        """Check if README's marked block matches current stats.json.
+
+        Returns True if they match, False if they don't (or markers not found).
+        Exit code usage: sys.exit(0) if True, sys.exit(1) if False.
+        """
+        # Load stats from file
+        stats_dict = self.load_stats(stats_file)
+        if stats_dict is None:
+            # stats.json doesn't exist, regenerate it
+            self.save_stats(stats_file)
+            stats_dict = self.load_stats(stats_file)
+            if stats_dict is None:
+                return False
+
+        readme_file = Path(readme_path)
+        if not readme_file.exists():
+            return False
+
+        with open(readme_file, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+
+        # Look for markers
+        start_marker = "<!-- STATS:START -->"
+        end_marker = "<!-- STATS:END -->"
+
+        if start_marker not in content or end_marker not in content:
+            # Markers not found, treat as no-op (return True since nothing to check)
+            return True
+
+        # Extract current block
+        start_idx = content.find(start_marker)
+        end_idx = content.find(end_marker) + len(end_marker)
+        current_block = content[start_idx:end_idx]
+
+        # Generate expected block
+        expected_block = self.markdown_from_dict(stats_dict)
+
+        # Compare
+        return current_block.strip() == expected_block.strip()
+
 
 def main():
     """CLI entry point."""
@@ -471,6 +700,16 @@ def main():
         "--data-file",
         help="Path to docs/self-stats-data.json (auto-detected if not specified)"
     )
+    parser.add_argument(
+        "--stats-file",
+        default="stats.json",
+        help="Path to stats.json (default: stats.json in repo root)"
+    )
+    parser.add_argument(
+        "--readme",
+        default="README.md",
+        help="Path to README.md (default: README.md in repo root)"
+    )
 
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
@@ -483,6 +722,21 @@ def main():
         action="store_true",
         help="Output machine-readable JSON"
     )
+    mode_group.add_argument(
+        "--regenerate",
+        action="store_true",
+        help="Regenerate stats.json from live git state"
+    )
+    mode_group.add_argument(
+        "--update-readme",
+        action="store_true",
+        help="Update README.md between <!-- STATS:START/END --> markers with stats from stats.json"
+    )
+    mode_group.add_argument(
+        "--check",
+        action="store_true",
+        help="Check if README's marked block matches current stats.json (exit 0=match, 1=mismatch)"
+    )
 
     args = parser.parse_args()
 
@@ -490,11 +744,44 @@ def main():
 
     # Use UTF-8 for output to handle emojis
     import io
-    import sys
     if hasattr(sys.stdout, 'buffer'):
         out = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     else:
         out = sys.stdout
+
+    if args.regenerate:
+        # Resolve paths relative to repo root
+        stats_file = Path(args.repo) / args.stats_file if not Path(args.stats_file).is_absolute() else args.stats_file
+        counter.save_stats(str(stats_file))
+        out.write(f"Regenerated {stats_file}\n")
+        out.flush()
+        return 0
+
+    if args.update_readme:
+        # Resolve paths relative to repo root
+        readme_path = Path(args.repo) / args.readme if not Path(args.readme).is_absolute() else args.readme
+        stats_file = Path(args.repo) / args.stats_file if not Path(args.stats_file).is_absolute() else args.stats_file
+
+        if counter.update_readme(str(readme_path), str(stats_file)):
+            out.write(f"Updated {readme_path}\n")
+        else:
+            out.write(f"No markers found in {readme_path} or markers not recognized (gracefully skipped)\n")
+        out.flush()
+        return 0
+
+    if args.check:
+        # Resolve paths relative to repo root
+        readme_path = Path(args.repo) / args.readme if not Path(args.readme).is_absolute() else args.readme
+        stats_file = Path(args.repo) / args.stats_file if not Path(args.stats_file).is_absolute() else args.stats_file
+
+        if counter.check_readme(str(readme_path), str(stats_file)):
+            out.write(f"OK: {readme_path} matches {stats_file}\n")
+            out.flush()
+            sys.exit(0)
+        else:
+            out.write(f"DRIFT: {readme_path} does not match {stats_file}\n")
+            out.flush()
+            sys.exit(1)
 
     if args.markdown:
         out.write(counter.markdown())
@@ -503,7 +790,8 @@ def main():
     else:
         out.write(counter.table())
     out.flush()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

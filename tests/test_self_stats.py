@@ -334,5 +334,257 @@ class CliIntegrationTest(SelfStatsFixtureCase):
         self.assertIn("merged_prs", data["git"])
 
 
+class StatsFileRegenerationTest(SelfStatsFixtureCase):
+    """Test --regenerate mode for stats.json."""
+
+    def setUp(self):
+        super().setUp()
+        os.chdir(str(self.repo_root))
+        self.make_commit("initial")
+        self.make_merge_commit(1)
+        self.stats_file = self.repo_root / "stats.json"
+
+    def test_regenerate_creates_stats_json(self):
+        """--regenerate should create/update stats.json with fresh git data."""
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--regenerate", "--stats-file", str(self.stats_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        self.assertEqual(result.returncode, 0, f"CLI should exit 0, stderr: {result.stderr}")
+        self.assertTrue(self.stats_file.exists(), "stats.json should be created")
+
+        # Verify it's valid JSON
+        with open(self.stats_file) as f:
+            data = json.load(f)
+
+        # Check structure
+        self.assertIn("git", data)
+        self.assertIn("telemetry", data)
+        self.assertIn("generated_at", data)
+        self.assertIn("loc", data)
+
+        # Verify git stats are populated
+        self.assertGreaterEqual(data["git"]["total_commits"], 1)
+        self.assertEqual(data["git"]["merged_prs"], 1)
+
+    def test_regenerate_includes_metadata(self):
+        """Regenerated stats.json should include generated_at and loc fields."""
+        stats = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        stats.save_stats(str(self.stats_file))
+
+        with open(self.stats_file) as f:
+            data = json.load(f)
+
+        self.assertIn("generated_at", data)
+        self.assertIn("loc", data)
+        self.assertIsInstance(data["loc"], int)
+        self.assertGreater(data["loc"], 0, "should have some lines of code")
+
+
+class ReadmeUpdateTest(SelfStatsFixtureCase):
+    """Test --update-readme mode for updating README.md."""
+
+    def setUp(self):
+        super().setUp()
+        os.chdir(str(self.repo_root))
+        self.make_commit("initial")
+        self.make_merge_commit(1)
+        self.stats_file = self.repo_root / "stats.json"
+        self.readme_file = self.repo_root / "README.md"
+
+    def test_update_readme_with_stats_markers(self):
+        """--update-readme should replace content between <!-- STATS:START/END --> markers."""
+        # Create a README with STATS markers
+        readme_content = """# Test Project
+
+Some intro text.
+
+<!-- STATS:START -->
+This will be replaced.
+<!-- STATS:END -->
+
+Footer text.
+"""
+        self.readme_file.write_text(readme_content)
+
+        # First regenerate stats.json
+        stats = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        stats.save_stats(str(self.stats_file))
+
+        # Now update README
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--update-readme",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        self.assertEqual(result.returncode, 0, f"CLI should exit 0, stderr: {result.stderr}")
+        self.assertIn("Updated", result.stdout)
+
+        # Verify README was updated
+        updated_content = self.readme_file.read_text()
+        self.assertIn("<!-- STATS:START -->", updated_content)
+        self.assertIn("<!-- STATS:END -->", updated_content)
+        self.assertIn("Aesop builds itself", updated_content)
+        self.assertIn("Metric | Value", updated_content, "should have table header")
+
+    def test_update_readme_gracefully_noop_without_markers(self):
+        """--update-readme should gracefully skip if markers don't exist."""
+        # Create a README without STATS markers
+        readme_content = "# Test Project\n\nNo stats markers here.\n"
+        self.readme_file.write_text(readme_content)
+
+        stats = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        stats.save_stats(str(self.stats_file))
+
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--update-readme",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        self.assertEqual(result.returncode, 0, "should exit 0 even if no markers")
+        self.assertIn("No markers found", result.stdout, "should report graceful no-op")
+
+        # README should be unchanged
+        unchanged_content = self.readme_file.read_text()
+        self.assertEqual(unchanged_content, readme_content, "README should not be modified")
+
+    def test_update_readme_preserves_surrounding_content(self):
+        """--update-readme should preserve content before/after markers."""
+        header = "# My Project\nIntroduction text.\n\n"
+        footer = "\n\nFooter section.\nMore content here.\n"
+        readme_content = header + "<!-- STATS:START -->OLD<!-- STATS:END -->" + footer
+
+        self.readme_file.write_text(readme_content)
+
+        stats = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        stats.save_stats(str(self.stats_file))
+
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--update-readme",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        self.assertEqual(result.returncode, 0)
+
+        updated = self.readme_file.read_text()
+        self.assertTrue(updated.startswith(header), "header should be preserved")
+        self.assertTrue(updated.endswith(footer), "footer should be preserved")
+
+
+class StatsCheckModeTest(SelfStatsFixtureCase):
+    """Test --check mode for drift detection."""
+
+    def setUp(self):
+        super().setUp()
+        os.chdir(str(self.repo_root))
+        self.make_commit("initial")
+        self.make_merge_commit(1)
+        self.stats_file = self.repo_root / "stats.json"
+        self.readme_file = self.repo_root / "README.md"
+
+    def test_check_passes_when_readme_matches_stats(self):
+        """--check should return 0 when README matches stats.json."""
+        # Create a README with matching stats using --update-readme mode
+        # This ensures the README is created exactly as the check expects
+        readme_content = """# Project
+
+<!-- STATS:START -->
+placeholder
+<!-- STATS:END -->
+
+Footer.
+"""
+        self.readme_file.write_text(readme_content)
+
+        # Generate stats
+        stats = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        stats.save_stats(str(self.stats_file))
+
+        # Update README to have the correct content
+        subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--update-readme",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        # Now check should pass
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--check",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        self.assertEqual(result.returncode, 0, f"should exit 0 when matched, stdout: {result.stdout}, stderr: {result.stderr}")
+        self.assertIn("OK", result.stdout)
+
+    def test_check_fails_when_readme_drifts(self):
+        """--check should return 1 when README diverges from stats.json."""
+        # Create stats.json
+        stats = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        stats.save_stats(str(self.stats_file))
+
+        # Create a README with outdated/wrong stats
+        outdated_markdown = """<!-- STATS:START -->
+
+## Aesop builds itself
+
+Outdated text here.
+
+| Metric | Value |
+| --- | --- |
+| Merged PRs | 999 <!-- metrics-verified: self_stats.py (git log) --> |
+
+<!-- STATS:END -->
+"""
+        readme_content = "# Project\n\n" + outdated_markdown + "\nFooter.\n"
+        self.readme_file.write_text(readme_content)
+
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--check",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        self.assertNotEqual(result.returncode, 0, "should exit non-zero when drifted")
+        self.assertIn("DRIFT", result.stdout)
+
+    def test_check_passes_when_no_markers_exist(self):
+        """--check should return 0 (no-op) when markers don't exist."""
+        stats = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        stats.save_stats(str(self.stats_file))
+
+        # Create README without markers
+        self.readme_file.write_text("# Project\n\nNo stats markers.\n")
+
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--check",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        self.assertEqual(result.returncode, 0, "should exit 0 when no markers (graceful no-op)")
+
+
 if __name__ == "__main__":
     unittest.main()
