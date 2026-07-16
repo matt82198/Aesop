@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -283,6 +285,76 @@ class TestRotateLogs(unittest.TestCase):
         archived_lines = self._count_lines(archive_file)
         total_lines = remaining_lines + archived_lines
         self.assertEqual(total_lines, 20)
+
+    def test_concurrent_append_no_data_loss(self):
+        """Test that concurrent appends during rotation don't lose data.
+
+        This test simulates the race condition from the original bug:
+        1. Rotation is triggered (reads file, holds lock)
+        2. Another thread attempts to append while rotation computes
+        3. Rotation releases lock and returns
+        4. Appended lines should not be lost
+
+        The atomic locking in the fix prevents lines written to the file
+        from being discarded by the rotation's truncate+rewrite sequence.
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+
+        # Create initial log with 250 lines to trigger rotation
+        with open(logfile, 'w') as f:
+            for i in range(1, 251):
+                f.write(f"line {i}\n")
+
+        # Count initial lines
+        initial_lines = self._count_lines(logfile)
+        self.assertEqual(initial_lines, 250)
+
+        # Append lines while rotation happens
+        def append_concurrent():
+            # Give rotation a moment to start
+            time.sleep(0.05)
+            # Append 10 lines to the log
+            with open(logfile, 'a') as f:
+                for i in range(251, 261):
+                    f.write(f"line {i}\n")
+
+        # Run rotation and concurrent append in separate threads
+        rotate_thread = threading.Thread(
+            target=lambda: self._run_rotate(logfile, ["--max-lines", "200"])
+        )
+        append_thread = threading.Thread(target=append_concurrent)
+
+        # Start both threads (order doesn't matter due to locking)
+        rotate_thread.start()
+        append_thread.start()
+
+        rotate_thread.join(timeout=5)
+        append_thread.join(timeout=5)
+
+        # Verify no lines were lost
+        # After rotation: ~100 lines kept (half of 250)
+        # Plus the 10 lines appended: should have ~110 lines
+        final_lines = self._count_lines(logfile)
+        archive_dir = os.path.join(self.temp_dir, "archive")
+        archived_lines = 0
+        if os.path.exists(archive_dir):
+            archive_files = os.listdir(archive_dir)
+            for archive_file in archive_files:
+                archived_lines += self._count_lines(os.path.join(archive_dir, archive_file))
+
+        # Total should be 260 (250 original + 10 appended)
+        total_lines = final_lines + archived_lines
+        self.assertEqual(
+            total_lines, 260,
+            f"Race condition: expected 260 total lines, got {total_lines} "
+            f"(live={final_lines}, archived={archived_lines}). "
+            f"This indicates concurrent writes were lost during rotation."
+        )
+
+        # Verify newest appended lines are in live file
+        with open(logfile, 'r') as f:
+            content = f.read()
+        self.assertIn("line 260", content, "Newest appended line should be in live file")
 
 
 if __name__ == "__main__":
