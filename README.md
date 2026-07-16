@@ -223,12 +223,29 @@ The dev server proxies `/data`, `/api`, `/events`, `/agent`, `/submit` to the Py
 | Secret-scan blocks push | Add suppression to `tools/secret_scan.py`; no auto-bypass (by design) |
 | Monitor doesn't start | Verify Node.js on PATH; check `monitor/BRIEF.md` for logs |
 
-For deeper docs, see `docs/`:
-- `CARDINAL-RULES.md` — full 10 principles
-- `DISPATCH-MODEL.md` — cost analysis and patterns
-- `CHECKPOINTING.md` — how STATE.md + BUILDLOG.md survive wipes
-- `GOVERNANCE.md` — AUTO/PROPOSE tiers
-- `case-study-portfolio.md` — How Aesop built its own portfolio site; full audit trail and cost breakdown
+## Documentation
+
+**Adopter journey** (start here):
+- [docs/INSTALL.md](./docs/INSTALL.md) — Install Aesop and verify setup
+- [docs/CONFIGURE.md](./docs/CONFIGURE.md) — Configure repos, ports, and brain root
+- [docs/FIRST-WAVE.md](./docs/FIRST-WAVE.md) — Run your first `/power` → `/buildsystem` cycle
+- [docs/CONCEPTS.md](./docs/CONCEPTS.md) — Key concepts (dispatch, state, security, governance) with links to deep dives
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — System architecture diagram and components
+
+**Operational reference**:
+- [docs/HOW-THE-LOOP-WORKS.md](./docs/HOW-THE-LOOP-WORKS.md) — Concrete walkthrough of one wave cycle
+- [docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md) — Cost analysis, dispatch patterns, scaling
+- [docs/CHECKPOINTING.md](./docs/CHECKPOINTING.md) — STATE.md + BUILDLOG.md lifecycle, recovery on wipe
+- [docs/CARDINAL-RULES.md](./docs/CARDINAL-RULES.md) — 10 foundational principles
+- [docs/GOVERNANCE.md](./docs/GOVERNANCE.md) — Single-writer files, heartbeat protocol, AUTO/PROPOSE tiers
+- [docs/RELIABILITY.md](./docs/RELIABILITY.md) — Reliability guarantees, pride bar, inputs-always-outputs
+- [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md) — Secret-scan and branch protection setup
+
+**For specific tasks**:
+- [docs/FORENSICS.md](./docs/FORENSICS.md) — Debug agent failures (git-bisectable)
+- [docs/RESTORE.md](./docs/RESTORE.md) — Reconstitute Aesop on a new machine
+- [docs/PUBLISHING.md](./docs/PUBLISHING.md) — Release Aesop to npm
+- [docs/case-study-portfolio.md](./docs/case-study-portfolio.md) — How Aesop built its own portfolio site; full audit trail and cost breakdown
 
 See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
