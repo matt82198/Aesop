@@ -79,8 +79,38 @@ const ACTIVITY_WINDOW = 12 * 60 * 1000;
 // Depth limit to match monitor's equivalent (prevent unbounded recursion on growing tree)
 const MAX_DEPTH = 6;
 
-// Parse JSONL agent transcript and extract rich metadata
-function parseAgentJsonl(filePath) {
+// Cache file for transcript metadata (path, size, mtime -> token counts, etc.)
+const CACHE_FILE = path.join(STATE_ROOT, '.dash-extra-cache.json');
+
+// Load persistent cache from disk (keyed by "path|size|mtime")
+function loadCache() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const data = fs.readFileSync(CACHE_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch {
+    // Parse error or file doesn't exist; start with empty cache
+  }
+  return {};
+}
+
+// Save cache to disk (safe: ignore write errors, cache is optimization only)
+function saveCache(cache) {
+  try {
+    const dir = path.dirname(CACHE_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
+  } catch {
+    // Ignore write errors; cache loss is non-fatal
+  }
+}
+
+// Parse JSONL agent transcript and extract rich metadata.
+// Uses cache keyed by (path, size, mtime) to avoid re-reading unchanged files.
+function parseAgentJsonl(filePath, cache) {
   const metadata = {
     promptFull: '',
     taskLabel: '',
@@ -99,6 +129,27 @@ function parseAgentJsonl(filePath) {
       metadata.project = parts[0];
     }
 
+    // Get file stat for cache lookup
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return metadata; // File disappeared; return empty
+    }
+
+    // Cache key combines path, size, and mtime for exact identity
+    const cacheKey = `${filePath}|${stat.size}|${stat.mtimeMs}`;
+
+    // Check if we have cached metadata for this exact file state
+    if (cache[cacheKey]) {
+      const cached = cache[cacheKey];
+      return {
+        ...metadata,
+        ...cached
+      };
+    }
+
+    // File is new or changed; parse it
     const content = fs.readFileSync(filePath, 'utf8');
     const lines = content.split('\n');
 
@@ -170,12 +221,26 @@ function parseAgentJsonl(filePath) {
     if (firstTimestamp && lastTimestamp) {
       metadata.runtimeSeconds = Math.floor((lastTimestamp - firstTimestamp) / 1000);
     }
+
+    // Store in cache for next invocation
+    cache[cacheKey] = {
+      tokensUsed: metadata.tokensUsed,
+      taskLabel: metadata.taskLabel,
+      promptFull: metadata.promptFull,
+      startedAt: metadata.startedAt,
+      lastActivity: metadata.lastActivity,
+      runtimeSeconds: metadata.runtimeSeconds,
+      project: metadata.project
+    };
   } catch {
     // If file read fails, return empty metadata
   }
 
   return metadata;
 }
+
+// Load persistent cache (keyed by path|size|mtime)
+const cache = loadCache();
 
 // Read alerts log if present
 let slog = [];
@@ -332,8 +397,8 @@ if (process.argv.includes('--json')) {
       .replace(/\.jsonl$/, '')
       .slice(0, 13);
 
-    // Parse JSONL for rich metadata
-    const metadata = parseAgentJsonl(f);
+    // Parse JSONL for rich metadata (uses cache to skip unchanged files)
+    const metadata = parseAgentJsonl(f, cache);
 
     agents.push({
       id: agentId,
@@ -350,8 +415,12 @@ if (process.argv.includes('--json')) {
       promptFull: metadata.promptFull
     });
   }
+  // Persist cache for next invocation
+  saveCache(cache);
   process.stdout.write(JSON.stringify(agents) + '\n');
 } else {
   // TUI mode: emit colored text
+  // Persist cache for next invocation
+  saveCache(cache);
   process.stdout.write(out.join('\n') + '\n');
 }

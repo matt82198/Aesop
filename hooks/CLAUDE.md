@@ -30,6 +30,34 @@ Runs on `git push` via `.git/hooks/pre-push` symlink or copy.
 - See `docs/HOOK-INSTALL.md` for symlink (Linux/macOS/Git Bash) and copy (Windows) methods
 - Test with `bash hooks/pre-push-policy.sh --test` before org distribution
 
+## Hook: pre-commit-waveguard.sh
+
+Prevents accidental commits to the PRIMARY aesop tree during a wave cycle. Runs on `git commit` via `.git/hooks/pre-commit`.
+
+**Purpose**: During orchestrated waves, the orchestrator sets a marker file (`state/.wave-in-flight`) in the PRIMARY tree only. Sibling worktrees do not inherit this marker (separate working trees), so fleet agents commit freely in worktrees while stray commits to the primary tree are rejected.
+
+**Mechanism**:
+1. **Marker Contract**: Orchestrator writes `${AESOP_ROOT:-$HOME/aesop}/state/.wave-in-flight` before dispatching wave work.
+2. **Pre-Commit Check**: Hook checks if marker exists; exit 1 (reject commit) if present, exit 0 (allow) otherwise.
+3. **Override**: User or orchestrator may delete `state/.wave-in-flight` to manually allow commits to primary tree.
+
+**Exit Contract**:
+- Exit 0: Marker absent, commit allowed (normal operation)
+- Exit 1: Marker present, commit blocked with clear error message
+
+**Error Message**:
+```
+Error: Wave in flight. Commit from a sibling worktree, or clear <marker_path> to override.
+```
+
+**Installation**:
+- Run `bash hooks/install-waveguard.sh` to idempotently install into `.git/hooks/pre-commit`.
+- If a pre-commit hook already exists, installer backs it up (`.git/hooks/pre-commit.waveguard-backup`) and wraps both (waveguard first, then existing hook if present).
+
+**Idempotency**:
+- Installer checks if hook already calls waveguard; skips if already installed.
+- Safe to re-run multiple times.
+
 ## Hook: hooks/claude/force-model-policy.mjs
 
 Claude Code hook enforcing subagent Haiku dispatch (cost optimization).

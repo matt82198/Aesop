@@ -12,16 +12,35 @@
 
 Unknown ids on update/archive and unknown event types are ignored, keeping the
 fold tolerant of partial/legacy streams.
+
+Snapshots enable O(n) tail-replay (instead of replaying full log each time):
+  - save_snapshot(store, stream, event_version, projection): persist materialized state
+  - project_tracker_with_snapshot(store, stream, events): load snapshot, fold tail events
 """
 from __future__ import annotations
 
 TRACKER_VERSION = 1
 
 
-def project_tracker(events: list) -> dict:
-    """Return the current tracker state projected from ``events``."""
-    order = []      # item ids in first-seen order (stable output ordering)
-    items = {}      # id -> item dict
+def _fold_events(events: list, order: list | None = None, items: dict | None = None) -> tuple:
+    """Fold events into (order, items) state.
+
+    Helper used by both project_tracker and project_tracker_with_snapshot to avoid
+    duplicating the folding logic. Mutates order and items in place.
+
+    Args:
+        events: list of event dicts
+        order: existing order list (item ids in first-seen order); mutated in place
+        items: existing items dict (id -> item dict); mutated in place
+
+    Returns:
+        (order, items) tuple with accumulated state
+    """
+    if order is None:
+        order = []
+    if items is None:
+        items = {}
+
     for ev in events:
         etype = ev.get("type")
         payload = ev.get("payload") or {}
@@ -49,4 +68,59 @@ def project_tracker(events: list) -> dict:
                     merged["completed_at"] = payload["completed_at"]
                 items[iid] = merged
         # any other event type is ignored
+    return (order, items)
+
+
+def project_tracker(events: list) -> dict:
+    """Return the current tracker state projected from ``events``.
+
+    This is the original full-replay projection. For production use with snapshots,
+    prefer project_tracker_with_snapshot() which enables tail-replay.
+    """
+    order, items = _fold_events(events)
     return {"version": TRACKER_VERSION, "items": [items[i] for i in order]}
+
+
+def project_tracker_with_snapshot(store, stream: str, events: list) -> dict:
+    """Project tracker state using snapshots for O(n) tail-replay instead of O(n²) full replay.
+
+    If a valid snapshot exists for the stream, starts from the snapshot state and folds
+    only events after the snapshot's version. If snapshot is missing or corrupt, falls
+    back to full replay from event 1 (graceful degradation).
+
+    Args:
+        store: EventStore instance with read_snapshot() method
+        stream: stream name (e.g., "tracker")
+        events: list of all events for the stream (from store.read(stream))
+
+    Returns:
+        dict: {"version": 1, "items": [...]} projection, identical to project_tracker()
+    """
+    snapshot = store.read_snapshot(stream)
+
+    if snapshot is not None:
+        # Snapshot exists and is valid; start from it and fold tail events
+        snapshot_version, projection, _ = snapshot
+        order = [item["id"] for item in projection.get("items", [])]
+        items = {item["id"]: dict(item) for item in projection.get("items", [])}
+
+        # Fold only events after the snapshot
+        tail_events = [ev for ev in events if ev.get("version", 0) > snapshot_version]
+        order, items = _fold_events(tail_events, order, items)
+    else:
+        # No valid snapshot; do full replay
+        order, items = _fold_events(events)
+
+    return {"version": TRACKER_VERSION, "items": [items[i] for i in order]}
+
+
+def save_snapshot(store, stream: str, event_version: int, projection: dict) -> None:
+    """Persist a materialized projection snapshot.
+
+    Args:
+        store: EventStore instance with save_snapshot() method
+        stream: stream name (e.g., "tracker")
+        event_version: the per-stream event version this snapshot was computed through
+        projection: the materialized state dict (e.g. full tracker projection)
+    """
+    store.save_snapshot(stream, event_version, projection)

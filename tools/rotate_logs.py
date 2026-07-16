@@ -5,6 +5,8 @@ Rotates log files by moving the oldest content to an archive file when the origi
 exceeds configured thresholds (--max-lines or --max-bytes). Preserves newest lines
 in the original, ensures no data loss (archive + original == original content).
 
+Uses atomic file locking to prevent concurrent writes from losing lines during rotation.
+
 Exit codes:
   0: Success (no rotation needed or rotation completed)
   1: Error (invalid args, I/O failure, etc.)
@@ -16,6 +18,17 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Platform-specific locking imports
+if sys.platform == 'win32':
+    import msvcrt
+    HAS_FCNTL = False
+else:
+    try:
+        import fcntl
+        HAS_FCNTL = True
+    except ImportError:
+        HAS_FCNTL = False
 
 
 def count_lines(filepath):
@@ -53,6 +66,34 @@ def write_lines(filepath, lines):
         raise IOError(f"Failed to write {filepath}: {e}")
 
 
+def acquire_lock(fd):
+    """Acquire exclusive lock on file descriptor (cross-platform)."""
+    if HAS_FCNTL:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except (AttributeError, TypeError):
+            pass
+    elif sys.platform == 'win32':
+        try:
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        except (OSError, IOError):
+            pass  # Locking may not be supported on all filesystems
+
+
+def release_lock(fd):
+    """Release exclusive lock on file descriptor (cross-platform)."""
+    if HAS_FCNTL:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except (AttributeError, TypeError):
+            pass
+    elif sys.platform == 'win32':
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except (OSError, IOError):
+            pass
+
+
 def needs_rotation(filepath, max_lines, max_bytes):
     """Check if file exceeds any threshold."""
     current_lines = count_lines(filepath)
@@ -66,7 +107,11 @@ def needs_rotation(filepath, max_lines, max_bytes):
 
 
 def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
-    """Rotate log file by archiving oldest lines.
+    """Rotate log file by archiving oldest lines atomically.
+
+    Uses exclusive file locking to ensure no concurrent appends are lost during
+    the read-compute-write cycle. This prevents a race where lines written between
+    the initial read and the truncate are discarded.
 
     Args:
         logfile: Path to log file to rotate.
@@ -104,69 +149,78 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
               file=sys.stderr)
         return 1
 
-    # Read all lines
+    # Perform rotation with exclusive lock to prevent concurrent write races
     try:
-        lines = read_lines(str(logfile))
-    except IOError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 1
+        with open(str(logfile), 'r+') as f:
+            # Acquire exclusive lock to guard read-compute-write sequence
+            acquire_lock(f.fileno())
+            try:
+                # Read all lines while locked
+                lines = f.readlines()
 
-    if not lines:
-        return 0
+                if not lines:
+                    return 0
 
-    # Determine split point based on which threshold was exceeded
-    current_lines = len(lines)
-    current_bytes = sum(len(line.encode('utf-8')) for line in lines)
+                # Determine split point based on which threshold was exceeded
+                current_lines = len(lines)
+                current_bytes = sum(len(line.encode('utf-8')) for line in lines)
 
-    keep_count = current_lines // 2  # Default: keep ~half
+                keep_count = current_lines // 2  # Default: keep ~half
 
-    # If max_lines exceeded, keep lines just under threshold
-    if max_lines and current_lines > max_lines:
-        keep_count = min(keep_count, max_lines)
+                # If max_lines exceeded, keep lines just under threshold
+                if max_lines and current_lines > max_lines:
+                    keep_count = min(keep_count, max_lines)
 
-    # If max_bytes exceeded, calculate how many lines fit under threshold
-    if max_bytes and current_bytes > max_bytes:
-        cumulative_bytes = 0
-        bytes_keep_count = 0
-        # Count from newest (end) backward
-        for i in range(len(lines) - 1, -1, -1):
-            line_bytes = len(lines[i].encode('utf-8'))
-            if cumulative_bytes + line_bytes <= max_bytes:
-                cumulative_bytes += line_bytes
-                bytes_keep_count += 1
-            else:
-                break
-        # Use the more conservative count
-        keep_count = min(keep_count, bytes_keep_count)
+                # If max_bytes exceeded, calculate how many lines fit under threshold
+                if max_bytes and current_bytes > max_bytes:
+                    cumulative_bytes = 0
+                    bytes_keep_count = 0
+                    # Count from newest (end) backward
+                    for i in range(len(lines) - 1, -1, -1):
+                        line_bytes = len(lines[i].encode('utf-8'))
+                        if cumulative_bytes + line_bytes <= max_bytes:
+                            cumulative_bytes += line_bytes
+                            bytes_keep_count += 1
+                        else:
+                            break
+                    # Use the more conservative count
+                    keep_count = min(keep_count, bytes_keep_count)
 
-    # Guard: ensure we keep at least 1 line, archive the rest
-    if keep_count <= 0:
-        # If calculated keep_count is 0 or negative, keep at least 1 line
-        keep_count = 1
+                # Guard: ensure we keep at least 1 line, archive the rest
+                if keep_count <= 0:
+                    # If calculated keep_count is 0 or negative, keep at least 1 line
+                    keep_count = 1
 
-    # Split lines
-    archive_lines = lines[:-keep_count] if keep_count < len(lines) else []
-    remaining_lines = lines[-keep_count:] if keep_count > 0 else []
+                # Split lines
+                archive_lines = lines[:-keep_count] if keep_count < len(lines) else []
+                remaining_lines = lines[-keep_count:] if keep_count > 0 else []
 
-    if not archive_lines:
-        # Nothing to archive
-        return 0
+                if not archive_lines:
+                    # Nothing to archive
+                    return 0
 
-    # Generate archive filename with UTC timestamp
-    utc_now = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    archive_filename = f"{logfile.stem}.{utc_now}.log"
-    archive_file = archive_path / archive_filename
+                # Generate archive filename with UTC timestamp
+                utc_now = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+                archive_filename = f"{logfile.stem}.{utc_now}.log"
+                archive_file = archive_path / archive_filename
 
-    # Write archive file
-    try:
-        write_lines(str(archive_file), archive_lines)
-    except IOError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 1
+                # Write archive file
+                try:
+                    write_lines(str(archive_file), archive_lines)
+                except IOError as e:
+                    print(f"ERROR: {e}", file=sys.stderr)
+                    return 1
 
-    # Write remaining lines back to original
-    try:
-        write_lines(str(logfile), remaining_lines)
+                # Atomically truncate and write remaining lines back to original
+                # while still holding the lock
+                f.seek(0)
+                f.truncate()
+                f.writelines(remaining_lines)
+
+            finally:
+                # Release lock after all writes complete
+                release_lock(f.fileno())
+
     except IOError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

@@ -11,16 +11,22 @@ const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
 
-// Check for doctor subcommand
-const doctorCommand = args[0] === 'doctor';
-if (doctorCommand) {
-  // Load and run the doctor module (async, will set process.exitCode and exit naturally)
-  require('../tools/doctor.js');
-  // Return early to prevent further CLI scaffolding logic
-  if (require.main === module) {
-    // If this is the entry point, don't run the rest of the CLI
-    // The doctor module will handle its own exit
-  }
+// Check for runtime subcommands (doctor, watch, dash, status)
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status'];
+const isRuntimeCommand = runtimeCommands.includes(args[0]);
+
+if (isRuntimeCommand) {
+  const commandMap = {
+    'doctor': '../tools/doctor.js',
+    'watch': '../tools/watch.js',
+    'dash': '../tools/dash.js',
+    'status': '../tools/status.js'
+  };
+  // Load and run the appropriate runtime module
+  // These modules run async code that sets process.exitCode and will cause Node to exit
+  require(commandMap[args[0]]);
+  // Return immediately to prevent further CLI scaffolding logic from running
+  return;
 }
 
 // Detect if stdin is a TTY (interactive terminal)
@@ -82,9 +88,15 @@ Usage:
   npx @matt82198/aesop [target-dir] [options]
   npx @matt82198/aesop wizard [options]
   npx @matt82198/aesop doctor
+  npx @matt82198/aesop watch
+  npx @matt82198/aesop dash
+  npx @matt82198/aesop status
 
 Commands:
   doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port)
+  watch                   Launch the watchdog daemon (spawns daemons/run-watchdog.sh)
+  dash                    Launch the web dashboard (spawns python ui/serve.py)
+  status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
 Arguments:
@@ -101,6 +113,9 @@ Options:
 
 Examples:
   npx @matt82198/aesop doctor                               # Run preflight checks before starting
+  npx @matt82198/aesop watch                                # Launch watchdog daemon
+  npx @matt82198/aesop dash                                 # Launch web dashboard (default localhost:8770)
+  npx @matt82198/aesop status                               # Show fleet status (heartbeats, port, git)
   npx @matt82198/aesop                                      # Creates ./aesop-fleet/ with template
   npx @matt82198/aesop my-fleet                             # Creates ./my-fleet/ with template
   npx @matt82198/aesop wizard                               # Interactive onboarding (60-second setup)
@@ -122,8 +137,8 @@ Interactive wizard flow:
 After scaffolding, cd into the directory and:
   1. Review CLAUDE.md (pre-filled with your project info)
   2. Review aesop.config.json (pre-configured for your repos)
-  3. Run: bash daemons/run-watchdog.sh --once
-  4. Launch dashboard: python ui/serve.py
+  3. Run: aesop watch (or bash daemons/run-watchdog.sh)
+  4. Launch dashboard: aesop dash (or python ui/serve.py)
 `);
   process.exit(0);
 }
@@ -510,8 +525,8 @@ function installPrePushHook(targetDir, templateRoot) {
   }
 }
 
-// Main execution function (skip if doctor command)
-if (!doctorCommand) {
+// Main execution function (skip if runtime command detected)
+if (!isRuntimeCommand) {
   (async () => {
     try {
       let finalProjectName = projectName;
