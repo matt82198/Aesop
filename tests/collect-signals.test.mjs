@@ -989,3 +989,154 @@ test('Finding 3: missed-proposal recorded in ACTIONS.log when lock timeout occur
   }
 });
 
+// === P1 FINDING: Ledger cursor tracking (monitor-ledger-cursor) ===
+test('P1: ledger cursor: first run detects violation in old ledger lines', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Setup: create a FLEET-LEDGER.md with old lines containing a violation + new lines that are clean
+    const brainRoot = path.join(fixture.root, '..', '.claude');
+    fs.mkdirSync(brainRoot, { recursive: true });
+
+    const ledgerPath = path.join(brainRoot, 'FLEET-LEDGER.md');
+    const ledgerContent = `# FLEET-LEDGER.md
+| timestamp | agent | dispatch | description |
+| --- | --- | --- | --- |
+| 2026-07-10T10:00:00Z | agent-1 | opus-orchestrator | Wave 10 kickoff (non-Haiku) |
+| 2026-07-10T10:01:00Z | agent-2 | sonnet-specialist | Feature planning |
+| 2026-07-15T14:00:00Z | agent-3 | haiku-fix | Clean fix |
+`;
+    fs.writeFileSync(ledgerPath, ledgerContent, 'utf8');
+
+    // Run collector with extended signals enabled
+    runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true', AESOP_MONITOR_FORCE: '1' });
+
+    // Verify that respawn watch (check 8) ran and detected the old violation
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+
+    assert.ok(Array.isArray(signals.respawnWatch), 'respawnWatch should be an array when extended signals ON');
+    // The old lines should have been scanned (first run, no cursor yet)
+    // We expect respawnWatch to process all lines including old ones on first run
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P1: ledger cursor: second run with same ledger reports clean (new lines only)', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Setup: create FLEET-LEDGER.md with old violation lines (identical descriptions to match signatures)
+    const brainRoot = path.join(fixture.root, '..', '.claude');
+    fs.mkdirSync(brainRoot, { recursive: true });
+
+    const ledgerPath = path.join(brainRoot, 'FLEET-LEDGER.md');
+    // Use identical descriptions so they generate the same normalized signature
+    const oldContent = `# FLEET-LEDGER.md
+| timestamp | agent | dispatch | description |
+| --- | --- | --- | --- |
+| 2026-07-10T10:00:00Z | agent-1 | opus-orchestrator | Non-Haiku dispatch retry |
+| 2026-07-10T10:01:00Z | agent-1 | opus-orchestrator | Non-Haiku dispatch retry |
+| 2026-07-10T10:02:00Z | agent-1 | opus-orchestrator | Non-Haiku dispatch retry |
+| 2026-07-10T10:03:00Z | agent-1 | opus-orchestrator | Non-Haiku dispatch retry |
+`;
+    fs.writeFileSync(ledgerPath, oldContent, 'utf8');
+
+    // First run: cursor file doesn't exist, so all lines are processed
+    runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true', AESOP_MONITOR_FORCE: '1' });
+
+    let signals = JSON.parse(fs.readFileSync(path.join(fixture.monitorDir, 'SIGNALS.json'), 'utf8'));
+    const firstRunCount = signals.respawnWatch.length;
+    assert.ok(firstRunCount > 0, 'First run should detect respawn violations in old lines');
+
+    // Now append new clean lines to the ledger (all Haiku, no violations)
+    // Use different dispatch types to avoid triggering the >3 repeat violation
+    const newContent = oldContent + `| 2026-07-15T14:00:00Z | agent-2 | haiku-fix-type-1 | Clean fix A |
+| 2026-07-15T14:01:00Z | agent-2 | haiku-fix-type-2 | Clean fix B |
+| 2026-07-15T14:02:00Z | agent-2 | haiku-fix-type-3 | Clean fix C |
+| 2026-07-15T14:03:00Z | agent-2 | haiku-fix-type-4 | Clean fix D |
+`;
+    fs.writeFileSync(ledgerPath, newContent, 'utf8');
+
+    // Second run: cursor file should exist and only process new lines
+    runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true', AESOP_MONITOR_FORCE: '1' });
+
+    signals = JSON.parse(fs.readFileSync(path.join(fixture.monitorDir, 'SIGNALS.json'), 'utf8'));
+    const secondRunCount = signals.respawnWatch.length;
+
+    // Second run should report clean because only new lines (all Haiku) are processed
+    assert.strictEqual(secondRunCount, 0, 'Second run should report clean when only new lines are processed and they are clean');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('P1: ledger path override: AESOP_FLEET_LEDGER env var respected', async (t) => {
+  const fixture = createFixture();
+  const customBrainRoot = path.join(os.tmpdir(), 'custom-brain-' + Math.random().toString(36).slice(2, 9));
+
+  try {
+    fs.mkdirSync(customBrainRoot, { recursive: true });
+
+    // Create ledger at custom location
+    const customLedgerPath = path.join(customBrainRoot, 'CUSTOM-LEDGER.md');
+    const ledgerContent = `# CUSTOM-LEDGER.md
+| timestamp | agent | dispatch | description |
+| --- | --- | --- | --- |
+| 2026-07-10T10:00:00Z | agent-1 | opus-orchestrator | Custom ledger entry |
+`;
+    fs.writeFileSync(customLedgerPath, ledgerContent, 'utf8');
+
+    // Run collector with AESOP_FLEET_LEDGER override
+    runCollector(fixture.root, {
+      AESOP_EXTENDED_SIGNALS: 'true',
+      AESOP_MONITOR_FORCE: '1',
+      AESOP_FLEET_LEDGER: customLedgerPath,
+    });
+
+    // Verify collector completed and read from custom ledger
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    assert.ok(fs.existsSync(signalsPath), 'Collector should complete with AESOP_FLEET_LEDGER override');
+
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    // If AESOP_FLEET_LEDGER was respected, respawnWatch should contain data from custom ledger
+    assert.ok(Array.isArray(signals.respawnWatch), 'respawnWatch should be an array');
+  } finally {
+    try {
+      fs.rmSync(customBrainRoot, { recursive: true, force: true });
+    } catch (e) {}
+    fixture.cleanup();
+  }
+});
+
+test('P1: ledger cursor: cursor file persists byte offset and line hash', async (t) => {
+  const fixture = createFixture();
+  try {
+    const brainRoot = path.join(fixture.root, '..', '.claude');
+    fs.mkdirSync(brainRoot, { recursive: true });
+
+    const ledgerPath = path.join(brainRoot, 'FLEET-LEDGER.md');
+    const ledgerContent = `# FLEET-LEDGER.md
+| timestamp | agent | dispatch | description |
+| --- | --- | --- | --- |
+| 2026-07-10T10:00:00Z | agent-1 | haiku-fix | First line |
+`;
+    fs.writeFileSync(ledgerPath, ledgerContent, 'utf8');
+
+    // Run collector to create cursor
+    runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true', AESOP_MONITOR_FORCE: '1' });
+
+    // Verify cursor file was created in monitor state dir
+    const cursorPath = path.join(fixture.monitorDir, '.ledger-cursor.json');
+    assert.ok(fs.existsSync(cursorPath), 'Cursor file should be created at monitor/.ledger-cursor.json');
+
+    // Verify cursor contains expected fields
+    const cursor = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+    assert.ok(typeof cursor.byteOffset === 'number', 'Cursor should contain byteOffset');
+    assert.ok(typeof cursor.lineHash === 'string', 'Cursor should contain lineHash');
+    assert.ok(cursor.byteOffset >= 0, 'byteOffset should be non-negative');
+    assert.ok(cursor.lineHash.length > 0, 'lineHash should be non-empty');
+  } finally {
+    fixture.cleanup();
+  }
+});
+

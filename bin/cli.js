@@ -160,7 +160,7 @@ const repoUrlsStr = getFlag('--repo-urls');
 if (fs.existsSync(targetDir)) {
   const contents = fs.readdirSync(targetDir);
   // Allow .git and aesop scaffolded files to already exist (for idempotency)
-  const aesopDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui', 'docs', '.git', 'state'];
+  const aesopDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui', 'docs', 'state_store', 'skills', 'mcp', 'scan', '.git', 'state'];
   const aesopFiles = [
     'aesop.config.example.json',
     'aesop.config.json',
@@ -213,6 +213,10 @@ const filesToCopy = [
   'tools',
   'ui',
   'docs',
+  'state_store',
+  'skills',
+  'mcp',
+  'scan',
   'aesop.config.example.json',
   'README.md',
   'LICENSE',
@@ -471,27 +475,23 @@ function installPrePushHook(targetDir, templateRoot) {
   }
 
   // Install the hook
-  if (process.platform === 'win32') {
-    // Windows: copy the file
-    fs.copyFileSync(hookSource, hookDest);
-    console.log('✓ Copied pre-push policy hook to .git/hooks/pre-push');
-  } else {
-    // Unix: symlink for easy updates
-    // First remove if exists
-    if (fs.existsSync(hookDest)) {
-      fs.unlinkSync(hookDest);
-    }
-    // Create symlink relative to .git/hooks/
-    const relPath = path.relative(gitHooksDir, hookSource);
-    fs.symlinkSync(relPath, hookDest);
-    console.log('✓ Symlinked pre-push policy hook to .git/hooks/pre-push');
+  // Use copyFileSync on all platforms to avoid dangling symlinks after npx cache clean
+  // which would disable branch protection and the secret gate
+  if (fs.existsSync(hookDest)) {
+    fs.unlinkSync(hookDest);
   }
+  fs.copyFileSync(hookSource, hookDest);
+  console.log('✓ Copied pre-push policy hook to .git/hooks/pre-push');
 
   // Ensure hook is executable
   try {
     fs.chmodSync(hookDest, 0o755);
   } catch (e) {
-    // On Windows, chmod may fail; that's okay
+    // On Windows, chmod fails harmlessly; on POSIX, warn the user to chmod manually
+    if (process.platform !== 'win32') {
+      console.warn('⚠ Warning: Failed to chmod +x the pre-push hook. Please run manually:');
+      console.warn(`  chmod +x "${hookDest}"`);
+    }
   }
 }
 
@@ -610,10 +610,6 @@ function installPrePushHook(targetDir, templateRoot) {
       } else {
         // Generate aesop.config.json
         const config = generateConfigJson(finalTargetDir, templateRoot, finalProjectName, finalReposStr, finalRepoUrlsStr);
-        // Update dashboard port if specified in wizard mode
-        if (wizardMode && dashboardPort !== 8770) {
-          config.dashboard.refresh_seconds = 1;
-        }
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
         console.log('✓ Generated aesop.config.json (configured for your repos)');
       }

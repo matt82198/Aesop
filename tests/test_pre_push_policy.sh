@@ -504,6 +504,56 @@ printf '\n=== P1 Bug1: verify_audit_log holds the write lock (no false truncatio
 )
 if [ $? -eq 0 ]; then test_passed=$((test_passed + 1)); else test_failed=$((test_failed + 1)); fi
 
+printf '\n=== SECURITY P1: check_secret_scan fails CLOSED on malformed stdin ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_malformed_stdin"
+  mkdir -p "$AESOP_ROOT/state"
+  mkdir -p "$AESOP_ROOT/tools"
+
+  # Create a dummy scanner script so we get past the "scanner not found" check
+  # and actually test the stdin parsing logic
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+if '--range' in sys.argv:
+    sys.exit(0)
+sys.exit(1)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  # Test 1: Empty stdin (malformed)
+  stderr_output=$( { printf '' | check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: check_secret_scan should return 1 (nonzero) when stdin is empty (fail-closed)\n'
+    exit 1
+  fi
+
+  # Should print a clear reason to stderr
+  if ! printf '%s' "$stderr_output" | grep -qi 'malformed\|parse.*fail\|unable.*parse'; then
+    printf 'FAIL: No clear error message to stderr on malformed stdin\n'
+    printf 'stderr was: %s\n' "$stderr_output"
+    exit 1
+  fi
+
+  # Test 2: Garbage stdin with insufficient tokens (will not parse as valid ref)
+  stderr_output=$( { printf 'garbage garbage\n' | check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: check_secret_scan should return 1 on unparseable stdin (fail-closed)\n'
+    exit 1
+  fi
+
+  printf 'PASS: check_secret_scan correctly blocks push when stdin is malformed\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

@@ -3,16 +3,20 @@ r"""
 Fleet Outcome Ledger — append-only audit trail for dispatched agents.
 
 Subcommands:
-  append <timestamp> <agent_type> <model> <duration_sec> <tokens_in> <tokens_out> [verdict]
+  append <timestamp> <agent_type> <model> <duration_sec> <tokens_in> <tokens_out> [verdict] [phase] [wave]
     Manually append one ledger line (verdict = OK|FAILED|EMPTY|HUNG, default OK)
+    phase = build|verify|repair|other (optional, default null)
+    wave = wave number as integer (optional, default null)
   harvest
     Scan session tasks directories for agent outcomes and append missing entries.
     (Tracks state in ledger directory for resume capability)
   rotate
     Archive ledger lines exceeding ~200 lines to dated archive, keep recent tail in live ledger
+  summary
+    Print total cost/tokens grouped by wave number and phase; supports --json for machine reading
 
 Ledger format (markdown table):
-  | ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict |
+  | ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |
 
 Environment:
   AESOP_STATE_ROOT: Path to state directory (default: ./state relative to cwd)
@@ -47,13 +51,25 @@ def ensure_ledger_header():
     ledger_file, _, ledger_dir = get_ledger_paths()
     if not ledger_file.exists():
         ledger_dir.mkdir(parents=True, exist_ok=True)
-        header = '| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict |\n'
-        header += '|--------|------------|-------|--------------|-----------|------------|--------|\n'
+        header = '| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n'
+        header += '|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n'
         ledger_file.write_text(header, encoding='utf-8')
 
 
-def append_ledger_line(iso_ts, agent_type, model, duration_sec, tokens_in, tokens_out, verdict='OK'):
-    """Append one line to the ledger."""
+def append_ledger_line(iso_ts, agent_type, model, duration_sec, tokens_in, tokens_out, verdict='OK', phase=None, wave=None):
+    """Append one line to the ledger.
+
+    Args:
+        iso_ts: ISO 8601 timestamp
+        agent_type: agent type string
+        model: model identifier
+        duration_sec: duration in seconds
+        tokens_in: input tokens
+        tokens_out: output tokens
+        verdict: OK|FAILED|EMPTY|HUNG (default OK)
+        phase: build|verify|repair|other (optional, default None)
+        wave: wave number as int or None (optional, default None)
+    """
     ensure_ledger_header()
     ledger_file, _, _ = get_ledger_paths()
 
@@ -61,6 +77,20 @@ def append_ledger_line(iso_ts, agent_type, model, duration_sec, tokens_in, token
     agent_type = str(agent_type or '-').replace('|', '').strip()[:30]
     model = str(model or '-').replace('|', '').strip()[:30]
     verdict = str(verdict or 'OK').replace('|', '').strip()[:10]
+
+    # Sanitize optional fields
+    if phase is not None:
+        phase = str(phase).replace('|', '').strip()[:15]
+    else:
+        phase = ''
+
+    if wave is not None:
+        try:
+            wave = str(int(wave))
+        except (ValueError, TypeError):
+            wave = ''
+    else:
+        wave = ''
 
     try:
         dur = int(duration_sec) if duration_sec else 0
@@ -77,7 +107,7 @@ def append_ledger_line(iso_ts, agent_type, model, duration_sec, tokens_in, token
     except (ValueError, TypeError):
         to = 0
 
-    line = f'| {iso_ts} | {agent_type} | {model} | {dur} | {ti} | {to} | {verdict} |\n'
+    line = f'| {iso_ts} | {agent_type} | {model} | {dur} | {ti} | {to} | {verdict} | {phase} | {wave} |\n'
     with open(ledger_file, 'a', encoding='utf-8') as f:
         f.write(line)
 
@@ -230,6 +260,111 @@ def rotate():
     print(f'Live ledger now has {len(new_ledger) - len(header_lines)} data lines')
 
 
+def summary(output_format='text'):
+    """Aggregate ledger entries by wave and phase; report total tokens/cost.
+
+    Args:
+        output_format: 'text' (default) or 'json'
+    """
+    ensure_ledger_header()
+    ledger_file, _, _ = get_ledger_paths()
+
+    try:
+        lines = ledger_file.read_text(encoding='utf-8').split('\n')
+    except (IOError, OSError):
+        print('Error reading ledger')
+        return
+
+    # Parse ledger: skip header and separator lines, parse data lines
+    by_wave_phase = defaultdict(lambda: {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0})
+    by_wave = defaultdict(lambda: {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0})
+    totals = {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0}
+
+    for line in lines:
+        # Skip empty, header, separator lines
+        if not line.strip() or '---|' in line or not line.startswith('|'):
+            continue
+
+        # Parse markdown table row
+        cells = [c.strip() for c in line.split('|')[1:-1]]  # split by |, skip first/last empty
+        if len(cells) < 7:
+            continue
+
+        try:
+            # Original columns: ISO ts, agent_type, model, duration_sec, tokens_in, tokens_out, verdict
+            # New columns: phase, wave
+            iso_ts = cells[0]
+            agent_type = cells[1]
+            model = cells[2]
+            duration_sec = int(cells[3]) if cells[3] else 0
+            tokens_in = int(cells[4]) if cells[4] else 0
+            tokens_out = int(cells[5]) if cells[5] else 0
+            verdict = cells[6] if len(cells) > 6 else 'OK'
+            phase = cells[7].strip() if len(cells) > 7 and cells[7].strip() else None
+            wave = cells[8].strip() if len(cells) > 8 and cells[8].strip() else None
+
+            # Try to parse wave as int
+            wave_num = None
+            if wave:
+                try:
+                    wave_num = int(wave)
+                except ValueError:
+                    pass
+
+            # Accumulate by wave+phase
+            key = (wave_num, phase)
+            by_wave_phase[key]['tokens_out'] += tokens_out
+            by_wave_phase[key]['tokens_in'] += tokens_in
+            by_wave_phase[key]['entries'] += 1
+            by_wave_phase[key]['duration'] += duration_sec
+
+            # Accumulate by wave
+            by_wave[wave_num]['tokens_out'] += tokens_out
+            by_wave[wave_num]['tokens_in'] += tokens_in
+            by_wave[wave_num]['entries'] += 1
+            by_wave[wave_num]['duration'] += duration_sec
+
+            # Accumulate totals
+            totals['tokens_out'] += tokens_out
+            totals['tokens_in'] += tokens_in
+            totals['entries'] += 1
+            totals['duration'] += duration_sec
+
+        except (ValueError, IndexError) as e:
+            # Skip malformed lines silently
+            continue
+
+    if output_format == 'json':
+        import json
+        result = {
+            'by_wave_phase': {str(k): v for k, v in sorted(by_wave_phase.items())},
+            'by_wave': {str(k): v for k, v in sorted(by_wave.items())},
+            'totals': totals
+        }
+        print(json.dumps(result, indent=2))
+    else:
+        # Text format: human-readable table
+        print('\n=== Ledger Summary ===')
+        print(f'\nTotal: {totals["entries"]} entries | {totals["tokens_in"]} in | {totals["tokens_out"]} out | {totals["duration"]}s\n')
+
+        if by_wave_phase:
+            print('By Wave + Phase:')
+            print('  Wave | Phase    | Entries | Tokens In | Tokens Out | Duration')
+            print('  -----|----------|---------|-----------|------------|----------')
+            for (wave_num, phase), stats in sorted(by_wave_phase.items()):
+                w_str = str(wave_num) if wave_num is not None else 'None'
+                p_str = phase if phase else '(no phase)'
+                print(f'  {w_str:4} | {p_str:8} | {stats["entries"]:7} | {stats["tokens_in"]:9} | {stats["tokens_out"]:10} | {stats["duration"]:8}')
+
+        if by_wave:
+            print('\nBy Wave (Total):')
+            print('  Wave | Entries | Tokens In | Tokens Out | Duration')
+            print('  -----|---------|-----------|------------|----------')
+            for wave_num, stats in sorted(by_wave.items()):
+                w_str = str(wave_num) if wave_num is not None else 'None'
+                print(f'  {w_str:4} | {stats["entries"]:7} | {stats["tokens_in"]:9} | {stats["tokens_out"]:10} | {stats["duration"]:8}')
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -238,9 +373,9 @@ def main():
     cmd = sys.argv[1].lower()
 
     if cmd == 'append':
-        # append <ts> <agent_type> <model> <dur> <tokens_in> <tokens_out> [verdict]
+        # append <ts> <agent_type> <model> <dur> <tokens_in> <tokens_out> [verdict] [phase] [wave]
         if len(sys.argv) < 7:
-            print('Usage: fleet_ledger.py append <ts> <agent_type> <model> <dur_sec> <tokens_in> <tokens_out> [verdict]')
+            print('Usage: fleet_ledger.py append <ts> <agent_type> <model> <dur_sec> <tokens_in> <tokens_out> [verdict] [phase] [wave]')
             sys.exit(1)
 
         ts = sys.argv[2]
@@ -250,15 +385,21 @@ def main():
         ti = sys.argv[6]
         to = sys.argv[7] if len(sys.argv) > 7 else '0'
         verdict = sys.argv[8] if len(sys.argv) > 8 else 'OK'
+        phase = sys.argv[9] if len(sys.argv) > 9 else None
+        wave = sys.argv[10] if len(sys.argv) > 10 else None
 
-        append_ledger_line(ts, agent_type, model, dur, ti, to, verdict)
-        print(f'Appended: {ts} {agent_type} {model} {dur}s {ti}->{to} [{verdict}]')
+        append_ledger_line(ts, agent_type, model, dur, ti, to, verdict, phase, wave)
+        print(f'Appended: {ts} {agent_type} {model} {dur}s {ti}->{to} [{verdict}] phase={phase} wave={wave}')
 
     elif cmd == 'harvest':
         harvest()
 
     elif cmd == 'rotate':
         rotate()
+
+    elif cmd == 'summary':
+        output_fmt = 'json' if '--json' in sys.argv else 'text'
+        summary(output_fmt)
 
     else:
         print(f'Unknown command: {cmd}')

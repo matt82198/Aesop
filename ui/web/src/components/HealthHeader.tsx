@@ -22,6 +22,8 @@ interface HealthHeaderProps {
   alerts: Alert | null;
   connectionStatus: SSEConnectionStatus;
   dataTimestamp?: number | null; // Epoch ms when last SSE payload was received
+  heartbeatTimestamp?: number | null; // Epoch ms when last heartbeat was received (wave-20 liveness)
+  now?: number; // Wall-clock time for staleness re-evaluation (updated ~5s)
   onThemeToggle: () => void;
   onRefresh: () => void;
 }
@@ -60,6 +62,8 @@ export function HealthHeader({
   alerts,
   connectionStatus,
   dataTimestamp,
+  heartbeatTimestamp,
+  now,
   onThemeToggle,
   onRefresh,
 }: HealthHeaderProps) {
@@ -90,11 +94,16 @@ export function HealthHeader({
   const agentsCount = agents?.length ?? 0;
   const alertsCount = alerts?.count ?? 0;
 
-  // Compute data staleness (stale if > 60 seconds old)
-  const dataAgeMs = dataTimestamp ? Date.now() - dataTimestamp : -1;
-  const isDataStale = dataAgeMs > 60000;
+  // Compute staleness: data stale if > 60s old, OR heartbeat stale if > 60s old (wave-20 liveness)
+  // Use wall-clock 'now' if available for proper re-evaluation without SSE traffic
+  const currentTime = now ?? Date.now();
+  const dataAgeMs = dataTimestamp ? currentTime - dataTimestamp : -1;
+  const heartbeatAgeMs = heartbeatTimestamp ? currentTime - heartbeatTimestamp : -1;
+
+  // Stale if either data or heartbeat exceeds 60s (or if heartbeat exists but data doesn't)
+  const isDataStale = dataAgeMs > 60000 || (heartbeatAgeMs >= 0 && heartbeatAgeMs > 60000);
   const dataTimeStr = dataTimestamp ? formatRelativeTime(dataTimestamp) : 'unknown';
-  const stalenessAge = isDataStale ? formatAge(Math.floor(dataAgeMs / 1000)) : null;
+  const stalenessAge = isDataStale ? formatAge(Math.floor(Math.max(dataAgeMs, heartbeatAgeMs) / 1000)) : null;
 
   // Determine max severity for alerts color
   let maxAlertSeverity = 'neutral';

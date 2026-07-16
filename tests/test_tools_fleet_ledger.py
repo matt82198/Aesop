@@ -182,6 +182,109 @@ class TestFleetLedger(unittest.TestCase):
         # Should create the directory and succeed
         self.assertTrue(bad_state.exists())
 
+    def test_append_with_phase_and_wave(self):
+        """Test appending entry with phase and wave tags."""
+        ts = "2024-07-13T10:00:00"
+        result = self._run_ledger(
+            "append", ts, "agent", "model", "10", "100", "200", "OK", "build", "1"
+        )
+        self.assertEqual(result.returncode, 0)
+
+        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
+        content = ledger_file.read_text()
+
+        # Should contain phase and wave columns
+        self.assertIn("phase", content)
+        self.assertIn("wave", content)
+        self.assertIn("build", content)
+        self.assertIn("1", content)
+
+    def test_append_backward_compat_no_phase_wave(self):
+        """Test that old-style append (no phase/wave) still works."""
+        ts = "2024-07-13T10:00:00"
+        # Old-style: only verdict provided, no phase or wave
+        result = self._run_ledger(
+            "append", ts, "agent", "model", "10", "100", "200", "OK"
+        )
+        self.assertEqual(result.returncode, 0)
+
+        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
+        content = ledger_file.read_text()
+
+        # Should have empty phase and wave fields (represented as blank cells)
+        self.assertIn("|", content)
+
+    def test_append_phase_only(self):
+        """Test appending with phase but no wave."""
+        ts = "2024-07-13T10:00:00"
+        result = self._run_ledger(
+            "append", ts, "agent", "model", "10", "100", "200", "OK", "verify"
+        )
+        self.assertEqual(result.returncode, 0)
+
+        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
+        content = ledger_file.read_text()
+
+        self.assertIn("verify", content)
+
+    def test_summary_empty_ledger(self):
+        """Test summary subcommand on empty ledger."""
+        result = self._run_ledger("summary")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Total:", result.stdout)
+        self.assertIn("0 entries", result.stdout)
+
+    def test_summary_with_entries(self):
+        """Test summary aggregation with multiple entries."""
+        # Add entries with different phases and waves
+        self._run_ledger("append", "2024-07-13T10:00:00", "agent1", "model", "10", "100", "200", "OK", "build", "1")
+        self._run_ledger("append", "2024-07-13T10:05:00", "agent2", "model", "15", "150", "250", "OK", "verify", "1")
+        self._run_ledger("append", "2024-07-13T10:10:00", "agent3", "model", "5", "50", "100", "OK", "build", "2")
+
+        result = self._run_ledger("summary")
+        self.assertEqual(result.returncode, 0)
+
+        # Should show totals
+        self.assertIn("3 entries", result.stdout)
+        # Total tokens out: 200 + 250 + 100 = 550
+        self.assertIn("550", result.stdout)
+        # Should mention waves
+        self.assertIn("Wave", result.stdout)
+
+    def test_summary_json_format(self):
+        """Test summary with JSON output."""
+        self._run_ledger("append", "2024-07-13T10:00:00", "agent", "model", "10", "100", "200", "OK", "build", "1")
+
+        result = self._run_ledger("summary", "--json")
+        self.assertEqual(result.returncode, 0)
+
+        # Parse JSON output
+        import json
+        try:
+            data = json.loads(result.stdout)
+            self.assertIn("totals", data)
+            self.assertEqual(data["totals"]["entries"], 1)
+            self.assertEqual(data["totals"]["tokens_out"], 200)
+        except json.JSONDecodeError:
+            self.fail("Summary --json output is not valid JSON")
+
+    def test_summary_groups_by_phase_and_wave(self):
+        """Test that summary correctly groups by wave and phase."""
+        # Add multiple entries for same wave+phase
+        self._run_ledger("append", "2024-07-13T10:00:00", "a1", "model", "10", "100", "200", "OK", "build", "1")
+        self._run_ledger("append", "2024-07-13T10:05:00", "a2", "model", "5", "50", "100", "OK", "build", "1")
+        # Different phase, same wave
+        self._run_ledger("append", "2024-07-13T10:10:00", "a3", "model", "8", "80", "150", "OK", "verify", "1")
+
+        result = self._run_ledger("summary", "--json")
+        self.assertEqual(result.returncode, 0)
+
+        import json
+        data = json.loads(result.stdout)
+        # Should have grouped entries for (1, "build") and (1, "verify")
+        self.assertIn("by_wave_phase", data)
+        self.assertEqual(data["totals"]["entries"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

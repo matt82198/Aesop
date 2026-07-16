@@ -74,29 +74,201 @@ class TestCiMergeWait(unittest.TestCase):
                 # Can't easily patch subprocess inside a subprocess, so test exit behavior
                 self.assertNotEqual(result.returncode, 0)
 
-    def test_check_ci_status_function(self):
-        """Test check_ci_status function logic."""
+    def test_check_ci_status_function_checkrun_completed_success(self):
+        """Test check_ci_status with real CheckRun: COMPLETED + success conclusion."""
         import importlib.util
         spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        # Test PENDING
-        result = module.check_ci_status([{"status": "PENDING", "name": "test"}])
-        self.assertEqual(result[0], "pending")
+        # Real CheckRun payload with COMPLETED status and null/empty conclusion = success
+        checkrun_success = [
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": None},
+            {"name": "lint", "status": "COMPLETED", "conclusion": ""},
+        ]
+        result = module.check_ci_status(checkrun_success)
+        self.assertEqual(result[0], "success", "COMPLETED + no/empty conclusion should be success")
 
-        # Test SUCCESS
-        result = module.check_ci_status([{"status": "SUCCESS", "name": "test"}])
-        self.assertEqual(result[0], "success")
+    def test_check_ci_status_function_checkrun_completed_failure(self):
+        """Test check_ci_status with real CheckRun: COMPLETED + failure conclusion."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
 
-        # Test FAILURE
-        result = module.check_ci_status([{"status": "FAILURE", "name": "test"}])
-        self.assertEqual(result[0], "failure")
-        self.assertEqual(result[1], "test")
+        # Real CheckRun payload with COMPLETED status and FAILURE conclusion
+        checkrun_failure = [
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": "FAILURE"},
+        ]
+        result = module.check_ci_status(checkrun_failure)
+        self.assertEqual(result[0], "failure", "COMPLETED + FAILURE conclusion should be failure")
+        self.assertEqual(result[1], "test-unit")
 
-        # Test empty
-        result = module.check_ci_status([])
-        self.assertEqual(result[0], "success")
+    def test_check_ci_status_function_checkrun_completed_cancelled(self):
+        """Test check_ci_status with real CheckRun: COMPLETED + CANCELLED conclusion."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # CheckRun with CANCELLED conclusion counts as failure
+        checkrun = [
+            {"name": "test", "status": "COMPLETED", "conclusion": "CANCELLED"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "failure", "COMPLETED + CANCELLED should be failure")
+
+    def test_check_ci_status_function_checkrun_completed_timed_out(self):
+        """Test check_ci_status with real CheckRun: COMPLETED + TIMED_OUT conclusion."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        checkrun = [
+            {"name": "test", "status": "COMPLETED", "conclusion": "TIMED_OUT"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "failure", "COMPLETED + TIMED_OUT should be failure")
+
+    def test_check_ci_status_function_checkrun_completed_action_required(self):
+        """Test check_ci_status with real CheckRun: COMPLETED + ACTION_REQUIRED conclusion."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        checkrun = [
+            {"name": "test", "status": "COMPLETED", "conclusion": "ACTION_REQUIRED"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "failure", "COMPLETED + ACTION_REQUIRED should be failure")
+
+    def test_check_ci_status_function_checkrun_completed_startup_failure(self):
+        """Test check_ci_status with real CheckRun: COMPLETED + STARTUP_FAILURE conclusion."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        checkrun = [
+            {"name": "test", "status": "COMPLETED", "conclusion": "STARTUP_FAILURE"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "failure", "COMPLETED + STARTUP_FAILURE should be failure")
+
+    def test_check_ci_status_function_checkrun_in_progress(self):
+        """Test check_ci_status with real CheckRun: IN_PROGRESS should be pending."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Real CheckRun payload with IN_PROGRESS status = pending
+        checkrun_in_progress = [
+            {"name": "test-unit", "status": "IN_PROGRESS", "conclusion": None},
+        ]
+        result = module.check_ci_status(checkrun_in_progress)
+        self.assertEqual(result[0], "pending", "IN_PROGRESS should be pending")
+
+    def test_check_ci_status_function_checkrun_queued(self):
+        """Test check_ci_status with real CheckRun: QUEUED should be pending."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        checkrun_queued = [
+            {"name": "test-unit", "status": "QUEUED", "conclusion": None},
+        ]
+        result = module.check_ci_status(checkrun_queued)
+        self.assertEqual(result[0], "pending", "QUEUED should be pending")
+
+    def test_check_ci_status_function_statuscontext_success(self):
+        """Test check_ci_status with real StatusContext: state=success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Real StatusContext payload (no 'status' field, uses 'state' instead)
+        status_context_success = [
+            {"name": "continuous-integration/travis-ci/push", "state": "success"},
+        ]
+        result = module.check_ci_status(status_context_success)
+        self.assertEqual(result[0], "success", "StatusContext with state=success should be success")
+
+    def test_check_ci_status_function_statuscontext_failure(self):
+        """Test check_ci_status with real StatusContext: state=failure."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        status_context_failure = [
+            {"name": "continuous-integration/travis-ci/push", "state": "failure"},
+        ]
+        result = module.check_ci_status(status_context_failure)
+        self.assertEqual(result[0], "failure", "StatusContext with state=failure should be failure")
+        self.assertEqual(result[1], "continuous-integration/travis-ci/push")
+
+    def test_check_ci_status_function_statuscontext_pending(self):
+        """Test check_ci_status with real StatusContext: state=pending."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        status_context_pending = [
+            {"name": "continuous-integration/travis-ci/push", "state": "pending"},
+        ]
+        result = module.check_ci_status(status_context_pending)
+        self.assertEqual(result[0], "pending", "StatusContext with state=pending should be pending")
+
+    def test_check_ci_status_function_mixed_checkrun_statuscontext(self):
+        """Test check_ci_status with mixed CheckRun and StatusContext entries."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Real mixed payload from gh pr view
+        mixed = [
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": None},  # CheckRun: success
+            {"name": "travis-ci", "state": "success"},  # StatusContext: success
+            {"name": "lint", "status": "IN_PROGRESS", "conclusion": None},  # CheckRun: pending
+        ]
+        result = module.check_ci_status(mixed)
+        self.assertEqual(result[0], "pending", "Mixed with pending IN_PROGRESS should be pending")
+
+    def test_check_ci_status_function_mixed_checkrun_statuscontext_failure(self):
+        """Test check_ci_status with mixed entries where one fails."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        mixed = [
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": None},  # CheckRun: success
+            {"name": "travis-ci", "state": "failure"},  # StatusContext: failure
+        ]
+        result = module.check_ci_status(mixed)
+        self.assertEqual(result[0], "failure", "Mixed with failed StatusContext should be failure")
+
+    def test_check_ci_status_function_unrecognized_shape_fails_closed(self):
+        """Test check_ci_status with unrecognized check shape defaults to failure/pending."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Unrecognized shape (no status/state/conclusion)
+        unrecognized = [
+            {"name": "mystery-check"},  # No status, state, or conclusion
+        ]
+        result = module.check_ci_status(unrecognized)
+        # Fail-closed: unrecognized should never succeed
+        self.assertNotEqual(result[0], "success", "Unrecognized check shape should fail-closed (not success)")
 
     def test_invalid_pr_number(self):
         """Test that invalid PR number is rejected."""
@@ -181,6 +353,94 @@ class TestCiMergeWait(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         # Verify no error about missing PR
         self.assertNotIn("required", result.stderr.lower())
+
+    def test_check_ci_status_function_checkrun_completed_neutral(self):
+        """Test check_ci_status with CheckRun: COMPLETED + NEUTRAL conclusion should be success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # CheckRun with NEUTRAL conclusion is non-blocking, should be success
+        checkrun = [
+            {"name": "advisory-check", "status": "COMPLETED", "conclusion": "NEUTRAL"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "success", "COMPLETED + NEUTRAL should be success (non-blocking advisory)")
+
+    def test_check_ci_status_function_checkrun_completed_skipped(self):
+        """Test check_ci_status with CheckRun: COMPLETED + SKIPPED conclusion should be success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # CheckRun with SKIPPED conclusion is non-blocking, should be success
+        checkrun = [
+            {"name": "skipped-check", "status": "COMPLETED", "conclusion": "SKIPPED"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "success", "COMPLETED + SKIPPED should be success (non-blocking)")
+
+    def test_check_ci_status_function_statuscontext_neutral(self):
+        """Test check_ci_status with StatusContext: state=neutral should be success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # StatusContext with neutral state is non-blocking
+        status_context = [
+            {"name": "optional-check", "state": "neutral"},
+        ]
+        result = module.check_ci_status(status_context)
+        self.assertEqual(result[0], "success", "StatusContext state=neutral should be success (non-blocking advisory)")
+
+    def test_check_ci_status_function_statuscontext_skipped(self):
+        """Test check_ci_status with StatusContext: state=skipped should be success."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # StatusContext with skipped state is non-blocking
+        status_context = [
+            {"name": "optional-check", "state": "skipped"},
+        ]
+        result = module.check_ci_status(status_context)
+        self.assertEqual(result[0], "success", "StatusContext state=skipped should be success (non-blocking)")
+
+    def test_check_ci_status_function_unknown_state_fails_closed(self):
+        """Test check_ci_status with fabricated unknown state defaults to pending."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Fabricated unknown state that should fail-closed as pending
+        status_context = [
+            {"name": "mystery-state-check", "state": "fabricated_unknown_state"},
+        ]
+        result = module.check_ci_status(status_context)
+        self.assertNotEqual(result[0], "success", "Unknown state should fail-closed (not succeed)")
+        self.assertEqual(result[0], "pending", "Unknown state should default to pending (fail-closed)")
+
+    def test_check_ci_status_function_mixed_with_neutral_skipped(self):
+        """Test check_ci_status with mixed checks including neutral and skipped."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Mix of required, neutral, and skipped checks - should all be success
+        mixed = [
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": None},  # Regular success
+            {"name": "advisory-lint", "status": "COMPLETED", "conclusion": "NEUTRAL"},  # Advisory
+            {"name": "optional-scan", "status": "COMPLETED", "conclusion": "SKIPPED"},  # Skipped
+            {"name": "travis-ci", "state": "success"},  # StatusContext success
+        ]
+        result = module.check_ci_status(mixed)
+        self.assertEqual(result[0], "success", "All non-blocking checks should result in success")
 
 
 if __name__ == "__main__":

@@ -33,6 +33,29 @@ def _path_is_contained(child, root):
             return False
 
 
+def sanitize_agents_for_broadcast(agents):
+    """Strip large prompt fields from agents before SSE broadcast.
+
+    Wave-19 fix: Remove promptFull, dispatch_prompt, and other multi-KB fields
+    from agents snapshots before sending via SSE. The React app never reads
+    these full prompts (it lazy-fetches them via /agent?id= endpoint), so
+    stripping them saves bandwidth on every tick. Keeps summary fields only.
+    """
+    sanitized = []
+    for agent in agents:
+        if not isinstance(agent, dict):
+            sanitized.append(agent)
+            continue
+        # Drop only the multi-KB prompt fields; keep everything else the
+        # frontend Agent contract reads (ui/web/src/lib/types.ts) — id,
+        # project, status, age_s, hint, startedAt, lastActivity,
+        # runtimeSeconds, tokensUsed, taskLabel.
+        strip_fields = {"promptFull", "dispatch_prompt"}
+        summary = {k: v for k, v in agent.items() if k not in strip_fields}
+        sanitized.append(summary)
+    return sanitized
+
+
 def get_fleet_agents():
     """Detect running subagents by calling dash-extra.mjs --json.
 

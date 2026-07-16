@@ -74,6 +74,71 @@ get_untracked_files() {
   ) | sort -u
 }
 
+scan_unpushed_commits() {
+  local repo="$1"
+  local file_paths=()
+  local repo_win
+  local unpushed_files
+
+  # Portable path derivation (not Git-Bash pwd -W only)
+  repo_win=$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "$repo")
+
+  # Detect if upstream exists (no-upstream or detached HEAD scenario)
+  local upstream
+  upstream=$(cd "$repo" 2>/dev/null && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+
+  if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
+    # No upstream or detached HEAD: fallback to scanning recent commits (last 20)
+    # Use git rev-list to get the base commit 20 commits back, then use git diff
+    log "WARN: Repository has no upstream or detached HEAD; falling back to bounded commit range scan for $repo"
+    unpushed_files=$(
+      cd "$repo" || return 1
+      # Get the commit 20 commits ago (or earliest commit if repo is smaller)
+      local base
+      base=$(git rev-list --max-count=20 HEAD 2>/dev/null | tail -1)
+      if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD 2>/dev/null)" ]; then
+        # Multiple commits exist: scan from base to HEAD
+        git diff --name-only "$base..HEAD" 2>/dev/null | sort -u
+      elif [ -n "$base" ]; then
+        # Single commit or base == HEAD: scan just HEAD
+        git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | sort -u
+      fi
+    )
+  else
+    # Normal case: scan commits not yet pushed to upstream
+    unpushed_files=$(
+      cd "$repo" || return 1
+      git diff --name-only @{u}..HEAD 2>/dev/null | sort -u
+    )
+  fi
+
+  if [ -n "$unpushed_files" ]; then
+    while IFS= read -r file; do
+      if [ -n "$file" ] && [ -f "$repo/$file" ]; then
+        file_paths+=("$repo_win/$file")
+      fi
+    done <<EOF
+$unpushed_files
+EOF
+  fi
+
+  if [ ${#file_paths[@]} -eq 0 ]; then
+    return 0
+  fi
+
+  if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+      python3 "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      return $?
+    elif command -v python >/dev/null 2>&1; then
+      python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      return $?
+    fi
+  fi
+
+  return 0
+}
+
 scan_tracked_files() {
   local repo="$1"
   local tracked_files
@@ -81,8 +146,8 @@ scan_tracked_files() {
   local -a file_paths=()
   local repo_win
 
-  # Convert repo path to Windows format for Python compatibility (Git Bash on Windows)
-  repo_win=$(cd "$repo" 2>/dev/null && pwd -W 2>/dev/null || echo "$repo")
+  # Portable path derivation (not Git-Bash pwd -W only)
+  repo_win=$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "$repo")
 
   tracked_files=$(get_tracked_modifications "$repo")
   untracked_files=$(get_untracked_files "$repo")
@@ -115,8 +180,14 @@ EOF
 
   if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
     # ITEM 2 fix: use "${file_paths[@]}" to properly quote array elements
-    python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
-    return $?
+    # Defect (a) fix: use python3||python probe instead of bare python (portable to python3-only systems)
+    if command -v python3 >/dev/null 2>&1; then
+      python3 "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      return $?
+    elif command -v python >/dev/null 2>&1; then
+      python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      return $?
+    fi
   fi
 
   return 0
@@ -160,14 +231,27 @@ process_repo() {
       fi
     fi
 
-    local unpushed=$(git log @{u}.. --oneline 2>/dev/null | wc -l | tr -d ' ')
+    # Detect if upstream exists before trying to count unpushed commits
+    local upstream
+    upstream=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+
+    local unpushed
+    if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
+      # No upstream or detached HEAD: count recent commits instead (last 20)
+      log "WARN: Repository has no upstream or detached HEAD; falling back to recent commits count for $name"
+      unpushed=$(git log --oneline -20 2>/dev/null | wc -l | tr -d ' ')
+    else
+      # Normal case: count commits not yet pushed to upstream
+      unpushed=$(git log @{u}.. --oneline 2>/dev/null | wc -l | tr -d ' ')
+    fi
+
     if [ "$unpushed" -gt 0 ]; then
       local branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
       [ "$branch" = "HEAD" ] && branch="$default"
 
       if [ "$branch" = "$default" ]; then
         WIPREF="backup/master-wip-$(date +%Y%m%d)"
-        if scan_tracked_files "$repo"; then
+        if scan_unpushed_commits "$repo"; then
           if git push -qf origin "HEAD:refs/heads/$WIPREF" 2>/dev/null; then
             printf 'SNAPSHOTTED\0%s\n' "$name"
             exit 0
@@ -177,7 +261,7 @@ process_repo() {
           exit 0
         fi
       else
-        if scan_tracked_files "$repo"; then
+        if scan_unpushed_commits "$repo"; then
           if git push -q origin "$branch" 2>/dev/null; then
             printf 'PUSHED\0%s\n' "$name"
             exit 0
@@ -243,7 +327,7 @@ if [ -n "$repos_to_scan" ]; then
     # Normalize path to detect duplicates
     real_dir=$(cd "$dir" && pwd 2>/dev/null)
     if [ -z "$real_dir" ]; then continue; fi
-    if echo "$processed_paths" | grep -Fq "$real_dir"; then
+    if echo "$processed_paths" | grep -Fxq "$real_dir"; then
       continue
     fi
     processed_paths="$processed_paths
@@ -278,7 +362,7 @@ else
     # Normalize path to detect duplicates (e.g., .claude vs .claude/)
     real_dir=$(cd "$dir" && pwd 2>/dev/null)
     if [ -z "$real_dir" ]; then continue; fi
-    if echo "$processed_paths" | grep -Fq "$real_dir"; then
+    if echo "$processed_paths" | grep -Fxq "$real_dir"; then
       continue
     fi
     processed_paths="$processed_paths
