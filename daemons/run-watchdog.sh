@@ -59,7 +59,11 @@ acquire_lock() {
     # Check if both required files exist
     if [ -f "$lock_dir/timestamp" ] && [ -f "$lock_dir/pid" ] && [ -n "$lock_pid" ]; then
       # Both files present and pid is readable - use timestamp for stale check
-      local lock_mtime=$(cat "$lock_dir/timestamp" 2>/dev/null || echo 0)
+      local lock_ts=$(cat "$lock_dir/timestamp" 2>/dev/null)
+      local lock_mtime=${lock_ts:-0}
+      if [ -z "$lock_ts" ]; then
+        echo "empty/corrupt lock timestamp — treating lock as stale" >&2
+      fi
       local now=$(date +%s)
       local lock_age=$((now - lock_mtime))
 
@@ -87,7 +91,11 @@ acquire_lock() {
 
       # Case 2: no pid file, but timestamp exists and is old (definitely abandoned)
       if [ $should_reclaim -eq 0 ] && [ -f "$lock_dir/timestamp" ]; then
-        local lock_mtime=$(cat "$lock_dir/timestamp" 2>/dev/null || echo 0)
+        local lock_ts=$(cat "$lock_dir/timestamp" 2>/dev/null)
+        local lock_mtime=${lock_ts:-0}
+        if [ -z "$lock_ts" ]; then
+          echo "empty/corrupt lock timestamp — treating lock as stale" >&2
+        fi
         local now=$(date +%s)
         local lock_age=$((now - lock_mtime))
         if [ "$lock_age" -gt "$stale_threshold" ]; then

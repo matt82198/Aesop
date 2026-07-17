@@ -23,9 +23,11 @@ per-item branches → merge green PRs. Never idle while agents run. On session d
 resume from this file + AUDIT-BACKLOG.md.
 
 ## Phase: `rc-1-published-source-available` (2026-07-17, current)
-Waves 25–rc.1 shipped the **credibility, safety, and release-readiness** pillars, culminating in
-published `@matt82198/aesop@0.1.0-rc.1` (dist-tag `rc`, npm trusted publishing via OIDC),
-GitHub release v0.1.0-rc.1, and relicense to PolyForm Strict 1.0.0 (SOURCE-AVAILABLE).
+**0.1.0 STABLE promoted to npm `@latest` 2026-07-17** (PR #187, main `ce8b21f`) — from
+`0.1.0-rc.1` (npm trusted publishing via OIDC). Waves 25–rc.1 shipped the **credibility, safety,
+and release-readiness** pillars; relicensed PolyForm Strict 1.0.0 (SOURCE-AVAILABLE).
+**Wave-rc.2 OPEN 2026-07-17**: delta audit (11 lenses, primer-aware, surface 53212d9..HEAD)
+running; scope = 5 honest residuals below + audit findings, PM-ranked before dispatch.
 Session arc (verified, measured, live):
 - Opus-VERIFIED audit (wave-25, PR #166): 18/18 findings confirmed, 0 hallucinations, 16 fixes, no P0/P1.
 - Kill-switch built + wired + PROVEN (wave-26–27, PRs #167–#168, claude-config): halt.py, cost_ceiling.py,

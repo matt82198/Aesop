@@ -172,6 +172,13 @@ export async function fetchWavePRs(): Promise<WavePRBoardData> {
 }
 
 /**
+ * Generic GET helper for typed API calls (wave telemetry, etc.)
+ */
+export async function fetchApi<T>(url: string): Promise<T> {
+  return typedFetch<T>(url, { method: 'GET', requireCSRF: false });
+}
+
+/**
  * POST /submit — submit text to inbox
  */
 export async function submitInbox(text: string): Promise<SubmitResponse> {

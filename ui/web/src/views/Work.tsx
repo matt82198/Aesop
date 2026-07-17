@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { TrackerBoard } from '../components/TrackerBoard';
 import { TrackerForm } from '../components/TrackerForm';
 import { BacklogPanel } from '../components/BacklogPanel';
+import { WaveTelemetryCost } from '../components/WaveTelemetryCost';
 import { TESTIDS } from '../test/fixtures';
 import type { TrackerItem, AuditBacklog } from '../lib/types';
 import type { SSEState } from '../lib/useSSE';
@@ -75,6 +76,7 @@ export function Work({ tracker, backlog: backlogProp }: WorkProps) {
         </div>
 
         <aside className="work-sidebar">
+          <WaveTelemetryCost />
           <BacklogPanel backlog={backlog} />
         </aside>
       </div>

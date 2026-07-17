@@ -15,6 +15,7 @@ import { AlertsPanel } from '../components/AlertsPanel';
 import { EventsFeed } from '../components/EventsFeed';
 import { ReposPanel } from '../components/ReposPanel';
 import { InboxForm } from '../components/InboxForm';
+import { WaveTelemetryProgress } from '../components/WaveTelemetryProgress';
 import { TESTIDS } from '../test/fixtures';
 import './Overview.css';
 
@@ -28,6 +29,10 @@ interface OverviewProps {
 export function Overview({ agents, alerts, events, repos }: OverviewProps) {
   return (
     <div className="overview" data-testid={TESTIDS.viewOverview}>
+      <section className="overview__section overview__section--full">
+        <WaveTelemetryProgress />
+      </section>
+
       <section className="overview__section overview__section--full">
         <AgentsPanel agents={agents} />
       </section>

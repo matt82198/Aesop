@@ -5,9 +5,11 @@ the ingest -> project -> export round-trip against the REAL state/tracker.json.
 """
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -24,10 +26,29 @@ from state_store import (  # noqa: E402
 )
 
 
+def _retry_on_db_lock(func, max_retries=3, delay=0.1):
+    """Retry a function up to max_retries times if it hits 'database is locked' error.
+
+    Used during CI parallel shard execution when multiple shards may briefly
+    contend on filesystem-level WAL locks.
+    """
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except sqlite3.OperationalError as e:
+            if "database is locked" not in str(e):
+                raise
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(delay * (2 ** attempt))  # exponential backoff
+
+
 class EventStoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, "events.db")
+        # Initialize the database with retry (can fail on WAL lock in parallel CI shards)
+        _retry_on_db_lock(lambda: EventStore(self.db))
 
     def tearDown(self):
         import shutil
@@ -72,10 +93,10 @@ class EventStoreTest(unittest.TestCase):
         barrier = threading.Barrier(2)
 
         def worker():
-            store = EventStore(self.db)
+            store = _retry_on_db_lock(lambda: EventStore(self.db))
             barrier.wait()
             for _ in range(n):
-                store.append("s", "e", {}, "t")
+                _retry_on_db_lock(lambda: store.append("s", "e", {}, "t"))
 
         threads = [threading.Thread(target=worker) for _ in range(2)]
         for t in threads:
@@ -118,6 +139,8 @@ class ApiAndExportTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, "events.db")
+        # Initialize the database with retry (can fail on WAL lock in parallel CI shards)
+        _retry_on_db_lock(lambda: EventStore(self.db))
 
     def tearDown(self):
         import shutil

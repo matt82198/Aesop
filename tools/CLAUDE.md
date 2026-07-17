@@ -14,6 +14,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
+- `git_identity_check.py` — Validate repo git user.name/user.email against expected values (CLI args or aesop.config.json); detect .git/config drift via physical file inspection
 - `halt.py` — Kill-switch: writes/reads/clears the `.HALT` sentinel that daemons/dispatch check to stop the fleet
 - `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
 - `heartbeat.py` — Single-instance loop liveness registry
@@ -36,10 +37,12 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (with lazy import error handling)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
-- `verify_dash.py` — Browser proof for realtime SSE dashboard
-- `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
-- `verify_prboard.py` — Browser proof for the Wave PR Board (/api/wave/prs), gh stubbed via AESOP_GH_BIN
+- `verify_activity_filter.py` — Browser proof for Activity view agent status filter (All/Running/Error-Suspicious filters)
 - `verify_agent_inspector.py` — Browser proof for the Agent Inspector drawer (/api/agent?id=), agents + transcript stubbed via a temp AESOP_ROOT
+- `verify_dash.py` — Browser proof for realtime SSE dashboard
+- `verify_prboard.py` — Browser proof for the Wave PR Board (/api/wave/prs), gh stubbed via AESOP_GH_BIN
+- `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
+- `verify_wave_telemetry.py` — Browser proof for wave telemetry components (WaveTelemetryProgress, WaveTelemetryCost)
 - `agent-forensics.sh` — Incident forensics / behavior reconstruction
 
 ## secret_scan.py — Pre-push secret/credential detection gate

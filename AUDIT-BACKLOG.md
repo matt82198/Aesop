@@ -1,5 +1,9 @@
 # Audit backlog — refinement loop (live)
 
+> **OBSOLETE (2026-07-17, wave-rc.2):** this file froze at wave-8 and does not track waves 9+.
+> The live backlog is the tracker (`state/tracker.json`, dashboard Work view) plus the ranked
+> wave plans under `~/conductor3/plans/`. Kept for history only — do not dispatch from it.
+
 Durable handoff for the continuous refinement loop: survives terminal kills / model
 switches. A resuming session (Fable) reads STATE.md → this file → dispatches one Haiku
 per unclaimed item on its own branch (branch-per-item, worktree isolation), TDD-first,

@@ -14,6 +14,7 @@ import cost
 import csrf
 import sse
 import wave_prs
+import wave_telemetry
 import api
 import api.tracker
 import api.submit
@@ -197,6 +198,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_cost()
         elif self.path == "/api/wave/prs":
             self.serve_api_wave_prs()
+        elif self.path == "/api/wave/telemetry":
+            self.serve_api_wave_telemetry()
         elif self.path == "/api/backlog":
             self.serve_backlog()
         elif self.path == "/api/agents":
@@ -422,6 +425,26 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
             print(f"[serve_api_wave_prs] Uncaught exception: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_wave_telemetry(self):
+        """GET /api/wave/telemetry — current wave phase, cost metrics, and top blocker.
+
+        Read-only; reads state at call time (no caching). Returns wave phase info,
+        current cost metrics, and top blocker from AUDIT-BACKLOG.md.
+        """
+        try:
+            payload = wave_telemetry.get_wave_telemetry()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            print(f"[serve_api_wave_telemetry] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
