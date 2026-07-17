@@ -10,9 +10,20 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const CURRENT_DIR = process.cwd();
+
+// Resolve Python interpreter portably (prefer python3, fallback to python)
+function resolvePythonInterpreter() {
+  if (spawnSync('python3', ['--version'], { stdio: 'ignore' }).error === undefined) {
+    return 'python3';
+  }
+  if (spawnSync('python', ['--version'], { stdio: 'ignore' }).error === undefined) {
+    return 'python';
+  }
+  return null;
+}
 
 function loadConfig() {
   const configPath = path.join(CURRENT_DIR, 'aesop.config.json');
@@ -58,8 +69,17 @@ function loadConfig() {
 
     console.log(`Launching aesop dashboard on http://localhost:${port}\n`);
 
+    // Resolve Python interpreter
+    const pythonExe = resolvePythonInterpreter();
+    if (!pythonExe) {
+      console.error('Error: python3 or python not found on PATH');
+      console.error('Please install Python 3 to run the dashboard');
+      process.exitCode = 1;
+      return;
+    }
+
     // Spawn the dashboard script with PORT env var set
-    const proc = spawn('python', [dashScript], {
+    const proc = spawn(pythonExe, [dashScript], {
       cwd: CURRENT_DIR,
       stdio: 'inherit',
       env: { ...process.env, PORT: port.toString() },
