@@ -35,13 +35,19 @@ jobs:
         run: |
           VERSION=$(node -e "console.log(require('./package.json').version)")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          if [[ "$VERSION" =~ - ]]; then
-            echo "tag=beta" >> $GITHUB_OUTPUT
-            echo "Using dist-tag: beta (prerelease version: $VERSION)"
+          if [[ "$VERSION" =~ -rc\. ]]; then
+            TAG=rc
+          elif [[ "$VERSION" =~ -beta\. ]]; then
+            TAG=beta
+          elif [[ "$VERSION" =~ -alpha\. ]]; then
+            TAG=alpha
+          elif [[ "$VERSION" =~ - ]]; then
+            TAG=next
           else
-            echo "tag=latest" >> $GITHUB_OUTPUT
-            echo "Using dist-tag: latest (stable version: $VERSION)"
+            TAG=latest
           fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Using dist-tag: $TAG (version: $VERSION)"
 
       - name: Verify OIDC trusted publishing is configured
         # This workflow uses npm's OIDC trusted publishing for authentication
