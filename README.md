@@ -14,7 +14,27 @@
 
 **Aesop** is a source-available orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
 
+As of **0.1.0-rc.1**, that loop has carried the project to an installable, tested, audited, and benchmarked release candidate—the fleet running the wave loop on its own, under a human who sets goals and owns the outward gates. The claims below are backed by committed artifacts you can check, not adjectives. See [Milestone: it shipped itself](#milestone-it-shipped-itself-010-rc1).
+
 What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator), **durable state** (git-committed checkpoints survive wipes), **observable machinery** (every agent run logged, every cost tracked), **live dashboard** (real-time fleet health at http://localhost:8770), and **security gates** (secret-scan blocks pushes, CI validates each merge).
+
+## Milestone: it shipped itself (0.1.0-rc.1)
+
+Aesop reached its first release candidate by running its own wave loop—**audit → parallel build → verify → merge-train**—across the backlog that produced it. This is the version where the load-bearing claims stopped being illustrations and became measurements. The word "autonomous" has a precise, deliberately narrow meaning here.
+
+**What "autonomous" means here (and what it doesn't).** The *fleet* autonomously runs the wave loop: it ranks work, dispatches parallel Haiku workers on file-disjoint domains, verifies merges, and feeds the next wave from a closing audit. A *human* sets the goals and owns every outward gate—npm publish, tagged releases, and history rewrites all stay human-approved. It is a supervised loop, not an unsupervised agent, and not AGI. The true model-dispatch core runs inside the Claude Code harness, which lives outside this repo; what ships here is the harness around it—orchestration, guardrails, dashboard, and tooling.
+
+The differentiator is not "an AI wrote code." It's that the credibility and safety claims come with receipts:
+
+| Claim | Evidence (committed, checkable) | Honest caveat |
+| --- | --- | --- |
+| **Haiku is good enough for fleet judgment** | Across 39 held-out judgment tasks, Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost — measured by a plain-Python scorer with no model in the grading loop. See [`bench/results/`](./bench/results/). | Curated set, **not** sampled from real fleet transcripts (N=39). The benchmark found *no* task where Opus beats Haiku — so it proves sufficiency for these shapes, not parity at the reasoning frontier. |
+| **Audits don't hallucinate findings** | A full release audit was run with adversarial verification of every finding: **0 hallucinated issues**, closing the prior all-Haiku severity-inflation risk. | An internal audit, not a third-party one. |
+| **Kill-switch actually stops the fleet** | The fleet-wide halt is wired into the live dispatch path and proven end-to-end — one signal **aborted a real wave with zero workers spawned**. See [`tools/halt.py`](./tools/halt.py). | Operator-triggered; it is a manual brake, not an autonomous safety monitor. |
+| **A cost ceiling brakes runaway spend** | Dispatch halts when a per-wave budget is exceeded. See [`tools/cost_ceiling.py`](./tools/cost_ceiling.py). | A brake on a *configured* ceiling, **not yet tied to live token spend**. |
+| **The package installs and reproduces** | A **~409 kB** npm tarball (measured via `npm pack`) builds and validates from a fresh clone in CI. See [docs/reproduce.md](./docs/reproduce.md). | UI browser-proofs (Playwright) and real-model runs need local setup / API keys; they don't run in the offline reproduce job. |
+
+**Nobody outside this project has reproduced these results yet.** The evidence is committed so a skeptical reader can check it — that transparency is the point, not a substitute for independent replication. For the full, unhedged account of what is and isn't proven, read [docs/autonomous-swe.md](./docs/autonomous-swe.md) and the ["Honest limits" section of the release notes](./RELEASE-NOTES.md#honest-limits).
 
 ## Why Aesop?
 
@@ -247,9 +267,10 @@ The dev server proxies `/data`, `/api`, `/events`, `/agent`, `/submit` to the Py
 - [docs/FORENSICS.md](./docs/FORENSICS.md) — Debug agent failures (git-bisectable)
 - [docs/RESTORE.md](./docs/RESTORE.md) — Reconstitute Aesop on a new machine
 - [docs/PUBLISHING.md](./docs/PUBLISHING.md) — Release Aesop to npm
+- [docs/autonomous-swe.md](./docs/autonomous-swe.md) — The 0.1.0-rc.1 milestone told honestly: what "autonomous SWE" means here, the evidence behind each claim, and the limits the project owns
 - [docs/case-study-portfolio.md](./docs/case-study-portfolio.md) — How Aesop built its own portfolio site; full audit trail and cost breakdown
 
-See [CHANGELOG.md](./CHANGELOG.md) for release notes.
+See [CHANGELOG.md](./CHANGELOG.md) and [RELEASE-NOTES.md](./RELEASE-NOTES.md) for release notes.
 
 ## Contributing
 
