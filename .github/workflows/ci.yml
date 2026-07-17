@@ -1,9 +1,12 @@
 name: CI
 
-# NOTE: docs-only skipping is done via the job-level `if:` on `ci` below, NOT via a
-# trigger-level `paths-ignore:` here. A required status check that never queues because the
-# whole workflow didn't trigger blocks merging forever under strict branch protection; a job
-# that's present but skipped satisfies the required check. Do not add paths-ignore back here.
+# NOTE: `ci` runs on EVERY PR, including docs-only. We deliberately do NOT skip it on docs-only
+# changes: a skipped matrix job reports its `ci (N)` checks as *skipped*, and under strict branch
+# protection a skipped required check is NOT satisfied, so pure-docs PRs deadlock forever (observed
+# 2026-07-17 on PR #170 — even `--admin` fails with "N of N required status checks are expected").
+# Running the full suite on a docs-only change is cheap enough and always passes (code is unchanged),
+# so correctness beats the few saved minutes. Do NOT re-add a job-level `if:` skip on `ci` or a
+# trigger-level `paths-ignore:` — either one reintroduces the deadlock.
 on:
   push:
     branches: [main]
@@ -47,7 +50,6 @@ jobs:
 
   ci:
     needs: docs-only-gate
-    if: needs.docs-only-gate.outputs.is_docs_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
