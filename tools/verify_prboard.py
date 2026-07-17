@@ -30,8 +30,10 @@ Run: python tools/verify_prboard.py            (exit 0 = proven, 1 = failed)
 Fails with exit 1 if playwright/chromium is unavailable (unless --allow-skip).
 """
 import argparse
+import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -40,6 +42,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
+
+# Generous, CI-safe waits. A cold ubuntu runner (cold chromium, cold python
+# import, shared CPU) is much slower than a warm dev box, so every server/
+# selector wait below is sized for the slow path, overridable via env.
+SERVER_BOOT_TRIES = int(os.environ.get("AESOP_VERIFY_BOOT_TRIES", "150"))   # *0.2s = 30s
+SERVER_BOOT_SLEEP = 0.2
+SEL_TIMEOUT_MS = int(os.environ.get("AESOP_VERIFY_SEL_TIMEOUT_MS", "30000"))
 
 # Fixture PRs the fake `gh pr list` emits in the populated phase. Covers every
 # CI rollup state + a draft so the board's whole status vocabulary is exercised.
@@ -98,19 +107,34 @@ def copy_dist(root: Path):
 
 
 def make_fake_gh(bin_dir: Path, script_body: str) -> Path:
-    """Write a fake `gh` (gh.cmd delegating to a python stub) and return its path.
+    """Write a fake `gh` executable and return its path — Linux-CI robust.
 
-    A full-path .cmd is directly runnable by subprocess on Windows (verified),
-    so wave_prs.py's AESOP_GH_BIN seam can point straight at it. The stub
-    ignores its args and always emits the fixture, which is all `gh pr list`
-    needs for the proof.
+    wave_prs.py invokes AESOP_GH_BIN directly as ``argv[0]`` via subprocess, so
+    the stub must be a file the *current* OS can exec on its own:
+
+      * Windows: a full-path ``gh.cmd`` batch that shells out to a python stub
+        (a bare extension-less script is not runnable by subprocess on Windows).
+      * POSIX (ubuntu CI): a python script whose first line is a ``#!`` shebang
+        pointing at this very interpreter, marked executable (chmod +x). The
+        previous ``gh.cmd`` was NOT executable on Linux — the kernel refused it
+        with EACCES, ``gh pr list`` failed, /api/wave/prs degraded to empty, and
+        the PR-table selector timed out. That was the CI failure this fixes.
+
+    Either way the stub ignores its args and emits the fixture, which is all
+    ``gh pr list`` needs for the proof.
     """
     bin_dir.mkdir(parents=True, exist_ok=True)
-    stub = bin_dir / "gh_stub.py"
-    stub.write_text(script_body, encoding="utf-8")
-    gh_cmd = bin_dir / "gh.cmd"
-    gh_cmd.write_text('@python "%~dp0gh_stub.py" %*\n', encoding="utf-8")
-    return gh_cmd
+    if os.name == "nt":
+        stub = bin_dir / "gh_stub.py"
+        stub.write_text(script_body, encoding="utf-8")
+        gh_cmd = bin_dir / "gh.cmd"
+        gh_cmd.write_text('@python "%~dp0gh_stub.py" %*\n', encoding="utf-8")
+        return gh_cmd
+    # POSIX: shebang + executable bit so the ubuntu runner can exec it directly.
+    gh = bin_dir / "gh"
+    gh.write_text(f"#!{sys.executable}\n{script_body}", encoding="utf-8")
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return gh
 
 
 def build_root(gh_script: str):
@@ -127,7 +151,6 @@ def build_root(gh_script: str):
 
 
 def start_server(root: Path, port: int, gh_path: Path):
-    import os
     state_root = root / "state"
     real_state = Path.home() / "aesop" / "state"
     if state_root.resolve() == real_state.resolve():
@@ -141,12 +164,12 @@ def start_server(root: Path, port: int, gh_path: Path):
                PORT=str(port))
     server = subprocess.Popen([sys.executable, str(SERVE)], env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(50):
+    for _ in range(SERVER_BOOT_TRIES):
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
             return server
         except OSError:
-            time.sleep(0.2)
+            time.sleep(SERVER_BOOT_SLEEP)
     server.kill()
     raise RuntimeError("server never came up")
 
@@ -179,15 +202,15 @@ def run_populated(pw, failures):
     server, root, browser, page, console_errors, failed_urls, _ = _boot(pw, FIXTURE_PR_JSON)
     try:
         try:
-            page.wait_for_selector("[data-testid='health-header']", timeout=15000)
+            page.wait_for_selector("[data-testid='health-header']", timeout=SEL_TIMEOUT_MS)
             page.evaluate("location.hash = '#/prs'")
-            page.wait_for_selector("[data-testid='view-prboard']", timeout=8000)
+            page.wait_for_selector("[data-testid='view-prboard']", timeout=SEL_TIMEOUT_MS)
         except Exception as e:
             failures.append(f"(b) PR board view never mounted: {e}")
             return
         # (b) table + one row per PR
         try:
-            page.wait_for_selector("[data-testid='prboard-table']", timeout=8000)
+            page.wait_for_selector("[data-testid='prboard-table']", timeout=SEL_TIMEOUT_MS)
             rows = page.locator("[data-testid='prboard-row']").count()
             assert rows == 3, f"expected 3 rows, got {rows}"
         except Exception as e:
@@ -237,9 +260,9 @@ def run_empty(pw, failures):
     server, root, browser, page, console_errors, failed_urls, _ = _boot(pw, FIXTURE_EMPTY_JSON)
     try:
         try:
-            page.wait_for_selector("[data-testid='health-header']", timeout=15000)
+            page.wait_for_selector("[data-testid='health-header']", timeout=SEL_TIMEOUT_MS)
             page.evaluate("location.hash = '#/prs'")
-            page.wait_for_selector("[data-testid='prboard-empty']", timeout=8000)
+            page.wait_for_selector("[data-testid='prboard-empty']", timeout=SEL_TIMEOUT_MS)
             text = page.inner_text("[data-testid='prboard-empty']")
             assert "No open PRs" in text or "feature branch" in text, \
                 f"empty state text unexpected: {text!r}"
@@ -261,9 +284,9 @@ def run_unavailable(pw, failures):
     server, root, browser, page, console_errors, failed_urls, _ = _boot(pw, FIXTURE_AUTH_FAIL)
     try:
         try:
-            page.wait_for_selector("[data-testid='health-header']", timeout=15000)
+            page.wait_for_selector("[data-testid='health-header']", timeout=SEL_TIMEOUT_MS)
             page.evaluate("location.hash = '#/prs'")
-            page.wait_for_selector("[data-testid='prboard-empty']", timeout=8000)
+            page.wait_for_selector("[data-testid='prboard-empty']", timeout=SEL_TIMEOUT_MS)
             text = page.inner_text("[data-testid='prboard-empty']")
             assert "GitHub CLI" in text, f"gh-unavailable callout missing: {text!r}"
             assert "authenticated" in text.lower(), f"backend reason not surfaced: {text!r}"
