@@ -1,0 +1,60 @@
+name: Reproduce
+
+# Workflow to verify the project's claims can be reproduced from a clean checkout.
+# Triggered manually or weekly to ensure external users can replicate the test suites
+# and the offline benchmark scorer without needing any project-specific state.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Weekly Sunday 2am UTC
+    - cron: '0 2 * * 0'
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (fresh clone, no reuse of cached state)
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js LTS
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Node syntax check
+        run: |
+          git ls-files '*.mjs' | while read file; do
+            node --check "$file" || exit 1
+          done
+
+      - name: Shell syntax check
+        run: |
+          git ls-files '*.sh' | while read file; do
+            bash -n "$file" || exit 1
+          done
+
+      - name: Run Node.js tests (full suite)
+        run: npm run test:node
+
+      - name: Tool import/compile smoke gate
+        run: |
+          python -m compileall -q tools/
+          python -m unittest tests.test_tools_importable -v
+
+      - name: Run Python tests (full suite discover)
+        run: python -m unittest discover -s tests -v
+
+      - name: Run benchmark scorer offline (test_bench_runner)
+        run: python -m unittest tests.test_bench_runner -v
+
+      - name: Verify offline benchmark reproduction
+        run: |
+          python tools/bench_runner.py --runner mock
+          echo "✓ Benchmark reproduction successful"
