@@ -207,27 +207,37 @@ run_tests() {
     test_failed=$((test_failed + 1))
   fi
 
-  printf '\n=== Test 7: Hook respects AESOP_ROOT env var ===\n'
+  printf '\n=== Test 7: Marker is worktree-relative — a sibling worktree commit is ALLOWED while primary has the marker (wave-24 regression) ===\n'
   (
-    cd "$tmpdir/test_repo" || exit 1
-    mkdir -p hooks
+    # Primary repo with the marker set (simulating a wave in flight).
+    primary="$tmpdir/wt_primary"
+    mkdir -p "$primary"
+    cd "$primary" || exit 1
+    git init -q
+    git config user.email t@t; git config user.name t
+    mkdir -p hooks state
     cp "$hooks_dir/pre-commit-waveguard.sh" hooks/pre-commit-waveguard.sh
+    echo "seed" > seed.txt && git add . && git commit -q -m seed
     bash "$install_script" >/dev/null 2>&1
+    touch state/.wave-in-flight   # wave in flight in the PRIMARY tree
 
-    custom_state_dir="$tmpdir/custom_aesop/state"
-    mkdir -p "$custom_state_dir"
-    touch "$custom_state_dir/.wave-in-flight"
+    # Confirm the PRIMARY tree is blocked (marker present in its own toplevel).
+    echo p > pfile.txt && git add pfile.txt
+    if git commit -q -m "primary during wave" 2>&1; then
+      printf 'FAIL: primary-tree commit should be blocked while marker present\n'; exit 1
+    fi
 
-    export AESOP_ROOT="$tmpdir/custom_aesop"
-
-    echo "test" > file5.txt
-    git add file5.txt
-
-    if git commit -q -m "test with custom AESOP_ROOT" 2>&1; then
-      printf 'FAIL: Commit should be rejected with custom AESOP_ROOT\n'
-      exit 1
+    # A sibling WORKTREE does NOT carry the git-ignored marker, so its commit must be ALLOWED
+    # even though the primary has one. (The old AESOP_ROOT-hardcoded hook wrongly blocked this —
+    # the wave-24 fleet-block incident.)
+    wt="$tmpdir/wt_sibling"
+    git worktree add -q "$wt" -b sibling 2>/dev/null
+    cd "$wt" || exit 1
+    echo w > wfile.txt && git add wfile.txt
+    if git commit -q -m "sibling worktree during wave" 2>&1; then
+      printf 'PASS: sibling-worktree commit allowed while primary marker set\n'
     else
-      printf 'PASS: Hook respects AESOP_ROOT env var\n'
+      printf 'FAIL: sibling-worktree commit was wrongly blocked (wave-24 regression)\n'; exit 1
     fi
   )
   if [ $? -eq 0 ]; then
