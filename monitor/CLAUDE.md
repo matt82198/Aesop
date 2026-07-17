@@ -4,18 +4,18 @@
 
 ## Files
 
-- **CHARTER.md** — Governance document; defines 10 signal checks (4 of them extended/opt-in), action tiers (AUTO/PROPOSE), outputs, single-instance guard, single-writer discipline. Read-only; behavior changes only via PROPOSALS/behavioral-PR flow.
+- **CHARTER.md** — Governance document; defines 11 signal checks (4 of them extended/opt-in), action tiers (AUTO/PROPOSE), outputs, single-instance guard, single-writer discipline. Read-only; behavior changes only via PROPOSALS/behavioral-PR flow.
 - **collect-signals.mjs** — Deterministic signal collector (Node.js built-ins only); emits BRIEF.md + SIGNALS.json each cycle; reads config from env or aesop.config.json.
 - **BRIEF.md** — Human-readable cycle snapshot (heartbeats, git state, memory freshness, log rotation, junk sprawl, stray scripts, security alerts, respawn watch, cost cadence, unreviewed prompts); overwritten each cycle; runtime.
 - **SIGNALS.json** — Machine-readable metrics (same signal keys as BRIEF); JSON; overwritten each cycle; runtime.
-- **PROPOSALS.md** — Structured inbox for user approval (idempotent per signal key, append-only); never edited by monitor after emission; tracks respawn-watch-breach, stray-repo-scripts, security-alerts-high-med, stale-memory-files; gitignored.
+- **PROPOSALS.md** — Structured inbox for user approval (idempotent per signal key, append-only); never edited by monitor after emission; tracks isolation-violation-detected, respawn-watch-breach, stray-repo-scripts, security-alerts-high-med, stale-memory-files; gitignored.
 - **ACTIONS.log** — Append-only log of AUTO tier actions taken (heartbeat updates, log rotation invokes, junk quarantine); runtime; gitignored.
 - **.monitor-heartbeat** — Epoch timestamp (line 1) for single-instance liveness check (<300s = skip cycle); runtime; gitignored.
 - **.signal-state.json** — Sidecar state (cycleCount, etc.); runtime; gitignored.
 
 ## Contracts
 
-**Signal keys collected**: heartbeats, git, memory, logs, junk, strayRepo, alerts, respawnWatch, costTick, unreviewedPrompts. Outputs: BRIEF.md (human), SIGNALS.json (machine); both runtime/gitignored. PROPOSALS.md (tracked, append-only); ACTIONS.log (runtime/gitignored).
+**Signal keys collected**: heartbeats, git, memory, logs, junk, strayRepo, alerts, respawnWatch, costTick, unreviewedPrompts, isolationViolations. Outputs: BRIEF.md (human), SIGNALS.json (machine); both runtime/gitignored. PROPOSALS.md (tracked, append-only); ACTIONS.log (runtime/gitignored).
 
 **Extended signals (opt-in, default OFF)**: checks 5 (junk), 6 (strayRepo), 8 (respawnWatch), and 10 (unreviewedPrompts) are extended — disabled by default.
 - Config key: `monitor.extended_signals` (boolean, default `false`) in aesop.config.json.
