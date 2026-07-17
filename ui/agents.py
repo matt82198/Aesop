@@ -433,6 +433,14 @@ def extract_agent_dispatch_prompt(agent_id):
         if not dispatch_prompt:
             return {"error": f"no dispatch prompt found"}
 
+        # dispatch_prompt may be a content-block list; normalise to a string,
+        # then redact credentials before this leaves the process (same
+        # contract as get_agent_detail() — wave-32 fix, this endpoint had
+        # drifted and was returning secrets unredacted).
+        if isinstance(dispatch_prompt, list):
+            dispatch_prompt = _extract_line_text({"content": dispatch_prompt})
+        dispatch_prompt = _redact_secrets(dispatch_prompt or "")
+
         # Infer dispatcher: if parentUuid is null, it's main thread; otherwise parent agent
         dispatcher = "main thread" if parent_uuid is None else "parent agent"
 
