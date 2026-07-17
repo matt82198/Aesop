@@ -446,9 +446,14 @@ def _range_tip_ref(commit_range):
 def get_git_blob(repo_path, ref_path):
     """Fetch raw blob bytes via `git show <ref_path>` -- e.g. ref_path=':foo.py'
     reads foo.py from the STAGED INDEX, 'abc123:foo.py' reads foo.py as it
-    exists in commit abc123. Returns None if the object cannot be read (e.g.
-    the path was deleted at that ref) -- that is NOT a git-command failure,
-    just nothing left to scan there.
+    exists in commit abc123.
+
+    Raises GitScanError if the git show command fails (non-zero returncode or
+    exception). Since callers use --diff-filter=d to exclude deleted paths from
+    enumeration, a git-show failure for an enumerated path is a real error
+    (e.g., corruption, permissions, unreadable blob), not a legitimate 'file
+    absent' case. Failing closed (raising GitScanError) ensures such errors
+    block the push, consistent with how enumeration failures already fail closed.
     """
     try:
         result = subprocess.run(
@@ -457,10 +462,15 @@ def get_git_blob(repo_path, ref_path):
             capture_output=True,
             timeout=15,
         )
-    except Exception:
-        return None
+    except Exception as e:
+        raise GitScanError(
+            f"git show {ref_path!r} raised {e!r}"
+        )
     if result.returncode != 0:
-        return None
+        raise GitScanError(
+            f"git show {ref_path!r} failed (rc={result.returncode}): "
+            f"{result.stderr.decode('utf-8', errors='ignore').strip()}"
+        )
     return result.stdout
 
 
@@ -632,9 +642,12 @@ def main():
 
         file_count = len(relpaths)
         for relpath in relpaths:
-            content = get_git_blob(args.repo, f":{relpath}")
-            if content is None:
-                continue  # deleted/unreadable object -- nothing to scan
+            try:
+                content = get_git_blob(args.repo, f":{relpath}")
+            except GitScanError as e:
+                print(f"FATAL: could not read staged blob for {relpath}: {e}", file=sys.stderr)
+                print("Failing CLOSED: refusing to report CLEAN when a staged object cannot be read.", file=sys.stderr)
+                sys.exit(1)
             label = str(Path(args.repo) / relpath)
             findings = scan_blob(label, content)
             for line_num, rule, match_str, is_fatal in findings:
@@ -659,9 +672,12 @@ def main():
         file_count = len(relpaths)
         tip_ref = _range_tip_ref(args.range)
         for relpath in relpaths:
-            content = get_git_blob(args.repo, f"{tip_ref}:{relpath}")
-            if content is None:
-                continue  # deleted at tip -- nothing to scan
+            try:
+                content = get_git_blob(args.repo, f"{tip_ref}:{relpath}")
+            except GitScanError as e:
+                print(f"FATAL: could not read blob at {tip_ref}:{relpath}: {e}", file=sys.stderr)
+                print("Failing CLOSED: refusing to report CLEAN when a committed object cannot be read.", file=sys.stderr)
+                sys.exit(1)
             label = str(Path(args.repo) / relpath)
             findings = scan_blob(label, content)
             for line_num, rule, match_str, is_fatal in findings:

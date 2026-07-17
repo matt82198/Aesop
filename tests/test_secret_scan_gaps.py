@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 import os
+import subprocess
 from pathlib import Path
 import sys
 
@@ -147,6 +148,55 @@ class TestSecretScanGaps(unittest.TestCase):
 
                 self.assertGreater(len(connection_findings), 0,
                                  f"Should flag non-allowlisted host: {conn_str}")
+
+
+class TestGetGitBlobFailsClosed(unittest.TestCase):
+    """Wave-25 P2 gap fix: get_git_blob() must raise GitScanError on git-show
+    failure, not return None. When enumeration (via --diff-filter=d) says a
+    path exists, a subsequent git-show failure is a real error (corruption,
+    permissions, unreadable blob), not a legitimate 'file absent' case.
+    Failing closed ensures such errors block the push.
+    """
+
+    def test_get_git_blob_raises_on_git_show_failure(self):
+        """Unit-level test: get_git_blob() must raise GitScanError when
+        git show fails, not return None.
+
+        When an enumerated file cannot be read (via git show), this is a
+        real error that should fail closed (non-zero exit), not silently
+        skip (continue) and possibly report CLEAN.
+        """
+        from tools.secret_scan import get_git_blob, GitScanError
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize a git repo
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
+
+            # Try to show a blob that doesn't exist
+            # This will cause git show to fail with a non-zero return code
+            with self.assertRaises(
+                GitScanError,
+                msg="get_git_blob must raise GitScanError on git-show failure, "
+                    "not return None."
+            ):
+                get_git_blob(tmpdir, ":nonexistent.txt")
+
+    def test_get_git_blob_includes_git_error_in_exception(self):
+        """GitScanError from get_git_blob should include the git stderr
+        so the caller can log a clear error message."""
+        from tools.secret_scan import get_git_blob, GitScanError
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize a git repo
+            subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
+
+            # Try to show a blob that doesn't exist
+            try:
+                get_git_blob(tmpdir, ":nonexistent.txt")
+                self.fail("Expected GitScanError to be raised")
+            except GitScanError as e:
+                # Error message should reference the ref that failed
+                self.assertIn(":nonexistent.txt", str(e))
 
 
 if __name__ == "__main__":
