@@ -26,7 +26,8 @@ from collectors import (_snapshot_data, _snapshot_tracker,
                        get_recent_events, get_repos_status,
                        parse_audit_backlog)
 from agents import (_AGENT_ID_FORBIDDEN, _transcripts_fingerprint,
-                   extract_agent_dispatch_prompt, get_fleet_agents)
+                   extract_agent_dispatch_prompt, get_agent_detail,
+                   get_fleet_agents)
 from sse import (_latest_lock, _latest_snapshots, _maybe_emit,
                 register_sse_client, unregister_sse_client)
 
@@ -200,6 +201,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_backlog()
         elif self.path == "/api/agents":
             self.serve_agents()
+        elif self.path.startswith("/api/agent?"):
+            self.serve_api_agent()
         elif self.path.startswith("/api/tracker"):
             self.serve_tracker()
         elif self.path.startswith("/assets/"):
@@ -610,6 +613,49 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             print(f"[serve_agent] Uncaught exception: {e}", file=sys.stderr)
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_agent(self):
+        """GET /api/agent?id=<agent_id> — agent detail for the Inspector drawer.
+
+        Read-only. Returns the dispatch prompt/metadata PLUS a bounded, secret-
+        redacted transcript tail (last ~40 NDJSON lines, seek-read so a huge
+        transcript is never fully loaded). Same id-safety + status-code contract
+        as GET /agent: rejected input -> 400, well-formed id with no transcript
+        -> 404, unexpected failure -> 500. Never leaks a raw traceback.
+        """
+        try:
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            agent_id = params.get('id', [None])[0]
+
+            if not agent_id:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "missing id parameter"}).encode('utf-8'))
+                return
+
+            data = get_agent_detail(agent_id)
+
+            if "error" in data:
+                status = 400 if data.get("invalid") else 404
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": data["error"]}).encode('utf-8'))
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            print(f"[serve_api_agent] Uncaught exception: {e}", file=sys.stderr)
             self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def _write_sse_event(self, event_name, payload):

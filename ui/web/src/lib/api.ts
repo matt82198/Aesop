@@ -11,6 +11,7 @@ import type {
   AuditBacklog,
   Agent,
   AgentDetail,
+  AgentInspectorDetail,
   TrackerItem,
   SubmitResponse,
   WavePRBoardData,
@@ -143,6 +144,16 @@ export async function fetchTrackerItems(
  */
 export async function fetchAgent(agentId: string): Promise<AgentDetail> {
   const url = `/agent?id=${encodeURIComponent(agentId)}`;
+  return typedFetch(url, { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/agent?id=<id> — full agent detail + bounded transcript tail
+ * (powers the Agent Inspector drawer). Distinct from fetchAgent() (GET /agent),
+ * which returns only the dispatch prompt + metadata.
+ */
+export async function fetchAgentInspector(agentId: string): Promise<AgentInspectorDetail> {
+  const url = `/api/agent?id=${encodeURIComponent(agentId)}`;
   return typedFetch(url, { method: 'GET', requireCSRF: false });
 }
 

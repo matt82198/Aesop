@@ -8,6 +8,28 @@
   border-bottom: none;
 }
 
+.agent-row__inspect {
+  margin-left: auto;
+  padding: var(--space-1) var(--space-3);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+.agent-row__inspect:hover {
+  background: var(--color-bg-subtle);
+}
+
+.agent-row__inspect:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
 .agent-row__toggle {
   display: inline-flex;
   align-items: center;
