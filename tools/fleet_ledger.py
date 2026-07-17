@@ -260,11 +260,14 @@ def rotate():
     print(f'Live ledger now has {len(new_ledger) - len(header_lines)} data lines')
 
 
-def summary(output_format='text'):
-    """Aggregate ledger entries by wave and phase; report total tokens/cost.
+def parse_ledger_rows():
+    """Parse and return all ledger rows as structured data.
 
-    Args:
-        output_format: 'text' (default) or 'json'
+    Returns:
+        list of dicts, each with keys: iso_ts, agent_type, model, duration_sec,
+        tokens_in, tokens_out, verdict, phase, wave (wave as int or None)
+
+    Returns empty list if ledger doesn't exist or is unreadable.
     """
     ensure_ledger_header()
     ledger_file, _, _ = get_ledger_paths()
@@ -272,14 +275,9 @@ def summary(output_format='text'):
     try:
         lines = ledger_file.read_text(encoding='utf-8').split('\n')
     except (IOError, OSError):
-        print('Error reading ledger')
-        return
+        return []
 
-    # Parse ledger: skip header and separator lines, parse data lines
-    by_wave_phase = defaultdict(lambda: {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0})
-    by_wave = defaultdict(lambda: {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0})
-    totals = {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0}
-
+    rows = []
     for line in lines:
         # Skip empty, header, separator lines
         if not line.strip() or '---|' in line or not line.startswith('|'):
@@ -311,28 +309,63 @@ def summary(output_format='text'):
                 except ValueError:
                     pass
 
-            # Accumulate by wave+phase
-            key = (wave_num, phase)
-            by_wave_phase[key]['tokens_out'] += tokens_out
-            by_wave_phase[key]['tokens_in'] += tokens_in
-            by_wave_phase[key]['entries'] += 1
-            by_wave_phase[key]['duration'] += duration_sec
-
-            # Accumulate by wave
-            by_wave[wave_num]['tokens_out'] += tokens_out
-            by_wave[wave_num]['tokens_in'] += tokens_in
-            by_wave[wave_num]['entries'] += 1
-            by_wave[wave_num]['duration'] += duration_sec
-
-            # Accumulate totals
-            totals['tokens_out'] += tokens_out
-            totals['tokens_in'] += tokens_in
-            totals['entries'] += 1
-            totals['duration'] += duration_sec
-
-        except (ValueError, IndexError) as e:
+            rows.append({
+                'iso_ts': iso_ts,
+                'agent_type': agent_type,
+                'model': model,
+                'duration_sec': duration_sec,
+                'tokens_in': tokens_in,
+                'tokens_out': tokens_out,
+                'verdict': verdict,
+                'phase': phase,
+                'wave': wave_num,
+            })
+        except (ValueError, IndexError):
             # Skip malformed lines silently
             continue
+
+    return rows
+
+
+def summary(output_format='text'):
+    """Aggregate ledger entries by wave and phase; report total tokens/cost.
+
+    Args:
+        output_format: 'text' (default) or 'json'
+    """
+    # Use shared parser to get rows
+    rows = parse_ledger_rows()
+
+    # Parse ledger: skip header and separator lines, parse data lines
+    by_wave_phase = defaultdict(lambda: {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0})
+    by_wave = defaultdict(lambda: {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0})
+    totals = {'tokens_out': 0, 'tokens_in': 0, 'entries': 0, 'duration': 0}
+
+    for row in rows:
+        tokens_in = row['tokens_in']
+        tokens_out = row['tokens_out']
+        duration_sec = row['duration_sec']
+        wave_num = row['wave']
+        phase = row['phase']
+
+        # Accumulate by wave+phase
+        key = (wave_num, phase)
+        by_wave_phase[key]['tokens_out'] += tokens_out
+        by_wave_phase[key]['tokens_in'] += tokens_in
+        by_wave_phase[key]['entries'] += 1
+        by_wave_phase[key]['duration'] += duration_sec
+
+        # Accumulate by wave
+        by_wave[wave_num]['tokens_out'] += tokens_out
+        by_wave[wave_num]['tokens_in'] += tokens_in
+        by_wave[wave_num]['entries'] += 1
+        by_wave[wave_num]['duration'] += duration_sec
+
+        # Accumulate totals
+        totals['tokens_out'] += tokens_out
+        totals['tokens_in'] += tokens_in
+        totals['entries'] += 1
+        totals['duration'] += duration_sec
 
     if output_format == 'json':
         import json

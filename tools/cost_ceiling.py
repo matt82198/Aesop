@@ -35,11 +35,14 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
 
 try:
     import halt
+    import fleet_ledger
 except ImportError:
     from tools import halt
+    from tools import fleet_ledger
 
 
 def load_config():
@@ -70,35 +73,52 @@ def get_ceiling(config, period):
         return None
 
 
-def read_ledger_total_tokens(state_dir):
-    """Sum tokens_in + tokens_out across every row of OUTCOMES-LEDGER.md.
+def read_ledger_total_tokens(state_dir, period="wave"):
+    """Sum tokens_in + tokens_out from OUTCOMES-LEDGER.md.
 
-    Returns 0 if the ledger doesn't exist or is unreadable/empty. Parses the
-    same markdown-table format tools/fleet_ledger.py writes, independently
-    (read-only) — no import of fleet_ledger.py, so this has no side effects
-    on the ledger and no coupling to its internal state.
+    Args:
+        state_dir: path to state directory
+        period: "wave" (all rows) or "daily" (today's rows only, filtered by UTC date)
+
+    Returns 0 if the ledger doesn't exist or is unreadable/empty.
+    Uses fleet_ledger.py's shared parser (single source of truth).
     """
-    ledger_file = Path(state_dir) / "ledger" / "OUTCOMES-LEDGER.md"
-    if not ledger_file.exists():
-        return 0
+    # Set the state root temporarily so fleet_ledger can find the ledger
+    import os
+    old_state_root = os.environ.get("AESOP_STATE_ROOT")
     try:
-        lines = ledger_file.read_text(encoding="utf-8").split("\n")
-    except OSError:
+        os.environ["AESOP_STATE_ROOT"] = str(state_dir)
+        rows = fleet_ledger.parse_ledger_rows()
+    finally:
+        if old_state_root is not None:
+            os.environ["AESOP_STATE_ROOT"] = old_state_root
+        else:
+            os.environ.pop("AESOP_STATE_ROOT", None)
+
+    if not rows:
         return 0
 
     total = 0
-    for line in lines:
-        if not line.strip() or "---|" in line or not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.split("|")[1:-1]]
-        if len(cells) < 6:
-            continue
-        try:
-            tokens_in = int(cells[4]) if cells[4] else 0
-            tokens_out = int(cells[5]) if cells[5] else 0
-        except ValueError:
-            continue
-        total += tokens_in + tokens_out
+
+    if period == "daily":
+        # Filter to today's UTC date only
+        today_utc = datetime.now(timezone.utc).date()
+        for row in rows:
+            # Extract date from ISO timestamp (format: YYYY-MM-DDTHH:MM:SSZ or similar)
+            try:
+                iso_ts = row['iso_ts']
+                # Parse the date part (first 10 characters: YYYY-MM-DD)
+                row_date = datetime.fromisoformat(iso_ts.replace('Z', '+00:00')).date()
+                if row_date == today_utc:
+                    total += row['tokens_in'] + row['tokens_out']
+            except (ValueError, IndexError, KeyError):
+                # Skip malformed timestamps
+                continue
+    else:
+        # period == "wave": sum all rows
+        for row in rows:
+            total += row['tokens_in'] + row['tokens_out']
+
     return total
 
 
@@ -116,7 +136,7 @@ def check(spent=None, period="wave", config=None, state_dir=None, trip=True):
     ceiling = get_ceiling(config, period)
 
     if spent is None:
-        spent = read_ledger_total_tokens(state_dir)
+        spent = read_ledger_total_tokens(state_dir, period=period)
     spent = int(spent)
 
     exceeded = ceiling is not None and spent >= ceiling
