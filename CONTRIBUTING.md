@@ -1,6 +1,17 @@
 # Contributing to Aesop
 
-Thank you for your interest in contributing to Aesop! We welcome improvements, bug fixes, documentation enhancements, and new features that strengthen the orchestration harness.
+Thank you for your interest in Aesop! Your feedback, questions, and bug reports genuinely help make the orchestration harness more reliable and observable.
+
+## A note on the license
+
+Aesop is **source-available** under the [PolyForm Strict License 1.0.0](./LICENSE): you may read, run, and use the software for a permitted purpose, but the license **does not permit modification or redistribution**. Because of that, we can't accept outside code patches as merged contributions the way a permissively-licensed project would — an external patch would be a derivative work the license doesn't allow you to grant back.
+
+What that means in practice:
+
+- **Issues, bug reports, and discussion are warmly welcome** — they're the best way to contribute and shape the project.
+- **Code changes are made by the maintainer** at their discretion. If you'd like to see a specific change or collaborate on code, open an issue to discuss it first — substantial contributions can be arranged directly with the maintainer under separate terms.
+
+The rest of this guide documents how to run and test Aesop locally (useful for anyone using it) and how the maintainer's own development loop works.
 
 ## Getting Started
 
@@ -14,9 +25,9 @@ Thank you for your interest in contributing to Aesop! We welcome improvements, b
 
 ### Setup
 
-1. **Fork and clone** the repository:
+1. **Clone** the repository (for local use and testing):
    ```bash
-   git clone https://github.com/your-username/aesop.git
+   git clone https://github.com/matt82198/aesop.git
    cd aesop
    ```
 
@@ -37,7 +48,9 @@ Thank you for your interest in contributing to Aesop! We welcome improvements, b
    ```
    Visit `http://localhost:8770` to verify the interface.
 
-## Development Workflow
+## Development Workflow (maintainer reference)
+
+The conventions below describe how the maintainer's own `/buildsystem` loop develops Aesop. They're documented here for transparency and for anyone the maintainer arranges a code collaboration with.
 
 ### Branch Discipline
 
@@ -97,7 +110,7 @@ Aesop is designed for integration testing rather than extensive unit tests. Befo
 
 ## Proposing Behavioral Changes
 
-If your PR modifies **operational rules, agent configuration, monitoring behavior, or memory conventions** (anything that changes how the orchestration harness operates), you are proposing a behavioral change and must follow this process:
+When a change modifies **operational rules, agent configuration, monitoring behavior, or memory conventions** (anything that changes how the orchestration harness operates), it is a behavioral change and follows this process in the maintainer's development loop:
 
 1. **Stage changes via PROPOSALS.md**: The monitor's signal collection (`monitor/collect-signals.mjs`) can emit structured proposals for rule or behavior changes. These proposals enter a human-review queue in `monitor/PROPOSALS.md`.
 
@@ -122,7 +135,7 @@ If your PR modifies **operational rules, agent configuration, monitoring behavio
 
 ### Secret Scanning
 
-This repository has **zero tolerance for credentials, API keys, or private paths**. Before submitting a PR:
+This repository has **zero tolerance for credentials, API keys, or private paths**. Before committing any change:
 
 1. **Review your changes** for any hardcoded secrets, local paths, or private identifiers.
 2. **Run your own secret scanner** (e.g., `git secrets`, `truffleHog`):
@@ -145,39 +158,36 @@ This repository has **zero tolerance for credentials, API keys, or private paths
 - Write inline comments for non-obvious logic.
 - Link to related docs/guides when relevant.
 
-## Submitting a Pull Request
+## Proposing a Change
 
-1. **Push your branch** to your fork:
-   ```bash
-   git push origin feature/your-feature
-   ```
+Because the license doesn't permit outside code patches to be merged, the path for proposing a change is discussion-first rather than a pull request:
 
-2. **Open a pull request** against `main`:
-   - Write a clear title and description.
-   - Reference any related issues (e.g., "Fixes #123").
-   - Explain the motivation and design decisions.
+1. **Open an issue** describing the change:
+   - What's broken, missing, or could be better.
+   - The motivation and, where useful, a sketch of the design.
+   - Reference any related issues (e.g., "Relates to #123").
 
-3. **Respond to review feedback**:
-   - Address comments and suggestions.
-   - Push updates to the same branch (don't force-push unless requested).
+2. **Discuss it** with the maintainer. Many changes can be implemented directly by the maintainer once the need is clear.
 
-4. **Merge**: Once approved, the maintainer will merge your PR.
+3. **For substantial collaboration**, reach out to arrange contribution terms directly — code contributions can be accommodated by separate agreement outside the standard license.
 
-## Areas for Contribution
+The sections below list the kinds of improvements the project most values — all of them are great topics for an issue or discussion.
+
+## Areas Where Feedback Helps Most
 
 ### High-Priority
-- **Bug fixes**: Any issue blocking watchdog, dashboard, or orchestration.
-- **Documentation**: Guides for specific workflows, troubleshooting, or extend patterns.
-- **Dashboard enhancements**: New panels, better data visualization, improved UX.
+- **Bug reports**: Any issue blocking watchdog, dashboard, or orchestration.
+- **Documentation gaps**: Workflows, troubleshooting, or patterns that are unclear.
+- **Dashboard feedback**: Missing panels, data-visualization ideas, UX friction.
 
 ### Medium-Priority
-- **Monitor enhancements**: Custom signal collectors, better drift detection.
-- **Daemon optimizations**: Faster backup cycles, better error handling.
-- **Test coverage**: Integration tests for key workflows.
+- **Monitor ideas**: Custom signal collectors, better drift detection.
+- **Daemon behavior**: Backup-cycle timing, error-handling edge cases.
+- **Test coverage gaps**: Workflows that aren't well exercised.
 
 ### Lower-Priority
-- **Cosmetic improvements**: UI refinements, theme customization.
-- **Platform-specific workarounds**: Windows-specific paths, macOS-specific issues.
+- **Cosmetic notes**: UI refinements, theme customization.
+- **Platform quirks**: Windows-specific paths, macOS-specific issues.
 
 ## Questions or Ideas?
 
