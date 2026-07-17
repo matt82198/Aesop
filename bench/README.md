@@ -167,3 +167,112 @@ a harness-scaffolding PR.
   This worktree's write scope is limited to `bench/` and the two files it
   owns under `tools/`/`tests/`, so those two one-line doc additions are left
   for the integrating wave rather than made here.
+
+## Sampling from real transcripts (wave-32+)
+
+Beyond the curated 12-task benchmark, you can sample additional tasks from real
+Claude Code session transcripts. This allows the benchmark to grow beyond
+hand-written examples and measure real-world task distributions.
+
+### The sampler
+
+`bench/sample_transcripts.py` extracts decision-making moments from Claude Code
+session JSONL files (transcripts of user interactions + agent tool calls + results).
+It focuses on moments where decisions are made:
+  - Classifying files, commits, or review findings
+  - Extracting information from logs, diffs, or outputs
+  - Judging whether a finding or fix is correct
+  - Any reasoning about code or task outcomes
+
+**Sanitization is critical.** The sampler aggressively removes PII and credentials
+before outputting tasks, because the sampled task set lives in a public repository:
+  - Absolute paths (→ `/path/to/<redacted>`)
+  - Usernames, email addresses (→ `<email>`, `<username>`)
+  - API tokens, secrets (→ `<api_key>`)
+  - Repository names (→ `<name>`)
+  - Any private context that could leak customer data
+
+Usage (on your private transcript collection; results go to private outputs):
+
+```bash
+# Sample up to 100 tasks from your private transcripts directory
+python bench/sample_transcripts.py \
+  --transcripts-dir /path/to/your/transcripts \
+  --output bench/tasks_sampled.jsonl \
+  --max-tasks 100
+
+# Create matching ground truth (this is the hard part — you provide the
+# expected answers for the sampled tasks, based on a real model's output
+# or your own judgment)
+# See bench/fixtures/ground_truth_sampled.jsonl for the format.
+
+# Score your sampled benchmark against a real model
+python tools/bench_runner.py \
+  --runner haiku \
+  --tasks bench/tasks_sampled.jsonl \
+  --ground-truth bench/ground_truth_sampled.jsonl
+```
+
+### Ground truth for sampled tasks
+
+Sampled tasks are **not** automatically graded. You must provide ground truth:
+
+- For `"match": "exact"` tasks: a single `"expected"` value (string)
+- For `"match": "regex"` tasks: an `"expected_regex"` pattern
+
+This ground truth can come from:
+  1. Running a reference model (e.g., Opus) on each task and manually verifying
+     the answer is correct
+  2. Extracting the known-correct answer directly from the transcript context
+  3. A domain expert reviewing the task and assigning the right answer
+
+### Latency tracking (wave-32+)
+
+The bench runner now records wall-time latency for each task, alongside accuracy
+and token usage. This enables cost-quality analysis: "Haiku at X% accuracy, Y
+tokens/task, Z ms/task — Sonnet at X'% accuracy, Y' tokens/task, Z' ms/task."
+
+Runners can return latency in two ways:
+
+```python
+# Option 1: bare text response (backward-compatible, no cost data)
+def my_runner(prompt):
+    response = client.messages.create(...)
+    return response.content[0].text
+
+# Option 2: (text, usage) tuple with tokens and latency
+def my_runner_with_metrics(prompt):
+    import time
+    start = time.time()
+    response = client.messages.create(...)
+    elapsed_ms = (time.time() - start) * 1000
+    text = response.content[0].text
+    usage = {
+        "tokens": response.usage.output_tokens,
+        "latency_ms": elapsed_ms
+    }
+    return (text, usage)
+```
+
+The scorer automatically extracts and reports:
+  - Per-task latency (in the results table, if any task reports it)
+  - Average latency and total latency across all tasks
+  - Side-by-side comparison with other models
+
+Example output:
+
+```
+Benchmark results -- runner: haiku
+------------------------------------------------------------------------
+id    category                    result   tokens     latency_ms
+t01   classify_file_change        PASS     42         125.3
+t02   classify_file_change        PASS     38         118.2
+...
+------------------------------------------------------------------------
+Accuracy: 11/12 = 91.7%
+Cost:     total_tokens=512 avg_tokens/task=42.7 total_latency_ms=1450.5 avg_latency_ms=120.9
+```
+
+This latency data is strictly observational — it describes *your* execution
+environment (network, model load, time of day, etc.), not the model itself.
+Do not interpret a single run's latency as a model property.

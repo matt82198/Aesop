@@ -14,11 +14,11 @@
 
 **Aesop** is a source-available orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
 
-As of **0.1.0**, that loop has carried the project to an installable, tested, audited, and benchmarked stable release—the fleet running the wave loop on its own, under a human who sets goals and owns the outward gates. The claims below are backed by committed artifacts you can check, not adjectives. See [Milestone: it shipped itself](#milestone-it-shipped-itself-010-rc1).
+As of **0.1.0**, that loop has carried the project to an installable, tested, audited, and benchmarked stable release—the fleet running the wave loop on its own, under a human who sets goals and owns the outward gates. The claims below are backed by committed artifacts you can check, not adjectives. See [Milestone: it shipped itself](#milestone-it-shipped-itself-010).
 
 What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator), **durable state** (git-committed checkpoints survive wipes), **observable machinery** (every agent run logged, every cost tracked), **live dashboard** (real-time fleet health at http://localhost:8770), and **security gates** (secret-scan blocks pushes, CI validates each merge).
 
-## Milestone: it shipped itself (0.1.0-rc.1)
+## Milestone: it shipped itself (0.1.0)
 
 Aesop reached its first release candidate by running its own wave loop—**audit → parallel build → verify → merge-train**—across the backlog that produced it. This is the version where the load-bearing claims stopped being illustrations and became measurements. The word "autonomous" has a precise, deliberately narrow meaning here.
 
@@ -130,15 +130,16 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 170 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 556 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 5 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 177 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 574 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 6 days <!-- metrics-verified: self_stats.py (git log) --> |
 | Waves | 30 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 96,065 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 336 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 100,157 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 353 <!-- metrics-verified: self_stats.py (git log) --> |
 | Distinct Co-authors | 9 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
+
 
 
 ## Recommended Agents

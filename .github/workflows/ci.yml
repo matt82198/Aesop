@@ -68,6 +68,16 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Set shard-specific temporary directory
+        run: |
+          mkdir -p /tmp/shard-${{ matrix.python-shard }}
+          echo "TMPDIR=/tmp/shard-${{ matrix.python-shard }}" >> $GITHUB_ENV
+
+      - name: Configure git (required for hook installation tests)
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI Runner"
+
       - name: Node syntax check
         run: |
           git ls-files '*.mjs' | while read file; do
@@ -95,16 +105,28 @@ jobs:
         run: |
           python3 << 'EOF'
           import os
+          import subprocess
           import sys
           import unittest
           from pathlib import Path
 
           shard_id = ${{ matrix.python-shard }}
           total_shards = 4
-          test_dir = Path('tests')
 
-          # Get all test files sorted for deterministic distribution
-          test_files = sorted([f.stem for f in test_dir.glob('test_*.py')])
+          # Get tracked test files only (exclude WIP untracked files)
+          try:
+              result = subprocess.run(
+                  ['git', 'ls-files', 'tests/test_*.py'],
+                  capture_output=True,
+                  text=True,
+                  check=True
+              )
+              tracked_files = result.stdout.strip().split('\n') if result.stdout.strip() else []
+              # Extract just the stem for test discovery
+              test_files = sorted(set(Path(f).stem for f in tracked_files if f))
+          except Exception as e:
+              print(f"ERROR: Failed to get tracked test files: {e}")
+              sys.exit(1)
 
           # Distribute files across shards (round-robin for balance)
           shard_files = [test_files[i] for i in range(len(test_files)) if i % total_shards == shard_id]
@@ -166,6 +188,41 @@ jobs:
           cd ui/web
           npx vitest run
 
+      - name: NO-UNVERIFIED-METRICS gate (PR)
+        if: github.event_name == 'pull_request' && matrix.python-shard == 0
+        run: python tools/metrics_gate.py origin/main...HEAD
+
+      - name: README stats freshness gate
+        if: matrix.python-shard == 0
+        run: python tools/self_stats.py --check
+
+      - name: Secret scan
+        if: matrix.python-shard == 0
+        run: python tools/secret_scan.py .
+
+  browser-proofs:
+    needs: docs-only-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js LTS
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build React dashboard (ui/web/)
+        run: |
+          cd ui/web
+          npm ci
+          npm run build
+
       - name: Cache Playwright browsers
         uses: actions/cache@v6
         with:
@@ -178,33 +235,16 @@ jobs:
         run: pip install playwright && playwright install --with-deps chromium
 
       - name: Run dashboard browser proof (verify_dash)
-        if: matrix.python-shard == 0
         run: python tools/verify_dash.py
 
       - name: Run submit encoding browser proof (verify_submit_encoding)
-        if: matrix.python-shard == 0
         run: python tools/verify_submit_encoding.py
 
       - name: Run prboard browser proof (verify_prboard)
-        if: matrix.python-shard == 0
         run: python tools/verify_prboard.py
 
       - name: Run agent inspector browser proof (verify_agent_inspector)
-        if: matrix.python-shard == 0
         run: python tools/verify_agent_inspector.py
 
       - name: Run watchdog GUI tests
-        if: matrix.python-shard == 0
         run: bash tests/dash-watchdog-gui.test.sh
-
-      - name: NO-UNVERIFIED-METRICS gate (PR)
-        if: github.event_name == 'pull_request' && matrix.python-shard == 0
-        run: python tools/metrics_gate.py origin/main...HEAD
-
-      - name: README stats freshness gate
-        if: matrix.python-shard == 0
-        run: python tools/self_stats.py --check
-
-      - name: Secret scan
-        if: matrix.python-shard == 0
-        run: python tools/secret_scan.py .

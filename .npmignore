@@ -28,6 +28,15 @@ ui/web/*.config.ts
 ui/web/*.config.js
 ui/web/.gitattributes
 
+# Developer documentation (CLAUDE.md files) — internal only, never ship.
+tools/CLAUDE.md
+ui/CLAUDE.md
+state_store/CLAUDE.md
+CLAUDE-TEMPLATE.md
+
+# Archived/deprecated documentation (personal paths, sensitive content).
+docs/archive/
+
 # Python compiled artifacts & cache (dev-only, never ship).
 __pycache__/
 *.pyc

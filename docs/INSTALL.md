@@ -33,7 +33,7 @@ The fastest way to get started is to use the Aesop template scaffolder. It creat
 ### Step 1: Scaffold the harness
 
 ```bash
-npx @matt82198/aesop@beta my-fleet \
+npx @matt82198/aesop my-fleet \
   --name "my-api" \
   --repos "/path/to/repo1,/path/to/repo2"
 ```

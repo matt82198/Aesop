@@ -1,0 +1,114 @@
+.wave-telemetry-cost {
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-surface-secondary);
+  padding: 1.5rem;
+}
+
+.cost-header {
+  margin-bottom: 1.5rem;
+}
+
+.cost-header h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+}
+
+.cost-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem;
+}
+
+.cost-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: 6px;
+  background: var(--color-surface-primary);
+  border: 1px solid var(--color-border-primary);
+}
+
+.cost-tile--tokens {
+  --tile-accent: var(--color-blue-500);
+}
+
+.cost-tile--model {
+  --tile-accent: var(--color-green-500);
+}
+
+.cost-tile--okrate {
+  --tile-accent: var(--color-amber-500);
+}
+
+.tile-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+}
+
+.tile-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--tile-accent, var(--color-text-primary));
+  line-height: 1;
+}
+
+.tile-unit {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.cost-content {
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cost-content p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.cost-error {
+  color: var(--color-severity-error) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .wave-telemetry-cost {
+    --color-surface-secondary: #1a1a1a;
+    --color-surface-primary: #0a0a0a;
+    --color-border-secondary: #333;
+    --color-border-primary: #222;
+    --color-text-secondary: #999;
+    --color-text-primary: #fff;
+    --color-blue-500: #4a9eff;
+    --color-green-500: #4caf50;
+    --color-amber-500: #ffa726;
+    --color-severity-error: #ff6b6b;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .wave-telemetry-cost {
+    --color-surface-secondary: #f5f5f5;
+    --color-surface-primary: #fff;
+    --color-border-secondary: #d0d0d0;
+    --color-border-primary: #e0e0e0;
+    --color-text-secondary: #666;
+    --color-text-primary: #000;
+    --color-blue-500: #1976d2;
+    --color-green-500: #388e3c;
+    --color-amber-500: #f57c00;
+    --color-severity-error: #d32f2f;
+  }
+}

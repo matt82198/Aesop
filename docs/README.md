@@ -12,7 +12,7 @@ If you're new to Aesop, follow this 4-stage path:
 **[INSTALL.md](INSTALL.md)** — Prerequisites, `npx` scaffold, what gets created
 
 - System requirements (Claude Code CLI, Git, Bash, Node.js, Python)
-- Quick-start: `npx @matt82198/aesop@beta my-fleet`
+- Quick-start: `npx @matt82198/aesop my-fleet`
 - Manual setup for development (git clone)
 - Pre-push hook installation
 

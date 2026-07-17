@@ -47,6 +47,7 @@ export const TESTIDS = {
 
   // Overview view
   viewOverview: 'view-overview',
+  waveTelemetryProgress: 'wave-telemetry-progress',
   agentRow: 'agent-row',
   agentRowDetail: 'agent-row-detail',
   agentInspectOpen: 'agent-inspect-open',
@@ -70,6 +71,7 @@ export const TESTIDS = {
 
   // Work view
   viewWork: 'view-work',
+  waveTelemetryCost: 'wave-telemetry-cost',
   trackerBoard: 'tracker-board',
   trackerLane: 'tracker-lane',
   trackerCard: 'tracker-card',
