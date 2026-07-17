@@ -40,19 +40,26 @@ function checkNodeVersion() {
 
 // Check Python available (python3 or python)
 function checkPython() {
-  try {
-    // Try python3 first
-    spawnSync('python3', ['--version'], { stdio: 'ignore', timeout: 5000 });
-    return { passed: true, hint: '' };
-  } catch (e) {
-    try {
-      // Fallback to python
-      spawnSync('python', ['--version'], { stdio: 'ignore', timeout: 5000 });
-      return { passed: true, hint: '' };
-    } catch (e2) {
+  // Try python3 first
+  const result3 = spawnSync('python3', ['--version'], { stdio: 'ignore', timeout: 5000 });
+  if (result3.error && result3.error.code === 'ENOENT') {
+    // python3 not found, try python fallback
+    const result = spawnSync('python', ['--version'], { stdio: 'ignore', timeout: 5000 });
+    if (result.error && result.error.code === 'ENOENT') {
+      // Neither python3 nor python found
       return { passed: false, hint: 'python3 or python not found on PATH' };
     }
+    if (result.status !== 0) {
+      // python exists but returned non-zero exit code
+      return { passed: false, hint: 'python found but returned non-zero exit code' };
+    }
+    return { passed: true, hint: '' };
   }
+  if (result3.status !== 0) {
+    // python3 exists but returned non-zero exit code
+    return { passed: false, hint: 'python3 found but returned non-zero exit code' };
+  }
+  return { passed: true, hint: '' };
 }
 
 // Check git repo (.git directory exists)

@@ -95,7 +95,7 @@ Usage:
 Commands:
   doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port)
   watch                   Launch the watchdog daemon (spawns daemons/run-watchdog.sh)
-  dash                    Launch the web dashboard (spawns python ui/serve.py)
+  dash                    Launch the web dashboard (spawns python3 ui/serve.py or python fallback)
   status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
@@ -138,7 +138,7 @@ After scaffolding, cd into the directory and:
   1. Review CLAUDE.md (pre-filled with your project info)
   2. Review aesop.config.json (pre-configured for your repos)
   3. Run: aesop watch (or bash daemons/run-watchdog.sh)
-  4. Launch dashboard: aesop dash (or python ui/serve.py)
+  4. Launch dashboard: aesop dash (or python3 ui/serve.py)
 `);
   process.exit(0);
 }
@@ -395,7 +395,7 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
   console.log('\n🎯 Next 3 commands to get started:\n');
   console.log(`  1. cd ${targetDir}`);
   console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
-  console.log(`  3. python ui/serve.py  (launch dashboard on localhost:${port})`);
+  console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${port})`);
   console.log('\n📖 After that, review:');
   console.log('  • CLAUDE.md (pre-filled with your project info)');
   console.log('  • aesop.config.json (pre-configured for your repos)');
@@ -799,7 +799,7 @@ if (!isRuntimeCommand) {
       console.log('\n🎯 Next 3 commands to get started:\n');
       console.log(`  1. cd ${finalTargetDir}`);
       console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
-      console.log(`  3. python ui/serve.py  (launch dashboard on localhost:${dashboardPort})`);
+      console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${dashboardPort})`);
       console.log('\n📖 After that, review:');
       console.log('  • CLAUDE.md (pre-filled with your project info)');
       console.log('  • aesop.config.json (pre-configured for your repos)');
@@ -816,7 +816,7 @@ if (!isRuntimeCommand) {
       console.log(`  6. cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
       console.log('\nRun the daemon and dashboard:');
       console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
-      console.log('  8. python ui/serve.py  (launch dashboard on localhost:8770)');
+      console.log('  8. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:8770)');
     } else {
       console.log('\nConfiguration steps:');
       console.log(`  1. cd ${finalTargetDir}`);
@@ -828,7 +828,7 @@ if (!isRuntimeCommand) {
       console.log(`  6. cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
       console.log('\nRun the daemon and dashboard:');
       console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
-      console.log('  8. python ui/serve.py  (launch dashboard on localhost:8770)');
+      console.log('  8. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:8770)');
     }
     console.log('\nFor full documentation, see the README.md in the scaffolded directory.');
     process.exit(0);
