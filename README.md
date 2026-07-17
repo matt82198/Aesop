@@ -8,13 +8,13 @@
 
 <p align="center">
   <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop/rc" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-orange.svg" alt="License: PolyForm Strict 1.0.0 (source-available)"></a>
 </p>
 
 **Aesop** is a source-available orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
 
-As of **0.1.0-rc.1**, that loop has carried the project to an installable, tested, audited, and benchmarked release candidate—the fleet running the wave loop on its own, under a human who sets goals and owns the outward gates. The claims below are backed by committed artifacts you can check, not adjectives. See [Milestone: it shipped itself](#milestone-it-shipped-itself-010-rc1).
+As of **0.1.0**, that loop has carried the project to an installable, tested, audited, and benchmarked stable release—the fleet running the wave loop on its own, under a human who sets goals and owns the outward gates. The claims below are backed by committed artifacts you can check, not adjectives. See [Milestone: it shipped itself](#milestone-it-shipped-itself-010-rc1).
 
 What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator), **durable state** (git-committed checkpoints survive wipes), **observable machinery** (every agent run logged, every cost tracked), **live dashboard** (real-time fleet health at http://localhost:8770), and **security gates** (secret-scan blocks pushes, CI validates each merge).
 
@@ -70,12 +70,12 @@ audit + fleet-ops monitoring
 
 ## Get Started (3 steps, 5 min)
 
-**Note:** Aesop is at its first release candidate. Install the `@rc` tag for the latest prerelease (v0.1.0-rc.1); the `@beta` tag remains available for earlier prereleases.
+**Note:** Aesop's first stable release is `0.1.0`, published to npm under the `latest` tag — a plain `npx @matt82198/aesop` or `npm install @matt82198/aesop` pulls it. Earlier prereleases remain available under the `@rc` and `@beta` tags.
 
 ### Quickest path: npx scaffold
 
 ```bash
-npx @matt82198/aesop@rc my-fleet \
+npx @matt82198/aesop my-fleet \
   --name "my-api" \
   --repos "/path/to/repo1,/path/to/repo2"
 cd my-fleet

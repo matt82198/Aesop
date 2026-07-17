@@ -1,9 +1,10 @@
-# Aesop 0.1.0-rc.1
+# Aesop 0.1.0
 
-**First release candidate.** Aesop is an open-source, self-building orchestration harness for
+**First stable release.** Aesop is a source-available, self-building orchestration harness for
 Claude Code: a plain-file "brain", git as the only durable state layer, cheap Haiku-first
-subagent fleets, and guardrails enforced in code. This RC is the first build where the core
-claims are backed by measurement rather than illustration.
+subagent fleets, and guardrails enforced in code. 0.1.0 graduates the `0.1.0-rc.1` candidate
+to a stable version with the same feature set — the first build where the core claims are
+backed by measurement rather than illustration, now published under the npm `latest` tag.
 
 ## What's in this release
 
@@ -29,7 +30,7 @@ claims are backed by measurement rather than illustration.
 ## Install
 
 ```bash
-npx @matt82198/aesop@rc my-fleet --name "my-api" --repos "/path/to/repo"
+npx @matt82198/aesop my-fleet --name "my-api" --repos "/path/to/repo"
 ```
 
 ## Honest limits
@@ -40,8 +41,9 @@ npx @matt82198/aesop@rc my-fleet --name "my-api" --repos "/path/to/repo"
 - **Out-of-repo dispatch core.** The orchestration loop is driven by Claude Code and your own
   operator workflow; this package ships the harness, guardrails, dashboard, and tooling, not a
   turnkey autonomous agent runtime.
-- **Release candidate, not final.** APIs, config, and dashboard contracts may still shift
-  before 0.1.0. Pin the exact version if you need stability.
+- **Early 0.x, not 1.0.** This is an early stable release; APIs, config, and dashboard
+  contracts may still evolve across future 0.x versions. Pin the exact version if you need
+  stability.
 - **Local-first.** State lives in git and local files; there is no hosted control plane. Team
   scale beyond a single machine is on the roadmap, not shipped here.
 
