@@ -46,6 +46,11 @@
   "cardinal_rules": {
     "subagent_model": "haiku"
   },
+  "limits": {
+    "_comment": "Cost ceiling / kill switch (tools/cost_ceiling.py, tools/halt.py). null disables a given ceiling (feature opt-in). When spend meets or exceeds a configured ceiling, cost_ceiling.py trips tools/halt.py's .HALT sentinel, which daemons/run-watchdog.sh checks at the top of every cycle and refuses to do work (no backup, no push, no scan) until cleared via 'python tools/halt.py --clear'.",
+    "max_wave_tokens": null,
+    "max_daily_tokens": null
+  },
   "alerts": {
     "_comment": "Slack/Discord webhook integration for fleet alerts. webhook_url: null (default) disables alerts (feature opt-in). SETUP: (1) Slack: Create an app at https://api.slack.com/apps, enable 'Incoming Webhooks', add a new webhook to your channel, copy the Webhook URL. (2) Discord: In your Discord server, go to Server Settings > Integrations > Webhooks, create a webhook, copy its URL. SECURITY: NEVER commit a real webhook URL to version control — retrieve at runtime via environment variable AESOP_ALERTS_WEBHOOK_URL or load from a .env.local file. Provider: 'slack' (block-kit format) or 'discord' (embed format). min_severity: filter by HIGH/CRITICAL/etc. heartbeat_stall_s: alert if watchdog heartbeat older than N seconds (null = skip).",
     "webhook_url": null,

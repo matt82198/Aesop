@@ -22,31 +22,32 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `audit-3-complete / wave-7-backlog-seeded` (2026-07-12, current)
-Four-lens re-audit (audit #3) completed post-wave-6: NOT clean → 7 items (1 P1, 6 P2).
-2 quick-wins fixed in PR #64 already merged to main; remaining 7 items seeded in wave-7
-backlog below. Loop continues. See AUDIT-BACKLOG.md Wave 7 for full ranked backlog.
+## Phase: `wave-26-credibility-safety` (2026-07-16, current)
+Wave-25 CLOSED (2026-07-16, commit 53212d9 PR #166): Opus audit found 18/18 confirmed findings,
+16 unique fixed (secret-gate fail-closed, tests-run, py-portability, gitattributes, claudemd-drift,
+docs-currency, rotate-claim). No P0/P1. Wave-26 in progress: credibility & safety pillar.
 
-Previous: Wave-6 P0 security fixes all merged (PRs #36–#41); CI-repair wave (PRs #42–#46) fixed
-5 Linux-only defects. Main push-CI fully green (all 8 test/scan steps).
+**Wave-26 focus**: Address user critique that orchestration core is untested, Haiku sufficiency
+claim unmeasured, no cost ceiling / kill switch despite autonomous self-merge. Rigor required:
+genuine measurement, not theater. Held-out benchmark scaffold, cost-ceiling enforcement,
+orchestration test harness (monitor loop tested), guard-rails verified under load.
 
 ## Upcoming phases
-1. **`wave-5-close`** — land + merge the 6 remaining branches and 2 ports; full
-   final-catch (npm + python + all shell suites + hook/reconstitute self-tests);
-   restart web dash on merged main; collapse backlog again.
-2. **`audit-2`** — second re-audit vs the five pillars, now SEVEN lenses (user,
-   2026-07-12): architect, security, bash, js, honest + **frontend engineer**
-   (runtime wiring/update model/perf of ui+dash, real-browser via playwright) +
-   **design analyst** (ui-ux-designer: hierarchy, interaction, usability). UI
-   findings/fixes always go to typed frontend specialists with playwright proof,
-   never generic Haikus. Clean → one more; findings → wave 6 branch-per-item.
-   (2 consecutive cleans end the loop.)
-3. **`release`** — version bump + tag (next beta), npm publish check, CI badge in
-   README, release notes from the backlog's cleared history.
-4. **`ops-hardening` (candidates, unclaimed)** — BUILDLOG lifecycle doc; INCIDENT-LOG
-   correlation; commit-format check in pre-push hook; merge conductor3 branches
-   (fix/watchdog-atomic-lock, fix/monitor-path-and-rotation) + daemon restart on the
-   fixed script; SIGNALS.json consumer integration (serve.py reading monitor brief).
+1. **`wave-26-measurement`** — Orchestration core instrumentation (monitor loop, lock contention,
+   heartbeat staleness, cost/token tracking per agent + fleet). Held-out benchmark fixture
+   (sealed input, measure cold-start + per-cycle time/tokens). Cost ceiling gates (set $/cycle
+   limit; agent scales adaptively). Kill-switch wiring (orchestrator pause/resume via sentinel
+   file or state-push). Guard-rail harness tests under load (concurrent writes, flaky I/O,
+   network delays). Subagent-model verification (spot-check Haiku adequacy vs Opus on a few
+   items; measure delta). Report honestly: what was/wasn't proved.
+2. **`wave-27-reconciliation`** — State-layer deep rework: move state off git (event-sourced SQLite
+   BUILDLOG/AUDIT ledger) + batch git to wave boundary (latency + team scale). Reproduce-from-
+   clean-clone CI fixture (verify onboarded checkout can replay full wave with no ambient state).
+3. **`wave-28-enforcement`** — Guardrail harness codification (branch discipline, secret gates,
+   cost ceilings as exit-1 blocks in pre-push hook + CI). Review/audit loop metrics (P0/P1
+   escape rate, fix latency, Opus vs Haiku quality delta). Automated enforcement tests.
+4. **`release-candidate`** — Full final-catch (all suites green), version bump, tag, CI badge,
+   release notes curated from the backlog's wave-by-wave history.
 
 ## Phase history (collapsed)
 - `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/
@@ -57,10 +58,22 @@ Previous: Wave-6 P0 security fixes all merged (PRs #36–#41); CI-repair wave (P
 - `merged-wave4-open` → PR #16 merged (`f259c4f`); branch-per-item adopted; audit #1
   dispatched.
 
-## NEXT STEPS
-1. Wave-7 items below (see AUDIT-BACKLOG.md Wave 7); branch-per-item, TDD-first.
-2. Start with the fail-open lock (P1 item 1): needs a **fail-closed-vs-queue decision**
-   (recommendation: fail-closed for integrity-critical PROPOSALS.md/audit writes).
-3. Wave-7 P2 tier dispatch (6 items: accessibility, color semantics, bare excepts, 
-   ThreadingHTTPServer unbounded, docs/CLAUDE.md drift, lock pid-write atomicity).
-4. Post-P2 landing: re-audit (audit #4) vs five pillars. (2 consecutive cleans end loop.)
+## NEXT STEPS (wave-26)
+1. **Orchestration harness instrumentation** — Add telemetry to monitor loop (lock wait times,
+   write coalescing, heartbeat cadence). Cost tracking per agent + fleet. Cold-start timing.
+2. **Held-out benchmark scaffold** — Sealed input fixture (e.g. standard backlog); measure
+   wave time/tokens cold vs warm. Commit baseline to git; CI runs post-merge to detect drift.
+3. **Cost ceiling enforcement** — Configurable $/cycle budget; agent scale adapts (fewer
+   parallel, smaller footprint per agent) when approaching limit. Test: exceed limit → adapt.
+4. **Kill-switch wiring** — Sentinel file or API endpoint to pause/resume orchestrator mid-wave
+   without losing state. Verify: pause stops new agent dispatch; resume resumes cleanly.
+5. **Subagent-model verification** — A/B spot-check: Haiku vs Opus on 3–5 representative items
+   (e.g. one UI fix, one test, one docs). Measure latency/quality/cost delta objectively.
+   Publish honest verdict: sufficiency confirmed or model reclassification needed.
+6. **Guard-rail load tests** — Concurrent writes (monitor + UI emitting proposals), flaky I/O
+   (delayed responses), network jitter. Verify locks hold, no data loss, no silent failures.
+
+**Wave-27 deferrals** (not wave-26; backlog for wave-27 kickoff):
+- State-layer rework: event-sourced SQLite (BUILDLOG/AUDIT ledger off git); batch git at
+  wave boundary.
+- Reproduce-from-clean-clone CI: verify onboarded checkout replays wave without ambient state.

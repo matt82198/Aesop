@@ -114,45 +114,51 @@ render_frame() {
   echo -ne "$FRAME"
 }
 
-while true; do
-  SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-  SPINNER_IDX=$(( SPINNER % 10 ))
-  SPIN_CHAR="${SPINNER_CHARS:$SPINNER_IDX:1}"
-  ((SPINNER++))
+main() {
+  while true; do
+    SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    SPINNER_IDX=$(( SPINNER % 10 ))
+    SPIN_CHAR="${SPINNER_CHARS:$SPINNER_IDX:1}"
+    ((SPINNER++))
 
-  now=$(date +%s)
-  hb=$(cat "$HB" 2>/dev/null)
-  case "$hb" in
-    ''|*[!0-9]*) hb=0 ;;
-  esac
+    now=$(date +%s)
+    hb=$(cat "$HB" 2>/dev/null)
+    case "$hb" in
+      ''|*[!0-9]*) hb=0 ;;
+    esac
 
-  if [ "$hb" -gt 0 ]; then
-    AGE=$(( now - hb ))
-  else
-    AGE=99999
-  fi
+    if [ "$hb" -gt 0 ]; then
+      AGE=$(( now - hb ))
+    else
+      AGE=99999
+    fi
 
-  WD_THRESH=$(get_hb_threshold "watchdog")
-  if [ "$AGE" -lt "$WD_THRESH" ]; then
-    WD="${G}ALIVE${X} ${D}(${AGE}s)${X}"
-  else
-    WD="${R}STALE${X}"
-  fi
+    WD_THRESH=$(get_hb_threshold "watchdog")
+    if [ "$AGE" -lt "$WD_THRESH" ]; then
+      WD="${G}ALIVE${X} ${D}(${AGE}s)${X}"
+    else
+      WD="${R}STALE${X}"
+    fi
 
-  set -- $(awk '/^RESOLVED-FP/ { next } / HIGH / { hi++ } / MED / { me++ } END { print hi+0 " " me+0 }' "$SLOG" 2>/dev/null || echo '0 0')
-  HI="$1"; ME="$2"
+    set -- $(awk '/^RESOLVED-FP/ { next } / HIGH / { hi++ } / MED / { me++ } END { print hi+0 " " me+0 }' "$SLOG" 2>/dev/null || echo '0 0')
+    HI="$1"; ME="$2"
 
-  if [ "$FIRST_FRAME" -eq 1 ]; then
-    printf '\033[2J'
-    FIRST_FRAME=0
-  else
-    printf '\033[H'
-  fi
+    if [ "$FIRST_FRAME" -eq 1 ]; then
+      printf '\033[2J'
+      FIRST_FRAME=0
+    else
+      printf '\033[H'
+    fi
 
-  render_frame | while IFS= read -r line; do
-    printf '%s\033[K\n' "$line"
+    render_frame | while IFS= read -r line; do
+      printf '%s\033[K\n' "$line"
+    done
+    printf '\033[J'
+
+    sleep 4
   done
-  printf '\033[J'
+}
 
-  sleep 4
-done
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

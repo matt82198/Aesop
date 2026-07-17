@@ -7,6 +7,18 @@ ACCEPTANCE = the test gate; flip the box per landed PR.
 
 **Status legend:** ⬜ unclaimed · 🔵 dispatched/in-flight · ✅ merged to main · ⏸ needs user call
 
+---
+
+## Reconciliation note (wave-25 checkpoint, 2026-07-16)
+
+**As of wave-25 (commit 53212d9, 2026-07-16), the per-item checkboxes for waves 6–8 are STALE
+and unreliable.** Many items were shipped across waves 9–24 without checkbox flips. The
+**authoritative ledger is now `~/conductor3/AUDIT-PRIMER.md`** (rolling audit baseline, delta
+audits per wave, full audits only on trigger conditions). Treat this file's older ⬜ boxes as
+historical context, not open work. Wave-25 findings are listed at the end of this file.
+
+---
+
 ## Cleared history (collapsed)
 
 - **Waves 1–4 (2026-07-12): 26/26 items ✅** — 8 P0 security/correctness, all P1, all P2,
@@ -314,3 +326,29 @@ Prioritized backlog for the refinement loop post-wave-7. Branch-per-item; TDD-fi
 - 2026-07-12: **Four-lens re-audit (audit #3)** — security+correctness, architecture, frontend/UX, honest. NOT clean → 7 items (1 P1, 6 P2); 2 quick-wins fixed in PR #64 (already merged); rest deferred to wave 7 backlog. Loop continues.
 - 2026-07-13: **Wave-7 work in progress** — Multiple PR branches active; /power adoption docs (PR #67), tools regen + tests/CLAUDE.md docs (this PR), and P0–P3 fixes landing incrementally.
 - 2026-07-13: **Wave-8 backlog planned** — P0 blocking decisions (acquireLock, CI wiring, a11y) + user-flagged features (backlog tracker, orchestrator status panel) + P1–P3 refinements. Ready for prioritization after wave-7 lands.
+
+---
+
+# Wave 25 — credibility & safety instrumentation (2026-07-16, closed)
+
+**Opus audit findings:** 18/18 confirmed. 16 unique fixed, merged in PR #166 (commit 53212d9).
+No P0/P1 findings.
+
+## Findings merged (✅ PR #166)
+
+- ✅ **[sec] secret_scan gate has blob/worktree bypasses** — `get_git_blob` escapes to shell,
+  worktree can scan unvetted .git; fail-closed on git-show error; blob filters verified.
+- ✅ **[test] CI gate logic wired but not executed** — metrics_gate runs but result not gated; add
+  exit-code propagation + test isolation (metrics_gate scans repo at cwd, test_metrics_gate stops
+  chdir leakage).
+- ✅ **[py] Python tools missing portability for non-UTF8 envs** — rotate_logs, verify_dash,
+  verify_submit_encoding hardened for latin-1 fallback + codec errors.
+- ✅ **[config] gitattributes missing shell/script LF enforcement** — Add root .gitattributes to
+  enforce LF for shell and script files (avoid CRLF creep on Windows).
+- ✅ **[docs] monitor/CLAUDE.md + bin/CLAUDE.md drift from implementation** — Update monitor and
+  bin domain docs for accuracy; domain-map-drift test confirmed.
+- ✅ **[docs] README + CHANGELOG stale for wave-25 changes** — Update docs for 16 fixes landed.
+- ✅ **[arch] rotate_logs concurrency guarantee not enforced** — Lock around non-atomic O_APPEND;
+  verify pid write succeeds before returning; test: concurrent append under load.
+
+No findings in backlog (audit clean on remaining items; defer credibility-layer work to wave-26).

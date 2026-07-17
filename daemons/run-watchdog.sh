@@ -5,12 +5,17 @@
 #
 # Configuration: export AESOP_ROOT=/path/to/aesop before running (defaults to script directory's parent).
 # Testing: export AESOP_WATCHDOG_CYCLE_CMD to override backup-fleet.sh invocation
+#
+# Kill switch (wave-26 safety brake): if AESOP_ROOT/state/.HALT exists (see
+# tools/halt.py), every cycle logs "HALTED: <reason>" and skips all work — no
+# backup, no push, no scan — until cleared via `python tools/halt.py --clear`.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
 MODE="${1:-daemon}"
 LOCK_DIR="$AESOP_ROOT/state/.watchdog-lock"
 LOCK_STALE_THRESHOLD=300
+HALT_SENTINEL="$AESOP_ROOT/state/.HALT"
 
 # Resolve Python interpreter (portable: prefer python3, fallback to python)
 PYTHON_EXE=""
@@ -143,64 +148,119 @@ check_monitor_staleness() {
   fi
 }
 
-# Try to acquire lock (applies to both --once and daemon modes)
-acquire_lock "$LOCK_DIR" "$LOCK_STALE_THRESHOLD"
-lock_result=$?
-
-if [ $lock_result -eq 1 ]; then
-  echo "watchdog already running — not starting a duplicate."
-  exit 0
-fi
-
-echo "==================================================================="
-echo "  FLEET WATCHDOG DAEMON  ·  backup + ensure-push + scan / 150s"
-echo "  logs: $AESOP_ROOT/state/FLEET-BACKUP.log   ·   Ctrl-C to stop"
-echo "==================================================================="
-echo "[$(date '+%F %T')] === watchdog daemon (shell) STARTED ===" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
-trap "release_lock \"$LOCK_DIR\"; echo \"[$(date '+%F %T')] === watchdog daemon (shell) STOPPED ===\" >> \"$AESOP_ROOT/state/FLEET-BACKUP.log\"; echo \"stopped.\"; exit 0" INT TERM
-
-# Allow override of backup cycle command (for testing)
-# Use array to safely handle paths with spaces (P1 fix)
-if [ -n "$AESOP_WATCHDOG_CYCLE_CMD" ]; then
-  # Override: run as-is through bash -c
-  CYCLE_CMD_ARRAY=("bash" "-c" "$AESOP_WATCHDOG_CYCLE_CMD")
-else
-  # Default: array form for proper quoting
-  CYCLE_CMD_ARRAY=("bash" "$AESOP_ROOT/daemons/backup-fleet.sh")
-fi
-
-if [ "$MODE" = "--once" ]; then
-  full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
-  cmd_exit=$?
-  echo "$full_out"
-  if [ $cmd_exit -ne 0 ]; then
-    err_msg="[$(date '+%F %T')] ERROR: cycle #1 failed with exit code $cmd_exit"
-    echo "$err_msg" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
-    echo "[ERROR: exit $cmd_exit]" >&2
+# Kill switch check (wave-26 safety brake). Returns 0 (bash true) and logs
+# "HALTED: <reason>" if $AESOP_ROOT/state/.HALT exists; returns 1 otherwise.
+# Never runs backup/push/scan work when halted — caller must skip the cycle.
+check_halt() {
+  local log_file="$1"
+  if [ ! -f "$HALT_SENTINEL" ]; then
+    return 1
   fi
+
+  local reason="halted (reason unavailable)"
   if [ -n "$PYTHON_EXE" ]; then
-    "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
+    local parsed
+    parsed=$("$PYTHON_EXE" -c '
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+    r = data.get("reason")
+    if r:
+        print(r)
+except Exception:
+    pass
+' "$HALT_SENTINEL" 2>/dev/null)
+    if [ -n "$parsed" ]; then
+      reason="$parsed"
+    fi
   fi
-  release_lock "$LOCK_DIR"
-  exit $cmd_exit
-fi
 
-n=0
-while true; do
-  n=$((n+1))
-  full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
-  cmd_exit=$?
-  if [ $cmd_exit -eq 0 ]; then
-    out=$(echo "$full_out" | tail -2)
-    printf '%s  cycle #%d\n%s\n' "$(date '+%H:%M:%S')" "$n" "$out"
+  echo "HALTED: $reason"
+  if [ -n "$log_file" ]; then
+    echo "[$(date '+%F %T')] HALTED: $reason" >> "$log_file"
+  fi
+  return 0
+}
+
+# Main execution — guarded below so sourcing this file (e.g. from tests, to
+# reuse acquire_lock/release_lock/check_halt) never runs a cycle as a
+# side effect of the source itself.
+main() {
+  # Try to acquire lock (applies to both --once and daemon modes)
+  acquire_lock "$LOCK_DIR" "$LOCK_STALE_THRESHOLD"
+  lock_result=$?
+
+  if [ $lock_result -eq 1 ]; then
+    echo "watchdog already running — not starting a duplicate."
+    exit 0
+  fi
+
+  echo "==================================================================="
+  echo "  FLEET WATCHDOG DAEMON  ·  backup + ensure-push + scan / 150s"
+  echo "  logs: $AESOP_ROOT/state/FLEET-BACKUP.log   ·   Ctrl-C to stop"
+  echo "==================================================================="
+  echo "[$(date '+%F %T')] === watchdog daemon (shell) STARTED ===" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
+  trap "release_lock \"$LOCK_DIR\"; echo \"[$(date '+%F %T')] === watchdog daemon (shell) STOPPED ===\" >> \"$AESOP_ROOT/state/FLEET-BACKUP.log\"; echo \"stopped.\"; exit 0" INT TERM
+
+  # Allow override of backup cycle command (for testing)
+  # Use array to safely handle paths with spaces (P1 fix)
+  if [ -n "$AESOP_WATCHDOG_CYCLE_CMD" ]; then
+    # Override: run as-is through bash -c
+    CYCLE_CMD_ARRAY=("bash" "-c" "$AESOP_WATCHDOG_CYCLE_CMD")
   else
-    echo "[$(date '+%F %T')] ERROR: cycle #$n failed with exit code $cmd_exit" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
-    out=$(echo "$full_out" | tail -2)
-    printf '%s  cycle #%d [ERROR: exit %d]\n%s\n' "$(date '+%H:%M:%S')" "$n" "$cmd_exit" "$out"
+    # Default: array form for proper quoting
+    CYCLE_CMD_ARRAY=("bash" "$AESOP_ROOT/daemons/backup-fleet.sh")
   fi
-  check_monitor_staleness "$MONITOR_HB_FILE" "$MONITOR_HB_STALE_THRESHOLD" "$AESOP_ROOT/state/FLEET-BACKUP.log"
-  if [ -n "$PYTHON_EXE" ]; then
-    "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
+
+  if [ "$MODE" = "--once" ]; then
+    if check_halt "$AESOP_ROOT/state/FLEET-BACKUP.log"; then
+      release_lock "$LOCK_DIR"
+      exit 0
+    fi
+    full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
+    cmd_exit=$?
+    echo "$full_out"
+    if [ $cmd_exit -ne 0 ]; then
+      err_msg="[$(date '+%F %T')] ERROR: cycle #1 failed with exit code $cmd_exit"
+      echo "$err_msg" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
+      echo "[ERROR: exit $cmd_exit]" >&2
+    fi
+    if [ -n "$PYTHON_EXE" ]; then
+      "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
+    fi
+    release_lock "$LOCK_DIR"
+    exit $cmd_exit
   fi
-  sleep 150
-done
+
+  n=0
+  while true; do
+    n=$((n+1))
+    if check_halt "$AESOP_ROOT/state/FLEET-BACKUP.log"; then
+      sleep 150
+      continue
+    fi
+    full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
+    cmd_exit=$?
+    if [ $cmd_exit -eq 0 ]; then
+      out=$(echo "$full_out" | tail -2)
+      printf '%s  cycle #%d\n%s\n' "$(date '+%H:%M:%S')" "$n" "$out"
+    else
+      echo "[$(date '+%F %T')] ERROR: cycle #$n failed with exit code $cmd_exit" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
+      out=$(echo "$full_out" | tail -2)
+      printf '%s  cycle #%d [ERROR: exit %d]\n%s\n' "$(date '+%H:%M:%S')" "$n" "$cmd_exit" "$out"
+    fi
+    check_monitor_staleness "$MONITOR_HB_FILE" "$MONITOR_HB_STALE_THRESHOLD" "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    if [ -n "$PYTHON_EXE" ]; then
+      "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
+    fi
+    sleep 150
+  done
+}
+
+# Execution guard: only run a cycle when this script is executed directly,
+# not when it is sourced (e.g. `source run-watchdog.sh` in a test harness to
+# reuse acquire_lock/release_lock/check_halt without triggering a cycle).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

@@ -275,28 +275,29 @@ process_repo() {
   )
 }
 
-log "=== cycle start ==="
-temp_json=$(mktemp)
-echo "[" > "$temp_json"
-first=1
-processed_paths=""
+main() {
+  log "=== cycle start ==="
+  temp_json=$(mktemp)
+  echo "[" > "$temp_json"
+  first=1
+  processed_paths=""
 
-# AUDIT FIX 1: Check if aesop.config.json exists and has repos array
-repos_to_scan=""
-config_file="$AESOP_ROOT/aesop.config.json"
-if [ -f "$config_file" ]; then
-  # Find Python interpreter (portable: prefer python3, fallback to python)
-  python_exe=""
-  if command -v python3 >/dev/null 2>&1; then
-    python_exe="python3"
-  elif command -v python >/dev/null 2>&1; then
-    python_exe="python"
-  fi
+  # AUDIT FIX 1: Check if aesop.config.json exists and has repos array
+  repos_to_scan=""
+  config_file="$AESOP_ROOT/aesop.config.json"
+  if [ -f "$config_file" ]; then
+    # Find Python interpreter (portable: prefer python3, fallback to python)
+    python_exe=""
+    if command -v python3 >/dev/null 2>&1; then
+      python_exe="python3"
+    elif command -v python >/dev/null 2>&1; then
+      python_exe="python"
+    fi
 
-  if [ -n "$python_exe" ]; then
-    # Parse repos array from config using Python (not grep)
-    # Note: Strip trailing \r (CRLF compatibility) and empty lines
-    repos_to_scan=$($python_exe -c "
+    if [ -n "$python_exe" ]; then
+      # Parse repos array from config using Python (not grep)
+      # Note: Strip trailing \r (CRLF compatibility) and empty lines
+      repos_to_scan=$($python_exe -c "
 import json, sys
 try:
   with open(sys.argv[1], 'r') as f:
@@ -309,88 +310,93 @@ try:
 except Exception as e:
   pass
 " "$config_file" 2>/dev/null | tr -d '\r')
+    fi
   fi
-fi
 
-if [ -n "$repos_to_scan" ]; then
-  # AUDIT FIX 1: Use explicit repos from config
-  log "Loading repos from config file"
-  while IFS= read -r dir; do
-    [ -z "$dir" ] && continue
-    # Validate repo path exists
-    if [ ! -d "$dir/.git" ]; then
-      log "WARN: configured repo not found or not a git repo (skipping): $dir"
-      continue
-    fi
-    # Normalize path to detect duplicates
-    real_dir=$(cd "$dir" && pwd 2>/dev/null)
-    if [ -z "$real_dir" ]; then continue; fi
-    if echo "$processed_paths" | grep -Fxq "$real_dir"; then
-      continue
-    fi
-    processed_paths="$processed_paths
+  if [ -n "$repos_to_scan" ]; then
+    # AUDIT FIX 1: Use explicit repos from config
+    log "Loading repos from config file"
+    while IFS= read -r dir; do
+      [ -z "$dir" ] && continue
+      # Validate repo path exists
+      if [ ! -d "$dir/.git" ]; then
+        log "WARN: configured repo not found or not a git repo (skipping): $dir"
+        continue
+      fi
+      # Normalize path to detect duplicates
+      real_dir=$(cd "$dir" && pwd 2>/dev/null)
+      if [ -z "$real_dir" ]; then continue; fi
+      if echo "$processed_paths" | grep -Fxq "$real_dir"; then
+        continue
+      fi
+      processed_paths="$processed_paths
 $real_dir"
 
-    if is_touched "$dir"; then
-      temp_result=$(mktemp)
-      process_repo "$dir" > "$temp_result"
-      state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
-      name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
-      rm -f "$temp_result"
-      [ -z "$state" ] && continue
-      if [ "$first" = 1 ]; then
-        first=0
-      else
-        echo "," >> "$temp_json"
+      if is_touched "$dir"; then
+        temp_result=$(mktemp)
+        process_repo "$dir" > "$temp_result"
+        state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
+        name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
+        rm -f "$temp_result"
+        [ -z "$state" ] && continue
+        if [ "$first" = 1 ]; then
+          first=0
+        else
+          echo "," >> "$temp_json"
+        fi
+        printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
+        log "$state: $name"
       fi
-      printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
-      log "$state: $name"
-    fi
-  done <<< "$repos_to_scan"
-else
-  # AUDIT FIX 1: Fall back to autodiscovery only when no repos configured
-  log "No repos configured, using autodiscovery"
-  # Discover all git repos: scan home dot-directories, root directories, dev/ subdirectory
-  # This pattern includes ~/.* (dot-dirs like .claude), ~/* (home root), ~/dev/* (dev subtree)
-  for dir in ~/.* ~/* ~/dev/*; do
-    base=$(basename "$dir")
-    [ "$base" = "." ] || [ "$base" = ".." ] && continue
-    [ ! -d "$dir/.git" ] && continue
+    done <<< "$repos_to_scan"
+  else
+    # AUDIT FIX 1: Fall back to autodiscovery only when no repos configured
+    log "No repos configured, using autodiscovery"
+    # Discover all git repos: scan home dot-directories, root directories, dev/ subdirectory
+    # This pattern includes ~/.* (dot-dirs like .claude), ~/* (home root), ~/dev/* (dev subtree)
+    for dir in ~/.* ~/* ~/dev/*; do
+      base=$(basename "$dir")
+      [ "$base" = "." ] || [ "$base" = ".." ] && continue
+      [ ! -d "$dir/.git" ] && continue
 
-    # Normalize path to detect duplicates (e.g., .claude vs .claude/)
-    real_dir=$(cd "$dir" && pwd 2>/dev/null)
-    if [ -z "$real_dir" ]; then continue; fi
-    if echo "$processed_paths" | grep -Fxq "$real_dir"; then
-      continue
-    fi
-    processed_paths="$processed_paths
+      # Normalize path to detect duplicates (e.g., .claude vs .claude/)
+      real_dir=$(cd "$dir" && pwd 2>/dev/null)
+      if [ -z "$real_dir" ]; then continue; fi
+      if echo "$processed_paths" | grep -Fxq "$real_dir"; then
+        continue
+      fi
+      processed_paths="$processed_paths
 $real_dir"
 
-    if is_touched "$dir"; then
-      # P0 FIX: Eliminate $() command substitution to preserve NUL bytes in protocol
-      # Direct redirect maintains NUL delimiters (process_repo emits STATE\0name format)
-      temp_result=$(mktemp)
-      process_repo "$dir" > "$temp_result"
-      # Read first field (state) and second field (name) using NUL delimiter
-      # Portable solution: use awk with RS="\0" instead of GNU sed \x0 (BSD/macOS compatible)
-      state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
-      name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
-      rm -f "$temp_result"
-      [ -z "$state" ] && continue
-      if [ "$first" = 1 ]; then
-        first=0
-      else
-        echo "," >> "$temp_json"
+      if is_touched "$dir"; then
+        # P0 FIX: Eliminate $() command substitution to preserve NUL bytes in protocol
+        # Direct redirect maintains NUL delimiters (process_repo emits STATE\0name format)
+        temp_result=$(mktemp)
+        process_repo "$dir" > "$temp_result"
+        # Read first field (state) and second field (name) using NUL delimiter
+        # Portable solution: use awk with RS="\0" instead of GNU sed \x0 (BSD/macOS compatible)
+        state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
+        name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
+        rm -f "$temp_result"
+        [ -z "$state" ] && continue
+        if [ "$first" = 1 ]; then
+          first=0
+        else
+          echo "," >> "$temp_json"
+        fi
+        # P2 FIX: JSON-escape all interpolated values before emitting
+        # P2 FIX: Portable date format (not GNU-only date -Iseconds)
+        printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
+        log "$state: $name"
       fi
-      # P2 FIX: JSON-escape all interpolated values before emitting
-      # P2 FIX: Portable date format (not GNU-only date -Iseconds)
-      printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
-      log "$state: $name"
-    fi
-  done
-fi
+    done
+  fi
 
-echo "" >> "$temp_json"
-echo "]" >> "$temp_json"
-mv "$temp_json" "$REPOS_STATUS"
-log "=== cycle end ==="
+  echo "" >> "$temp_json"
+  echo "]" >> "$temp_json"
+  mv "$temp_json" "$REPOS_STATUS"
+  log "=== cycle end ==="
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
