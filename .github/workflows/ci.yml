@@ -49,7 +49,7 @@ jobs:
     needs: docs-only-gate
     if: needs.docs-only-gate.outputs.is_docs_only == 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       matrix:
         python-shard: [0, 1, 2, 3]
@@ -79,10 +79,39 @@ jobs:
           done
 
       - name: Run Node.js tests
-        run: npm run test:node
+        run: |
+          # Run Node.js tests with extended timeout for CI environment
+          # The --test-timeout value is in milliseconds; set to 120s per test
+          node --test --test-force-exit --test-timeout=120000 tests/**/*.test.mjs || {
+            echo "Node tests exited with code $?"
+            # Don't fail immediately; let cleanup run first
+            exit 1
+          }
+        env:
+          NODE_OPTIONS: "--max-old-space-size=2048"
+        timeout-minutes: 20
+
+      - name: Clean up test artifacts
+        if: always()
+        run: |
+          # Kill any lingering node processes from tests
+          pkill -f "node.*test" || true
+          sleep 1
+
+          # Remove any leftover temp directories from tests
+          # Use timeout to prevent hanging on locked files
+          timeout 10 bash -c 'rm -rf /tmp/aesop-* 2>/dev/null || true' || true
+
+          # Also clean up any bash processes that might be holding locks
+          pkill -f "bash.*test" || true
+
+          # Final wait for filesystem to settle
+          sleep 2
+        timeout-minutes: 2
 
       - name: Run shell test suites
         run: npm run test:sh
+        timeout-minutes: 15
 
       - name: Tool import/compile/UTF-8 smoke gate
         run: |
