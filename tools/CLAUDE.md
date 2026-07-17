@@ -25,6 +25,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject)
+- `reconcile.py` — Detect/resolve drift between git STATE.md (phase) and the state_store projection (git-authoritative; --resolve appends to SQLite only)
 - `reconstitute.sh` — Clone/fetch repos from config with security validation
 - `rotate_logs.py` — Log rotation utility with size/line thresholds
 - `scanner_selftest.py` — Regression harness for secret_scan.py

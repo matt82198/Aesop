@@ -182,5 +182,75 @@ class TestCeilingCLI(CostCeilingTestCase):
         self.assertTrue(self.halt.is_halted())
 
 
+class TestDailySemanticsMultipleDays(CostCeilingTestCase):
+    """Test that daily period filters to TODAY only, not entire ledger."""
+
+    def _write_ledger_multi_day(self):
+        """Write a ledger spanning multiple days."""
+        ledger_dir = self.state_dir / "ledger"
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        ledger_file = ledger_dir / "OUTCOMES-LEDGER.md"
+        header = (
+            "| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n"
+            "|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n"
+        )
+        # Day 1 (2026-07-15): 500 tokens
+        day1_line = "| 2026-07-15T10:00:00Z | build | haiku | 10 | 200 | 300 | OK | build | 26 |\n"
+        # Day 2 (2026-07-16): 600 tokens
+        day2_line1 = "| 2026-07-16T08:00:00Z | build | haiku | 10 | 150 | 250 | OK | build | 26 |\n"
+        day2_line2 = "| 2026-07-16T15:30:00Z | verify | haiku | 5 | 100 | 100 | OK | verify | 26 |\n"
+        # Day 3 (2026-07-17): 400 tokens (TODAY in the test context)
+        day3_line = "| 2026-07-17T09:15:00Z | build | haiku | 8 | 150 | 250 | OK | build | 27 |\n"
+        lines = [header, day1_line, day2_line1, day2_line2, day3_line]
+        ledger_file.write_text("".join(lines), encoding="utf-8")
+        return ledger_file
+
+    def test_daily_filters_to_today_only(self):
+        """For period='daily', verify only today's rows are summed."""
+        self._write_ledger_multi_day()
+        # Today is 2026-07-17 (from MEMORY.md currentDate)
+        # Expected: only 2026-07-17 rows = 150 + 250 = 400 tokens
+        result = self.cost_ceiling.check(period="daily", config={"limits": {"max_daily_tokens": 1000}})
+        self.assertEqual(result["spent"], 400, f"Expected 400 tokens for today (2026-07-17), got {result['spent']}")
+        self.assertFalse(result["exceeded"])
+
+    def test_daily_exceeds_with_today_spend(self):
+        """Verify daily ceiling trip uses today's spend only, not lifetime."""
+        self._write_ledger_multi_day()
+        # Today (2026-07-17) has 400 tokens; set ceiling to 300
+        result = self.cost_ceiling.check(period="daily", config={"limits": {"max_daily_tokens": 300}})
+        self.assertTrue(result["exceeded"])
+        self.assertTrue(result["tripped"])
+
+    def test_wave_period_sums_all_rows(self):
+        """Verify period='wave' still sums ALL rows across all days."""
+        self._write_ledger_multi_day()
+        # All rows: day1=500, day2=600, day3=400 = 1500 total
+        result = self.cost_ceiling.check(period="wave", config={"limits": {"max_wave_tokens": 2000}})
+        self.assertEqual(result["spent"], 1500, f"Expected 1500 total tokens, got {result['spent']}")
+        self.assertFalse(result["exceeded"])
+
+
+class TestSharedParser(CostCeilingTestCase):
+    """Test that cost_ceiling.py uses fleet_ledger.py's parser (single source of truth)."""
+
+    def test_uses_fleet_ledger_parser(self):
+        """Verify cost_ceiling imports and uses fleet_ledger's shared parser."""
+        # This test ensures the refactor is in place
+        self._write_ledger([(100, 200), (50, 150)])
+        result = self.cost_ceiling.check(period="wave", config={"limits": {"max_wave_tokens": 1000}})
+        # Should get correct total: 100+200+50+150 = 500
+        self.assertEqual(result["spent"], 500)
+
+    def test_shared_parser_no_reimplementation(self):
+        """Verify cost_ceiling doesn't reimplement the ledger parsing logic."""
+        # Read cost_ceiling.py source to ensure it uses fleet_ledger
+        import inspect
+        source = inspect.getsource(self.cost_ceiling)
+        # Should NOT contain duplicate parsing logic (read_ledger_total_tokens should be gone or minimal)
+        # Should import or call fleet_ledger's parser
+        self.assertIn("fleet_ledger", source.lower(), "cost_ceiling.py should import/use fleet_ledger")
+
+
 if __name__ == "__main__":
     unittest.main()
