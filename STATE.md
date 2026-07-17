@@ -22,32 +22,21 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `wave-29-ci-fix` (2026-07-17, current)
-Waves 25–29 shipped the credibility & safety pillar, answering the user critique (orchestration
-core untested, Haiku-sufficiency unmeasured, no cost ceiling / kill switch under autonomous self-merge):
-- **Wave-25** (PR #166): Opus-VERIFIED audit — 18/18 confirmed (0 hallucinations, vs wave-24's 4
-  fake P0s), 16 fixes, no P0/P1.
-- **Wave-26** (PR #167): `.HALT` kill-switch (`tools/halt.py`) + `tools/cost_ceiling.py`,
-  orchestration-core tests, test-hygiene enforcement, held-out benchmark scaffold.
-- **Wave-27** (PR #168): first REAL benchmark run (extraction — Haiku=Sonnet=Opus 12/12; honestly
-  too easy to discriminate); dashboard cp1252 crash fixed.
-- **Brake wired into dispatch** (claude-config `d69267d`): kill-switch/cost-ceiling gate in
-  `wave-flat-dispatch.template.mjs`, PROVEN aborting a real dispatch (0 workers spawned; cleared cleanly).
-- **Wave-28** (PR #169): state reconcile primitive (STATE.md↔state_store, git-authoritative, disjoint
-  confirmed), cost-ceiling hardening (daily=today-UTC, shared ledger parser), repro-from-clean-clone CI;
-  + judgment benchmark v2 — **Haiku/Sonnet 11/11, Opus 10/11** (harder set discriminates AND favored
-  the cheap model; N=11, rubric-compliance caveat).
-- **Wave-29** (PR #171): pure-docs PRs no longer deadlock (`ci` runs on every PR; skipped required
-  checks were the root cause).
-
-## Upcoming (wave-30 seed — full list in conductor3/WAVE27-SEED.md)
-1. Larger-N + real-transcript-sampled judgment benchmark + a recorded cost axis, before asserting
-   "Haiku sufficient for judgment" rather than suggesting it.
-2. Wire phase_set events at wave-close so reconcile.py runs against a real populated state store.
-3. UX/UI feature wave (deferred since wave-26): the 19 ideation candidates.
-4. Re-add the docs-only CI speed optimization CORRECTLY (aggregator or step-gating) — wave-29 removed
-   the broken skip for safety, trading ~2min CI on docs PRs.
-5. **`release-candidate`** — full final-catch, version bump, tag, CI badge, curated release notes.
+## Phase: `rc-1-published-source-available` (2026-07-17, current)
+Waves 25–rc.1 shipped the **credibility, safety, and release-readiness** pillars, culminating in
+published `@matt82198/aesop@0.1.0-rc.1` (dist-tag `rc`, npm trusted publishing via OIDC),
+GitHub release v0.1.0-rc.1, and relicense to PolyForm Strict 1.0.0 (SOURCE-AVAILABLE).
+Session arc (verified, measured, live):
+- Opus-VERIFIED audit (wave-25, PR #166): 18/18 findings confirmed, 0 hallucinations, 16 fixes, no P0/P1.
+- Kill-switch built + wired + PROVEN (wave-26–27, PRs #167–#168, claude-config): halt.py, cost_ceiling.py,
+  gate in dispatch template, tested aborting a real wave (0 workers spawned; clean recovery).
+- Benchmark MEASURED (judgment v2): **Haiku 39/39, Opus 38/39** across 39 judgment tasks (~1/3 cost for Haiku);
+  extraction suite (12/12 tie); proven-sufficient evidence.
+- State reconcile primitive (wave-28, PR #169): STATE.md↔state_store sync, git-authoritative, disjoint-confirmed.
+- CI gates hardened: repro-from-clean-clone proven; docs-only deadlock fixed (wave-29, PR #171: ci runs full suite).
+- Dashboard & UI verified live (browser-proven in ui/web): Wave PR Board + Agent Inspector, SSE heartbeat working.
+- P1 credential leak fixed; npm package slimmed to ~409 kB; autonomous-SWE milestone docs shipped.
+- License audited, relicensed to PolyForm Strict (noncommercial, no-modify, SOURCE-AVAILABLE).
 
 ## Phase history (collapsed)
 - `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/
@@ -60,17 +49,26 @@ core untested, Haiku-sufficiency unmeasured, no cost ceiling / kill switch under
 - `waves-25-29` → credibility & safety pillar shipped (PRs #166–#171): verified audit, kill-switch
   built + wired into dispatch + PROVEN, 2 real benchmark runs (extraction tie, judgment favored
   Haiku), reconcile primitive, cost-ceiling hardening, repro CI, docs-deadlock CI fix.
+- `waves-25-to-rc1` → published @matt82198/aesop@0.1.0-rc.1 (npm dist-tag `rc`, OIDC trusted publishing);
+  GitHub release v0.1.0-rc.1; relicensed to PolyForm Strict 1.0.0 (SOURCE-AVAILABLE); benchmark
+  measured (Haiku 39/39 vs Opus 38/39); kill-switch proven on a real wave; state-layer primitive
+  audited-clean. 5 honest open residuals: benchmark (curated→transcript-sampled + latency); cost-ceiling
+  (brake→live wiring); state_store sqlite CI sharding; model-dispatch core (structural, out-of-repo);
+  third-party reproduce.yml untested.
 
-## NEXT STEPS (wave-30)
-1. **Larger-N judgment benchmark** — sample judgment tasks from real fleet transcripts + record a
-   cost axis (bench/ v3), so "Haiku sufficient for judgment" can be asserted, not just suggested.
-   Current evidence (N=11): Haiku/Sonnet 11/11, Opus 10/11 — suggestive, not conclusive.
-2. **phase_set event emission** — reconcile.py has the primitive; add a wave-close hook that emits
-   a phase_set event so it runs against a populated state store instead of reporting drift-on-first-use.
-3. **UX/UI feature wave** — the 19 ideation candidates (memory: waves-need-ux-ui-features); route to
-   general-purpose Haiku with playwright proof, not the delegating specialists.
-4. **Docs-only CI speed** (optional) — re-add the fast-path correctly (aggregator/step-gating);
-   wave-29 traded it for safety (ci now runs full ~2min on docs PRs).
-5. **Deeper still-open critique items** — orchestration core is only partially in-repo-testable (true
-   model dispatch lives in the harness); external reproduction now has a repro.yml but no third party
-   has run it. Both are structural, not quick fixes — track honestly.
+## NEXT STEPS (wave-rc.2)
+Honest open residuals — tracked, not ignored:
+1. **Benchmark scope (curated → real-transcript-sampled)** — Current evidence (N=39) is a curated judgment set,
+   not a transcript sample from live fleet. Next: sample judgment tasks from real aesop/conductor3 fleet transcripts,
+   add a latency axis (response time cost), then assert "Haiku sufficient for judgment" + latency profile.
+2. **Cost-ceiling: brake → live wiring** — The ceiling.py exists and is configurable, but the dispatch loop
+   does not yet query it per-turn or enforce it as a live budget-guard. Wire cost-ceiling into the dispatch
+   loop so per-item/per-wave spend is bounded LIVE, not just brake-able post-facto.
+3. **State_store sqlite concurrency under CI sharding** — tests/test_state_store.py's concurrent-append test
+   flakes under parallel CI shards (database locked). Fix: per-shard DB isolation (separate .db per shard) or
+   timeout + retry logic on OperationalError (database is locked).
+4. **Model-dispatch core out-of-repo (structural)** — True model routing/agent-type selection lives in the Claude
+   Code harness, not in aesop. This is a cross-product concern requiring upstream movement; tracked for visibility
+   but not actionable in-repo.
+5. **Third-party reproduce.yml untested** — No external user has run the reproduce.yml end-to-end from a clean clone
+   yet. Post-release: solicit a user run + gather feedback on UX, missing docs, env assumptions, etc.
