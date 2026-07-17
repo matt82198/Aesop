@@ -282,24 +282,33 @@ check_branch_policy() {
 }
 
 get_commit_range() {
-  # Parse pre-push stdin to build commit range for scanning.
+  # Parse pre-push stdin to build commit range(s) for scanning.
   # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
-  # Returns: "remote-sha..local-sha" for diff, or empty if unable to parse
+  # A single push (git push --all / multiple branches / multiple tags in one
+  # invocation) can feed MULTIPLE ref tuples on stdin, one per line. Emits
+  # ONE "remote-sha..local-sha" range PER valid tuple found, one per output
+  # line (like check_branch_policy, which already iterates every tuple to
+  # check branch policy) -- P3 wave-25 fix: this used to `return 0` after the
+  # FIRST tuple, so a multi-ref push only ever scanned the first branch's
+  # range and every other ref in the same push silently bypassed the secret
+  # scan. Returns 0 if at least one range was emitted, 1 if none could be
+  # parsed (tty, empty stdin, or no valid tuple) -- single-ref callers see
+  # exactly the same one-line output as before.
   local local_ref local_sha remote_ref remote_sha
+  local found=0
 
   if [ -t 0 ]; then
     # Running interactively on a tty; no stdin to parse
     return 1
   fi
 
-  # Read first (and typically only) ref tuple from stdin
   while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
     # Skip empty lines
     if [ -z "$remote_ref" ]; then
       continue
     fi
 
-    # Found a valid ref tuple; build the range
+    # Found a valid ref tuple; build its range
     # If remote_sha is all zeros (new branch), use merge-base with default branch
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
       # New branch: find merge-base with main/master
@@ -307,14 +316,17 @@ get_commit_range() {
       if ! git rev-parse "$default_branch" >/dev/null 2>&1; then
         default_branch="master"
       fi
-      printf '%s..%s' "$default_branch" "$local_sha"
+      printf '%s..%s\n' "$default_branch" "$local_sha"
     else
       # Existing branch: use remote sha as base
-      printf '%s..%s' "$remote_sha" "$local_sha"
+      printf '%s..%s\n' "$remote_sha" "$local_sha"
     fi
-    return 0
+    found=1
   done
 
+  if [ "$found" -eq 1 ]; then
+    return 0
+  fi
   return 1
 }
 
@@ -338,12 +350,16 @@ check_secret_scan() {
     return 0
   fi
 
-  # Parse pre-push stdin to get commit range, then scan files in that range
-  local commit_range
-  commit_range=$(get_commit_range)
+  # Parse pre-push stdin to get commit range(s), then scan files in each range.
+  # A multi-ref push (git push --all, or multiple branches/tags in one
+  # invocation) yields one range per line from get_commit_range(); scan EVERY
+  # one and fail if ANY range is dirty (P3 wave-25 fix: previously only the
+  # first ref tuple's range was ever scanned).
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
   local parse_exit_code=$?
 
-  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_range" ]; then
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
     # Malformed stdin or unable to parse: fail-CLOSED (security P1 fix)
     # Only fail-open for missing scanner tool, not for malformed input
     log_block "secret_scan_stdin_parse_failed"
@@ -351,17 +367,27 @@ check_secret_scan() {
     return 1
   fi
 
-  # Run scanner on commit range and capture output
-  local scan_output
-  scan_output=$("$scan_bin" "$scan_script" --range "$commit_range" 2>&1)
-  local scan_exit_code=$?
+  local overall_exit_code=0
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
 
-  # Surface all output including ALLOWED-DOC findings to stderr
-  if [ -n "$scan_output" ]; then
-    printf '%s\n' "$scan_output" >&2
-  fi
+    # Run scanner on this range and capture output
+    local scan_output
+    scan_output=$("$scan_bin" "$scan_script" --range "$range" 2>&1)
+    local scan_exit_code=$?
 
-  return $scan_exit_code
+    # Surface all output including ALLOWED-DOC findings to stderr
+    if [ -n "$scan_output" ]; then
+      printf '%s\n' "$scan_output" >&2
+    fi
+
+    if [ $scan_exit_code -ne 0 ]; then
+      overall_exit_code=$scan_exit_code
+    fi
+  done <<< "$commit_ranges"
+
+  return $overall_exit_code
 }
 
 log_event() {
@@ -788,12 +814,130 @@ run_test_mode() {
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 12: get_commit_range emits ALL ref tuples (multi-ref push) ===\n'
+  (
+    cd "$tmpdir" || exit 1
+    git checkout -q feature/test 2>/dev/null || git checkout -q -b feature/multiref 2>/dev/null
+    local_sha=$(git rev-parse HEAD 2>/dev/null || echo "0000000")
+
+    # Simulate a multi-ref push (git push --all / multiple branches in one
+    # invocation): two ref tuples on stdin. Wave-25 P3 regression: the old
+    # get_commit_range() `return 0`'d after the FIRST tuple, so a multi-ref
+    # push only ever produced ONE range.
+    stdin_input="refs/heads/branch-a $local_sha refs/heads/branch-a 0000000000000000000000000000000000000000
+refs/heads/branch-b $local_sha refs/heads/branch-b 0000000000000000000000000000000000000000"
+
+    ranges=$(printf '%s\n' "$stdin_input" | get_commit_range)
+    range_count=$(printf '%s\n' "$ranges" | grep -c '\.\.')
+
+    if [ "$range_count" -eq 2 ]; then
+      printf 'PASS: get_commit_range emitted %d ranges for a 2-ref push\n' "$range_count"
+    else
+      printf 'FAIL: Expected 2 ranges for a 2-ref push, got %d. Output: %s\n' "$range_count" "$ranges"
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 13: check_secret_scan scans EVERY ref range, not just the first ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_multiref"
+    mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+    # Mock scanner: fails only when the --range argument's local-sha side
+    # matches the "dirty" ref's local sha. This proves BOTH ranges from a
+    # multi-ref push are actually scanned -- not just the first -- since the
+    # dirty ref is deliberately placed SECOND in stdin.
+    cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+args = sys.argv[1:]
+range_arg = args[args.index("--range") + 1] if "--range" in args else ""
+if "2222222222222222222222222222222222222222" in range_arg:
+    sys.exit(1)
+sys.exit(0)
+SCANNER
+    chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+    # First ref tuple is clean, SECOND ref tuple is dirty. Pre-fix,
+    # get_commit_range only ever emitted the first tuple's range, so this
+    # second dirty ref would have silently bypassed the scan entirely.
+    stdin_input="refs/heads/clean-branch 1111111111111111111111111111111111111111 refs/heads/clean-branch 0000000000000000000000000000000000000000
+refs/heads/dirty-branch 2222222222222222222222222222222222222222 refs/heads/dirty-branch 0000000000000000000000000000000000000000"
+
+    if printf '%s\n' "$stdin_input" | check_secret_scan >/dev/null 2>&1; then
+      printf 'FAIL: check_secret_scan should have blocked on the second (dirty) ref range\n'
+      exit 1
+    fi
+    printf 'PASS: check_secret_scan blocked on a dirty range from a NON-first ref tuple\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 14: main() stdin capture-once does not starve the second consumer ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_stdin_double_read"
+    mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+    cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(0)
+SCANNER
+    chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+    cd "$tmpdir" || exit 1
+    git checkout -q feature/test 2>/dev/null || git checkout -q -b feature/stdin_double 2>/dev/null
+    local_sha=$(git rev-parse HEAD 2>/dev/null || echo "0000000")
+
+    stdin_input="refs/heads/feature/test $local_sha refs/heads/feature/test 0000000000000000000000000000000000000000"
+
+    # Replicate exactly what main() now does: capture stdin ONCE, then feed
+    # each consumer its own here-string copy. Before this fix, main() called
+    # check_branch_policy (reading fd0 directly) then check_secret_scan
+    # (also reading fd0 directly) against the SAME real pipe -- the first
+    # call drained it, so get_commit_range inside the second call always
+    # saw EOF and fail-closed, blocking EVERY push regardless of content.
+    captured=$(printf '%s\n' "$stdin_input" | cat)
+
+    if ! check_branch_policy <<< "$captured" >/dev/null 2>&1; then
+      printf 'FAIL: check_branch_policy unexpectedly blocked the feature branch\n'
+      exit 1
+    fi
+
+    stderr_output=$( { check_secret_scan <<< "$captured"; } 2>&1 1>/dev/null )
+    scan_exit=$?
+
+    if [ $scan_exit -ne 0 ]; then
+      printf 'FAIL: check_secret_scan failed after check_branch_policy already read the SAME captured stdin (stdin-starvation regression). stderr: %s\n' "$stderr_output"
+      exit 1
+    fi
+
+    if printf '%s' "$stderr_output" | grep -q 'parse_failed\|malformed'; then
+      printf 'FAIL: check_secret_scan reported malformed/empty stdin -- it never saw the ref tuple\n'
+      exit 1
+    fi
+
+    printf 'PASS: check_secret_scan still sees the ref tuple after check_branch_policy read the same captured stdin\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 11 tests passed.\n'
+    printf '\nAll 14 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -813,14 +957,27 @@ main() {
     exit $?
   fi
 
-  # git pre-push provides ref info on stdin, pass it to check_branch_policy
-  if ! check_branch_policy; then
+  # git pre-push provides ref info on stdin, and BOTH check_branch_policy and
+  # check_secret_scan (via get_commit_range) need to read every ref tuple.
+  # Capture the real pipe ONCE here and hand each consumer its own here-string
+  # copy -- reading a pipe twice on the same fd starves the second reader
+  # (once check_branch_policy drains it, get_commit_range would see nothing
+  # but EOF and fail-closed on every push). A here-string preserves each
+  # function's existing tty-vs-pipe read semantics unchanged (an interactive
+  # tty yields no captured content, which both functions already treat the
+  # same way as "no ref tuples" via their existing fallback/fail-closed paths).
+  local prepush_stdin=""
+  if [ ! -t 0 ]; then
+    prepush_stdin=$(cat)
+  fi
+
+  if ! check_branch_policy <<< "$prepush_stdin"; then
     printf 'Error: Push to main/master is blocked by policy\n' >&2
     log_block "push_to_protected_branch"
     exit 1
   fi
 
-  if ! check_secret_scan; then
+  if ! check_secret_scan <<< "$prepush_stdin"; then
     printf 'Error: Secret scan failed. Push blocked.\n' >&2
     log_block "secret_scan_failure"
     exit 1
