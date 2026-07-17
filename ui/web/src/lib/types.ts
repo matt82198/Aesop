@@ -212,6 +212,37 @@ export interface CostSummary {
 }
 
 /**
+ * One row on the Wave PR Board (GET /api/wave/prs).
+ * `has_pr=false` rows are feat/* branches with no open PR yet (number is null).
+ * `ci` is a color-independent rollup state paired with an icon+text in the UI.
+ */
+export interface WavePR {
+  number: number | null;
+  title: string;
+  branch: string;
+  url: string;
+  ci: 'passing' | 'failing' | 'pending' | 'none';
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | string;
+  is_draft: boolean;
+  review_decision: string; // "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | ""
+  created_at: string; // ISO 8601, "" for branch-only rows
+  blocker: string | null;
+  has_pr: boolean;
+}
+
+/**
+ * GET /api/wave/prs response.
+ * When `available` is false (gh missing / un-authenticated), `error` carries a
+ * human reason and `prs` is empty — the board renders a callout, not a crash.
+ */
+export interface WavePRBoardData {
+  available: boolean;
+  error: string | null;
+  generated_at: string; // ISO 8601 UTC
+  prs: WavePR[];
+}
+
+/**
  * SSE event sections emitted by GET /events.
  * Initial sections: data, backlog, agents, tracker, status
  * Added in U3: cost

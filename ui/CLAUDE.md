@@ -14,6 +14,7 @@
 - **render.py** — Renders `ui/web/dist/index.html` (wave-14 U9 cutover: no fallback), substituting the CSRF token via a unique sentinel (the sentinel persists through Vite's build). Requires `template_path` parameter; legacy fallback removed.
 - **handler.py** — `DashboardHandler` (HTTP routing + all GET/POST endpoints incl. /api/tracker) and `run_server()`. Wave-14 additions: static serving (`GET /assets/*` from `ui/web/dist/assets/`), `/api/state` consolidated snapshot, `/api/session` for Vite dev server, `/api/cost` scorecard. Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
 - **cost.py** — Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model and per-day aggregates, verdict scorecards, and optional dollar estimates (only if `aesop.config.json` supplies `pricing` map).
+- **wave_prs.py** — Wave PR board collector: `get_wave_prs()` gathers open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), rolls check runs into passing/failing/pending/none, derives the top blocker, caches ~5s. Read-only; subprocess reads use `encoding='utf-8', errors='replace'`; degrades to `{available:false, error}` when gh is missing/un-authed. `AESOP_GH_BIN` overrides the gh binary.
 
 ## State Store Integration (Wave-15)
 
@@ -90,6 +91,7 @@ Configuration is resolved in this order (first match wins):
 - `GET /api/state` — Consolidated first-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip (reuses latest snapshots).
 - `GET /api/session` — Returns `{token}` for Vite dev server; Origin-checked fail-closed (only local origins).
 - `GET /api/cost` — Cost/scorecard summary from `state/ledger/OUTCOMES-LEDGER.md` (per-model, per-day, verdicts, optional pricing estimates).
+- `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup / mergeable / age / top blocker. Cached ~5s; degrades to `{available:false, error}` when gh is missing/un-authenticated (never a 500). `wave_prs.py` collector; polled by the frontend (not an SSE section — `gh` is too slow for the collector tick). Set `AESOP_GH_BIN` to override the gh binary path.
 - `GET /events` — Server-Sent Events stream (read-only, no CSRF).
 
 **Mutations (CSRF-gated)**:

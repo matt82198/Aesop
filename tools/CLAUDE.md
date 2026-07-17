@@ -38,6 +38,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
 - `verify_dash.py` — Browser proof for realtime SSE dashboard
 - `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
+- `verify_prboard.py` — Browser proof for the Wave PR Board (/api/wave/prs), gh stubbed via AESOP_GH_BIN
 - `agent-forensics.sh` — Incident forensics / behavior reconstruction
 
 ## secret_scan.py — Pre-push secret/credential detection gate

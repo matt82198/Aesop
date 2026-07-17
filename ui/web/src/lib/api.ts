@@ -13,6 +13,7 @@ import type {
   AgentDetail,
   TrackerItem,
   SubmitResponse,
+  WavePRBoardData,
 } from './types';
 
 let _csrfTokenCache: string | null = null;
@@ -150,6 +151,13 @@ export async function fetchAgent(agentId: string): Promise<AgentDetail> {
  */
 export async function fetchCost(): Promise<CostSummary> {
   return typedFetch('/api/cost', { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/prs — Wave PR board (open PRs + PR-less feat/* branches)
+ */
+export async function fetchWavePRs(): Promise<WavePRBoardData> {
+  return typedFetch('/api/wave/prs', { method: 'GET', requireCSRF: false });
 }
 
 /**
