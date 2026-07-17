@@ -7,9 +7,9 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop/beta" alt="npm"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/npm/l/@matt82198/aesop" alt="license"></a>
   <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop/rc" alt="npm"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
 **Aesop** is an open-source orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
@@ -50,12 +50,12 @@ audit + fleet-ops monitoring
 
 ## Get Started (3 steps, 5 min)
 
-**Note:** Aesop is in beta. Install the `@beta` tag for the latest prerelease (v0.1.0-beta.6).
+**Note:** Aesop is at its first release candidate. Install the `@rc` tag for the latest prerelease (v0.1.0-rc.1); the `@beta` tag remains available for earlier prereleases.
 
 ### Quickest path: npx scaffold
 
 ```bash
-npx @matt82198/aesop@beta my-fleet \
+npx @matt82198/aesop@rc my-fleet \
   --name "my-api" \
   --repos "/path/to/repo1,/path/to/repo2"
 cd my-fleet
@@ -110,13 +110,13 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 153 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 465 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 4 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Waves | 20 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 81,687 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 282 <!-- metrics-verified: self_stats.py (git log) --> |
-| Distinct Co-authors | 8 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 170 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 556 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 5 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Waves | 30 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 96,065 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 336 <!-- metrics-verified: self_stats.py (git log) --> |
+| Distinct Co-authors | 9 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
 
