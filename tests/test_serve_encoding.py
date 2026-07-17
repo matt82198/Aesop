@@ -7,6 +7,8 @@ doesn't crash the collector thread with UnicodeDecodeError. The fix ensures
 all subprocess text reads specify encoding='utf-8' with errors='replace'.
 """
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,14 +25,54 @@ if str(ui_dir) not in sys.path:
 import agents
 import config
 
+# Environment keys to save/restore for test isolation
+ENV_KEYS = ("AESOP_ROOT", "AESOP_STATE_ROOT", "AESOP_TRANSCRIPTS_ROOT",
+            "AESOP_UI_COLLECT_INTERVAL", "PORT")
+
 
 class TestServeEncoding(unittest.TestCase):
     """Regression tests for UnicodeDecodeError in subprocess output handling."""
 
     def setUp(self):
-        """Set up test fixtures (temp dir, mock config)."""
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp_dir.cleanup)
+        """Set up isolated temp directories and environment for testing."""
+        # Create isolated temp directories
+        self.fixture_root = Path(tempfile.mkdtemp(prefix="aesop-encoding-test-"))
+        self.state_dir = self.fixture_root / "state"
+        self.state_dir.mkdir(parents=True)
+        self.transcripts_root = self.fixture_root / "transcripts"
+        self.transcripts_root.mkdir()
+
+        # Create dash directory with a dummy dash-extra.mjs so get_fleet_agents doesn't skip
+        dash_dir = self.fixture_root / "dash"
+        dash_dir.mkdir()
+        (dash_dir / "dash-extra.mjs").write_text("// dummy file\n")
+
+        # Save original environment
+        self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
+
+        # Set isolated environment
+        os.environ["AESOP_ROOT"] = str(self.fixture_root)
+        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
+        os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.transcripts_root)
+        os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
+
+        # Reload config to pick up the new environment
+        config.reload()
+
+    def tearDown(self):
+        """Restore original environment and clean up temp files."""
+        # Restore original environment
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+        # Reload config to reset to original state
+        config.reload()
+
+        # Clean up temp directory
+        shutil.rmtree(self.fixture_root, ignore_errors=True)
 
     def test_get_fleet_agents_with_utf8_emoji_in_output(self):
         """
@@ -184,10 +226,41 @@ class TestAgentsTranscriptEncoding(unittest.TestCase):
     """Test that agents.py correctly handles UTF-8 in transcript files."""
 
     def setUp(self):
-        """Set up temp dir for test transcripts."""
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.temp_path = Path(self.temp_dir.name)
-        self.addCleanup(self.temp_dir.cleanup)
+        """Set up isolated temp directories and environment for testing."""
+        # Create isolated temp directories
+        self.fixture_root = Path(tempfile.mkdtemp(prefix="aesop-transcript-test-"))
+        self.state_dir = self.fixture_root / "state"
+        self.state_dir.mkdir(parents=True)
+        self.transcripts_root = self.fixture_root / "transcripts"
+        self.transcripts_root.mkdir()
+        self.temp_path = self.transcripts_root
+
+        # Save original environment
+        self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
+
+        # Set isolated environment
+        os.environ["AESOP_ROOT"] = str(self.fixture_root)
+        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
+        os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.transcripts_root)
+        os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
+
+        # Reload config to pick up the new environment
+        config.reload()
+
+    def tearDown(self):
+        """Restore original environment and clean up temp files."""
+        # Restore original environment
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+        # Reload config to reset to original state
+        config.reload()
+
+        # Clean up temp directory
+        shutil.rmtree(self.fixture_root, ignore_errors=True)
 
     def test_extract_agent_dispatch_prompt_with_utf8_content(self):
         """
