@@ -5,13 +5,16 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 ## FILES
 
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
+- `bench_runner.py` — Held-out benchmark runner + scorer (offline mock runner; pluggable Haiku/Sonnet/Opus runners)
 - `buildlog.py` — Uniform BUILDLOG.md appender
 - `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS)
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness checks)
+- `cost_ceiling.py` — Cost-ceiling checker: trips the HALT kill-switch when configured token limits are exceeded
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
+- `halt.py` — Kill-switch: writes/reads/clears the `.HALT` sentinel that daemons/dispatch check to stop the fleet
 - `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
