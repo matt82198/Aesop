@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-17
+
+First stable release. This is the graduation of `0.1.0-rc.1` to a stable version with the
+same feature set — no code changes beyond the version/documentation promotion. It publishes to
+npm under the `latest` dist-tag. Highlights carried from rc.1: verified Opus audit (0
+hallucinated findings), kill-switch wired into the live dispatch path, cost-ceiling guardrail,
+a measured held-out benchmark (39 judgment tasks, Haiku on par with Opus at ~1/3 the cost),
+the state-reconcile primitive, browser-proven dashboard views (Wave PR Board + Agent
+Inspector), a source-available license, and a slim, reproducible ~409 kB npm package. See the
+[0.1.0-rc.1] entry below for the full itemized list, and RELEASE-NOTES.md for the honest-limits
+account (small-N benchmark, cost-ceiling not yet tied to live token spend, local-first).
+
 ## [0.1.0-rc.1] - 2026-07-17
 
 First release candidate. The dispatch-model claims are now backed by measurement, the
