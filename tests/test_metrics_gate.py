@@ -12,9 +12,10 @@ import tempfile
 import os
 from pathlib import Path
 import json
+import unittest
 
 
-class TestMetricsGate:
+class TestMetricsGate(unittest.TestCase):
     """Test suite for metrics_gate.py"""
 
     def run_metrics_gate(self, *args):
@@ -45,7 +46,7 @@ class TestMetricsGate:
             # Since this is a fresh repo with no origin/main, test on HEAD
             exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
             # May fail if not enough commits, so just verify it doesn't crash
-            assert exit_code in (0, 128)  # 0 = pass, 128 = not enough commits
+            self.assertIn(exit_code, (0, 128))  # 0 = pass, 128 = not enough commits
 
     def test_percentage_without_verification_fails(self):
         """Test: percentage claims without verification marker fail."""
@@ -68,8 +69,8 @@ class TestMetricsGate:
             subprocess.run(["git", "commit", "-m", "add-metric"], capture_output=True)
 
             exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
-            assert exit_code == 1
-            assert "42%" in stdout or "42%" in stderr
+            self.assertEqual(exit_code, 1)
+            self.assertTrue("42%" in stdout or "42%" in stderr)
 
     def test_percentage_with_verification_passes(self):
         """Test: percentage claims with verification marker pass."""
