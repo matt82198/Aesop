@@ -3,8 +3,10 @@
  * Each agent row displays project · status · runtime at a glance.
  */
 
+import { useState } from 'react';
 import type { Agent } from '../lib/types';
 import { AgentRow } from './AgentRow';
+import { AgentInspector } from './AgentInspector';
 import { TESTIDS } from '../test/fixtures';
 import './AgentsPanel.css';
 
@@ -25,6 +27,9 @@ interface AgentsPanelProps {
 }
 
 export function AgentsPanel({ agents }: AgentsPanelProps) {
+  // Which agent's read-only Inspector drawer is open (by id), if any.
+  const [inspectedId, setInspectedId] = useState<string | null>(null);
+
   if (!agents || agents.length === 0) {
     return (
       <section className="agents-panel" data-testid={TESTIDS.agentRow}>
@@ -33,6 +38,8 @@ export function AgentsPanel({ agents }: AgentsPanelProps) {
       </section>
     );
   }
+
+  const inspectedAgent = agents.find((a) => a.id === inspectedId) ?? null;
 
   return (
     <section className="agents-panel" data-testid={TESTIDS.agentRow}>
@@ -50,9 +57,13 @@ export function AgentsPanel({ agents }: AgentsPanelProps) {
       </div>
       <ul className="agents-panel__list">
         {agents.map((agent) => (
-          <AgentRow key={agent.id} agent={agent} />
+          <AgentRow key={agent.id} agent={agent} onInspect={() => setInspectedId(agent.id)} />
         ))}
       </ul>
+
+      {inspectedAgent && (
+        <AgentInspector agent={inspectedAgent} onClose={() => setInspectedId(null)} />
+      )}
     </section>
   );
 }

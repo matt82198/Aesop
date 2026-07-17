@@ -13,6 +13,7 @@
 import type {
   Agent,
   AgentDetail,
+  AgentInspectorDetail,
   Alert,
   AuditBacklog,
   CostSummary,
@@ -48,6 +49,17 @@ export const TESTIDS = {
   viewOverview: 'view-overview',
   agentRow: 'agent-row',
   agentRowDetail: 'agent-row-detail',
+  agentInspectOpen: 'agent-inspect-open',
+
+  // Agent Inspector drawer (read-only agent detail + transcript tail)
+  agentInspector: 'agent-inspector',
+  agentInspectorClose: 'agent-inspector-close',
+  agentInspectorStatus: 'agent-inspector-status',
+  agentInspectorTranscript: 'agent-inspector-transcript',
+  agentInspectorTail: 'agent-inspector-tail-entry',
+  agentInspectorLoading: 'agent-inspector-loading',
+  agentInspectorError: 'agent-inspector-error',
+  agentInspectorEmpty: 'agent-inspector-empty',
   alertLine: 'alert-line',
   alertsPanel: 'alerts-panel',
   eventsFeed: 'events-feed',
@@ -171,6 +183,25 @@ export const fixtureAgentDetail: AgentDetail = {
   message_count: 87,
   first_seen: 1783346531,
   last_activity: 1783348307,
+};
+
+export const fixtureAgentInspector: AgentInspectorDetail = {
+  id: 'a77b995bcdb95',
+  dispatch_prompt:
+    'Wave-14 unit U4 (overview view components) for aesop. Read the plan FIRST, then implement AgentsPanel, AlertsPanel, EventsFeed with tests.',
+  dispatcher: 'main thread',
+  model: 'claude-haiku-4-5-20251001',
+  message_count: 87,
+  first_seen: 1783346531,
+  last_activity: 1783348307,
+  tail_truncated: true,
+  transcript_tail: [
+    { type: 'user', text: 'Start on unit U4 — read the plan first, then build the panels.' },
+    { type: 'assistant', text: 'Reading the plan, then scaffolding AgentsPanel.' },
+    { type: 'assistant', text: '[tool_use: Write]' },
+    { type: 'tool_result', text: '[tool_result]' },
+    { type: 'assistant', text: 'AgentsPanel + tests done; vitest green.' },
+  ],
 };
 
 export const fixtureAlerts: Alert = {

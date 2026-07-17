@@ -19,6 +19,11 @@ import './AgentRow.css';
 
 interface AgentRowProps {
   agent: Agent;
+  /**
+   * Open the read-only Agent Inspector drawer for this agent. When omitted the
+   * row simply has no Inspect affordance (keeps standalone/legacy usage intact).
+   */
+  onInspect?: () => void;
 }
 
 // Simple LRU cache for agent details
@@ -58,7 +63,7 @@ function getStatusColor(status: string): string {
   return 'var(--color-status-neutral)';
 }
 
-export function AgentRow({ agent }: AgentRowProps) {
+export function AgentRow({ agent, onInspect }: AgentRowProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [detail, setDetail] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -126,6 +131,18 @@ export function AgentRow({ agent }: AgentRowProps) {
         </span>
 
         <span className="agent-row__hint">{agent.hint}</span>
+
+        {onInspect && (
+          <button
+            type="button"
+            className="agent-row__inspect"
+            data-testid={TESTIDS.agentInspectOpen}
+            onClick={onInspect}
+            aria-label={`Inspect agent ${agent.id}`}
+          >
+            Inspect
+          </button>
+        )}
       </div>
 
       {isExpanded && (

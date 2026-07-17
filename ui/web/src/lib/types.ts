@@ -46,6 +46,34 @@ export interface AgentDetail {
   last_activity: number; // epoch seconds (file mtime)
 }
 
+/**
+ * One rendered line of an agent transcript tail (GET /api/agent?id=).
+ * `text` is a PLAIN string (backend extracts + secret-redacts it); the client
+ * renders it as escaped text, never as HTML.
+ */
+export interface TranscriptTailEntry {
+  type: string; // 'user' | 'assistant' | 'system' | 'tool_result' | 'raw' | ...
+  text: string;
+}
+
+/**
+ * GET /api/agent?id=<id> — full agent detail for the Inspector drawer
+ * (ui/agents.py get_agent_detail). Superset of AgentDetail: adds the bounded,
+ * secret-redacted transcript tail. Error responses are {error: string} with
+ * 400 (invalid id) or 404 (no transcript), same as GET /agent.
+ */
+export interface AgentInspectorDetail {
+  id: string;
+  dispatch_prompt: string;
+  dispatcher: 'main thread' | 'parent agent';
+  model: string; // "unknown" when not found in transcript
+  message_count: number;
+  first_seen: number; // epoch seconds (file mtime)
+  last_activity: number; // epoch seconds (file mtime)
+  transcript_tail: TranscriptTailEntry[];
+  tail_truncated: boolean; // true if the transcript was longer than the tail window
+}
+
 /** GET /api/session — CSRF token for same-origin JS (U2 adds this). */
 export interface SessionResponse {
   token: string;
