@@ -27,3 +27,9 @@ ui/web/vitest.config.ts
 ui/web/*.config.ts
 ui/web/*.config.js
 ui/web/.gitattributes
+
+# Python compiled artifacts & cache (dev-only, never ship).
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
