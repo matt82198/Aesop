@@ -108,19 +108,34 @@ jobs:
           shard_files = [test_files[i] for i in range(len(test_files)) if i % total_shards == shard_id]
 
           if not shard_files:
-              print(f"No tests for shard {shard_id}")
-              sys.exit(0)
+              print(f"ERROR: No tests assigned to shard {shard_id} (total test files: {len(test_files)})")
+              print(f"This indicates a configuration error in the shard distribution.")
+              sys.exit(1)
 
           print(f"Shard {shard_id}: running {len(shard_files)} tests")
           loader = unittest.TestLoader()
           suite = unittest.TestSuite()
+          failed_imports = []
 
           for test_name in shard_files:
               try:
                   module = __import__(f'tests.{test_name}', fromlist=[test_name])
                   suite.addTests(loader.loadTestsFromModule(module))
               except Exception as e:
-                  print(f"Warning: Failed to load {test_name}: {e}")
+                  failed_imports.append((test_name, str(e)))
+                  print(f"ERROR: Failed to load {test_name}: {e}")
+
+          # If there were import failures, exit immediately
+          if failed_imports:
+              print(f"\n{len(failed_imports)} test module(s) failed to import:")
+              for name, error in failed_imports:
+                  print(f"  - {name}: {error}")
+              sys.exit(1)
+
+          # If no tests were collected, this is also an error
+          if suite.countTestCases() == 0:
+              print(f"ERROR: No tests were collected for shard {shard_id}")
+              sys.exit(1)
 
           runner = unittest.TextTestRunner(verbosity=2)
           result = runner.run(suite)

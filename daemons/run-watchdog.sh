@@ -12,6 +12,19 @@ MODE="${1:-daemon}"
 LOCK_DIR="$AESOP_ROOT/state/.watchdog-lock"
 LOCK_STALE_THRESHOLD=300
 
+# Resolve Python interpreter (portable: prefer python3, fallback to python)
+PYTHON_EXE=""
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_EXE="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_EXE="python"
+fi
+
+# Resolve conductor3 directory (sibling of AESOP_ROOT)
+CONDUCTOR_ROOT="$(dirname "$AESOP_ROOT")/conductor3"
+MONITOR_HB_FILE="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
+MONITOR_HB_STALE_THRESHOLD=600
+
 # Atomic lock acquire: mkdir is atomic (POSIX guarantees)
 # Returns 0 if lock acquired, 1 if held by another process, 2 if stale lock reclaimed
 acquire_lock() {
@@ -106,6 +119,30 @@ release_lock() {
   fi
 }
 
+# Check monitor heartbeat staleness; log to fleet-backup.log if missing or >600s old
+check_monitor_staleness() {
+  local hb_file="$1"
+  local stale_threshold="$2"
+  local log_file="$3"
+  if [ -z "$hb_file" ] || [ -z "$log_file" ]; then
+    return
+  fi
+  if [ ! -f "$hb_file" ]; then
+    echo "[$(date '+%F %T')] SIGNAL: monitor heartbeat missing ($hb_file)" >> "$log_file"
+    return
+  fi
+  local hb_epoch=$(cat "$hb_file" 2>/dev/null || echo 0)
+  if [ -z "$hb_epoch" ] || [ "$hb_epoch" = "0" ]; then
+    echo "[$(date '+%F %T')] SIGNAL: monitor heartbeat empty/unreadable" >> "$log_file"
+    return
+  fi
+  local now=$(date +%s)
+  local hb_age=$((now - hb_epoch))
+  if [ "$hb_age" -gt "$stale_threshold" ]; then
+    echo "[$(date '+%F %T')] SIGNAL: monitor heartbeat stale (${hb_age}s > ${stale_threshold}s threshold)" >> "$log_file"
+  fi
+}
+
 # Try to acquire lock (applies to both --once and daemon modes)
 acquire_lock "$LOCK_DIR" "$LOCK_STALE_THRESHOLD"
 lock_result=$?
@@ -141,7 +178,9 @@ if [ "$MODE" = "--once" ]; then
     echo "$err_msg" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
     echo "[ERROR: exit $cmd_exit]" >&2
   fi
-  python "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
+  if [ -n "$PYTHON_EXE" ]; then
+    "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
+  fi
   release_lock "$LOCK_DIR"
   exit $cmd_exit
 fi
@@ -159,6 +198,9 @@ while true; do
     out=$(echo "$full_out" | tail -2)
     printf '%s  cycle #%d [ERROR: exit %d]\n%s\n' "$(date '+%H:%M:%S')" "$n" "$cmd_exit" "$out"
   fi
-  python "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
+  check_monitor_staleness "$MONITOR_HB_FILE" "$MONITOR_HB_STALE_THRESHOLD" "$AESOP_ROOT/state/FLEET-BACKUP.log"
+  if [ -n "$PYTHON_EXE" ]; then
+    "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
+  fi
   sleep 150
 done

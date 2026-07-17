@@ -2,11 +2,19 @@
 set -uo pipefail
 
 main() {
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
-  local marker_file="$aesop_root/state/.wave-in-flight"
+  # Resolve the marker relative to the CURRENT working tree, NOT a hardcoded primary path.
+  # This is load-bearing: the marker (state/.wave-in-flight) is git-ignored, so a sibling
+  # worktree checked out during a wave does NOT carry it — only the PRIMARY tree (where the
+  # orchestrator sets it) does. Checking the current tree's own toplevel means primary-tree
+  # commits are blocked during a wave while legitimate worktree-agent commits pass. A prior
+  # version hardcoded ${AESOP_ROOT:-$HOME/aesop}, which resolved to the primary tree from every
+  # worktree and thus blocked the entire fleet mid-wave (wave-24 incident). Do not reintroduce.
+  local toplevel
+  toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+  local marker_file="$toplevel/state/.wave-in-flight"
 
   if [ -f "$marker_file" ]; then
-    printf 'Error: Wave in flight. Commit from a sibling worktree, or clear %s to override.\n' "$marker_file" >&2
+    printf 'Error: Wave in flight in this tree (%s). Commit from a sibling worktree, or clear the marker to override.\n' "$marker_file" >&2
     exit 1
   fi
 

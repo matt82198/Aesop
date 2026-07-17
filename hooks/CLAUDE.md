@@ -37,8 +37,8 @@ Prevents accidental commits to the PRIMARY aesop tree during a wave cycle. Runs 
 **Purpose**: During orchestrated waves, the orchestrator sets a marker file (`state/.wave-in-flight`) in the PRIMARY tree only. Sibling worktrees do not inherit this marker (separate working trees), so fleet agents commit freely in worktrees while stray commits to the primary tree are rejected.
 
 **Mechanism**:
-1. **Marker Contract**: Orchestrator writes `${AESOP_ROOT:-$HOME/aesop}/state/.wave-in-flight` before dispatching wave work.
-2. **Pre-Commit Check**: Hook checks if marker exists; exit 1 (reject commit) if present, exit 0 (allow) otherwise.
+1. **Marker Contract**: Orchestrator writes `state/.wave-in-flight` in the PRIMARY tree before dispatching wave work. The marker is git-ignored, so sibling worktrees checked out during the wave do NOT carry it.
+2. **Pre-Commit Check**: Hook resolves the marker relative to the CURRENT working tree via `git rev-parse --show-toplevel` (NOT a hardcoded `$HOME/aesop` — that resolved to the primary tree from every worktree and blocked the whole fleet mid-wave, the wave-24 incident). Primary tree (has marker during a wave) → exit 1 (reject); sibling worktree (no marker) → exit 0 (allow).
 3. **Override**: User or orchestrator may delete `state/.wave-in-flight` to manually allow commits to primary tree.
 
 **Exit Contract**:

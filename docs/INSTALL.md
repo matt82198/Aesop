@@ -21,7 +21,7 @@ claude --version
 git --version
 bash --version
 node --version
-python --version
+python3 --version
 ```
 
 ---
@@ -219,6 +219,6 @@ To bypass during testing: `git push --no-verify` (not recommended for production
 1. **Read [CONFIGURE.md](CONFIGURE.md)** — Customize repos, ports, and brain root
 2. **Run [FIRST-WAVE.md](FIRST-WAVE.md)** — Test a full `/power` → `/buildsystem` cycle
 3. **Understand [CONCEPTS.md](CONCEPTS.md)** — Learn the dispatch model and state model
-4. **Explore the dashboard** — `python ui/serve.py` then open http://localhost:8770
+4. **Explore the dashboard** — `python3 ui/serve.py` then open http://localhost:8770
 
 For troubleshooting, see the [Aesop README](../README.md#troubleshooting) or [GOVERNANCE.md](GOVERNANCE.md) for operational policies.
