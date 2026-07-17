@@ -140,8 +140,13 @@ test('generated config uses portable paths (not absolute machine paths)', () => 
     }
 
   } finally {
-    // Cleanup
-    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    // Cleanup: note that rm -rf failures may occur due to file locks in the CI environment.
+    // Extended test timeouts (120s per test) in CI help ensure cleanup has time to complete.
+    try {
+      execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    } catch (e) {
+      // Silently ignore rm -rf failures (file locks in CI are handled by process cleanup)
+    }
   }
 });
 
@@ -192,7 +197,13 @@ test('config loader expands ~ paths in Node.js', () => {
     assert.equal(loaded.scripts_root, '~/scripts', 'Config should preserve ~ paths');
 
   } finally {
-    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    // Cleanup: note that rm -rf failures may occur due to file locks in the CI environment.
+    // Extended test timeouts (120s per test) in CI help ensure cleanup has time to complete.
+    try {
+      execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    } catch (e) {
+      // Silently ignore rm -rf failures (file locks in CI are handled by process cleanup)
+    }
   }
 });
 
@@ -301,7 +312,13 @@ test('dashboard config generation guards against missing dashboard key (defect b
     assert.ok(typeof config === 'object', 'Generated config should be valid JSON object');
 
   } finally {
-    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    // Cleanup: note that rm -rf failures may occur due to file locks in the CI environment.
+    // Extended test timeouts (120s per test) in CI help ensure cleanup has time to complete.
+    try {
+      execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    } catch (e) {
+      // Silently ignore rm -rf failures (file locks in CI are handled by process cleanup)
+    }
   }
 });
 
