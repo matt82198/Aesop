@@ -9,10 +9,10 @@
 <p align="center">
   <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop/rc" alt="npm"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-orange.svg" alt="License: PolyForm Strict 1.0.0 (source-available)"></a>
 </p>
 
-**Aesop** is an open-source orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
+**Aesop** is a source-available orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
 
 What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator), **durable state** (git-committed checkpoints survive wipes), **observable machinery** (every agent run logged, every cost tracked), **live dashboard** (real-time fleet health at http://localhost:8770), and **security gates** (secret-scan blocks pushes, CI validates each merge).
 
@@ -253,17 +253,18 @@ See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
 ## Contributing
 
-Aesop welcomes improvements. The repo uses its own `/buildsystem` loop for development—PRs from `feature/*` branches are built, tested, and merged by Aesop itself. To contribute:
+Aesop is **source-available** under the PolyForm Strict License 1.0.0, which does not permit modification or redistribution — so outside code patches can't be accepted as merged contributions. That said, **feedback is genuinely welcome**:
 
-1. Fork and create a `feature/*` branch.
-2. Write failing tests first (TDD).
-3. Open a PR; Aesop's wave cycle will verify and merge.
+- **Issues and bug reports** — tell us what's broken or confusing.
+- **Discussion and ideas** — feature requests, design critiques, use-case questions.
 
-Maintain the core principles: **Haiku-first** subagents, **lean** orchestrator, **durable** state, **observable** machinery.
+The repo develops itself via its own `/buildsystem` loop; code changes are made by the maintainer at their discretion, or by prior arrangement. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 ## License
 
-MIT. See `LICENSE`.
+**Source-available** under the [PolyForm Strict License 1.0.0](./LICENSE). You may read, run, and use the software for any permitted purpose, but **modification and redistribution are not permitted**. See [`LICENSE`](./LICENSE) for the full terms and the definition of permitted (noncommercial and personal) purposes.
+
+Copyright 2026 Matt Culliton.
 
 ## References
 
