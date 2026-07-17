@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- (No unreleased items currently in-flight)
+### Fixed
+- **Waveguard worktree marker resolution** (#165): Fixed pre-commit hook to resolve marker to current worktree instead of hardcoded primary tree path (wave-24 fleet-block incident).
+
+### Tests
+- **Waveguard regression test** (#165): Added Test 7 to prove worktree commits pass while primary tree writes remain blocked by waveguard (wave-24 regression).
 
 ## [0.1.0-wave.23] - 2026-07-15
 
