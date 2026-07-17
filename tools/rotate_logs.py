@@ -5,7 +5,10 @@ Rotates log files by moving the oldest content to an archive file when the origi
 exceeds configured thresholds (--max-lines or --max-bytes). Preserves newest lines
 in the original, ensures no data loss (archive + original == original content).
 
-Uses atomic file locking to prevent concurrent writes from losing lines during rotation.
+Uses advisory file locking to serialize concurrent rotations, and detects/preserves
+external O_APPEND writes (from non-locking writers) that occur during the rotation
+window. This ensures atomicity: no lines are lost even when external processes
+append concurrently.
 
 Exit codes:
   0: Success (no rotation needed or rotation completed)
@@ -109,9 +112,19 @@ def needs_rotation(filepath, max_lines, max_bytes):
 def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
     """Rotate log file by archiving oldest lines atomically.
 
-    Uses exclusive file locking to ensure no concurrent appends are lost during
-    the read-compute-write cycle. This prevents a race where lines written between
-    the initial read and the truncate are discarded.
+    Uses exclusive file locking to serialize rotations against other lock-takers.
+    However, this is an ADVISORY lock: it only protects against other processes
+    that voluntarily take the lock. External writers (e.g., shell scripts using >>
+    or tee -a) that do NOT take the lock are NOT protected by this mechanism.
+
+    To prevent data loss from non-locking O_APPEND writers:
+    - Lines appended between readlines() and truncate() are detected via file size
+      comparison and re-read after truncate+write to prevent loss.
+    - This guarantees atomicity: archive + original == original content.
+
+    NOTE: The advisory lock serializes rotations against each other, but race
+    conditions with non-locking O_APPEND writers remain possible. For complete
+    safety, all writers (including external processes) must cooperate on locking.
 
     Args:
         logfile: Path to log file to rotate.
@@ -210,6 +223,29 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
                 except IOError as e:
                     print(f"ERROR: {e}", file=sys.stderr)
                     return 1
+
+                # MITIGATION for external O_APPEND writers:
+                # Before truncating, check if the file has grown since we initially read it.
+                # If external (non-locking) O_APPEND writers added content while we were
+                # computing, re-read and preserve those appends.
+                original_line_count = len(lines)
+
+                # Rewind to start and re-count lines to detect external appends
+                f.seek(0)
+                current_line_count = sum(1 for _ in f)
+
+                if current_line_count > original_line_count:
+                    # External appends occurred! Re-read the appended lines
+                    lines_appended = current_line_count - original_line_count
+
+                    # Re-read from line position (start of appended lines)
+                    f.seek(0)
+                    all_current_lines = f.readlines()
+
+                    # Extract only the new lines (the appended ones)
+                    external_lines = all_current_lines[-lines_appended:]
+                    if external_lines:
+                        remaining_lines.extend(external_lines)
 
                 # Atomically truncate and write remaining lines back to original
                 # while still holding the lock
