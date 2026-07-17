@@ -24,6 +24,8 @@ import type {
   RepoStatus,
   TrackerItem,
   TrackerSnapshot,
+  WavePR,
+  WavePRBoardData,
 } from '../lib/types';
 
 /* ------------------------------------------------------------------ */
@@ -76,6 +78,16 @@ export const TESTIDS = {
   costTable: 'cost-table',
   costChart: 'cost-chart',
   scorecard: 'scorecard',
+
+  // PR Board view
+  viewPRBoard: 'view-prboard',
+  prBoardTable: 'prboard-table',
+  prBoardRow: 'prboard-row',
+  prBoardCi: 'prboard-ci',
+  prBoardEmpty: 'prboard-empty',
+  prBoardError: 'prboard-error',
+  prBoardLoading: 'prboard-loading',
+  prBoardRefresh: 'prboard-refresh',
 } as const;
 
 export type TestId = (typeof TESTIDS)[keyof typeof TESTIDS];
@@ -373,6 +385,82 @@ export const fixtureCostWithPricing: CostSummary = {
       total_cost: 5.83,
     },
   },
+};
+
+export const fixtureWavePRs: WavePR[] = [
+  {
+    number: 173,
+    title: 'feat: Live Wave PR Board view',
+    branch: 'feat/wave30-pr-board',
+    url: 'https://github.com/matt82198/aesop/pull/173',
+    ci: 'passing',
+    mergeable: 'MERGEABLE',
+    is_draft: false,
+    review_decision: 'REVIEW_REQUIRED',
+    created_at: '2026-07-17T09:00:00Z',
+    blocker: 'Review required',
+    has_pr: true,
+  },
+  {
+    number: 172,
+    title: 'fix: collector fail-open on ledger parse error',
+    branch: 'feat/wave30-ledger-failopen',
+    url: 'https://github.com/matt82198/aesop/pull/172',
+    ci: 'failing',
+    mergeable: 'CONFLICTING',
+    is_draft: false,
+    review_decision: '',
+    created_at: '2026-07-16T18:30:00Z',
+    blocker: 'CI failing',
+    has_pr: true,
+  },
+  {
+    number: 171,
+    title: 'wip: hierarchical orchestration seams',
+    branch: 'feat/wave30-orch-seams',
+    url: 'https://github.com/matt82198/aesop/pull/171',
+    ci: 'pending',
+    mergeable: 'MERGEABLE',
+    is_draft: true,
+    review_decision: '',
+    created_at: '2026-07-17T07:15:00Z',
+    blocker: 'Draft — not ready for review',
+    has_pr: true,
+  },
+  {
+    number: null,
+    title: 'feat/wave30-cost-pricing',
+    branch: 'feat/wave30-cost-pricing',
+    url: '',
+    ci: 'none',
+    mergeable: 'UNKNOWN',
+    is_draft: false,
+    review_decision: '',
+    created_at: '',
+    blocker: 'No PR opened yet',
+    has_pr: false,
+  },
+];
+
+export const fixtureWavePRBoard: WavePRBoardData = {
+  available: true,
+  error: null,
+  generated_at: '2026-07-17T09:05:00Z',
+  prs: fixtureWavePRs,
+};
+
+export const fixtureWavePRBoardEmpty: WavePRBoardData = {
+  available: true,
+  error: null,
+  generated_at: '2026-07-17T09:05:00Z',
+  prs: [],
+};
+
+export const fixtureWavePRBoardUnavailable: WavePRBoardData = {
+  available: false,
+  error: 'GitHub CLI is not authenticated (run: gh auth login).',
+  generated_at: '2026-07-17T09:05:00Z',
+  prs: [],
 };
 
 export const fixtureFullState: FullState = {

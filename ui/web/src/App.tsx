@@ -16,6 +16,7 @@ import { Overview } from './views/Overview';
 import { Work } from './views/Work';
 import Activity from './views/Activity';
 import { Cost } from './views/Cost';
+import { WavePRBoard } from './views/WavePRBoard';
 import { TESTIDS } from './test/fixtures';
 
 const THEME_STORAGE_KEY = 'aesop-theme';
@@ -73,6 +74,7 @@ const NAV_ITEMS: Array<{ hash: Route; label: string }> = [
   { hash: '#/work', label: 'Work' },
   { hash: '#/activity', label: 'Activity' },
   { hash: '#/cost', label: 'Cost' },
+  { hash: '#/prs', label: 'PR Board' },
 ];
 
 function Placeholder({ name, testid }: { name: string; testid: string }) {
@@ -149,6 +151,7 @@ export default function App() {
         {route === '#/activity' && <Activity state={sseState} />}
         {route === '#/cost' &&
           (sseState.cost ? <Cost cost={sseState.cost} /> : <Placeholder name="Cost" testid={TESTIDS.viewCost} />)}
+        {route === '#/prs' && <WavePRBoard />}
       </main>
     </>
   );

@@ -13,6 +13,7 @@ import config
 import cost
 import csrf
 import sse
+import wave_prs
 import api
 import api.tracker
 import api.submit
@@ -193,6 +194,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_session()
         elif self.path == "/api/cost":
             self.serve_api_cost()
+        elif self.path == "/api/wave/prs":
+            self.serve_api_wave_prs()
         elif self.path == "/api/backlog":
             self.serve_backlog()
         elif self.path == "/api/agents":
@@ -395,6 +398,27 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(summary, default=str).encode('utf-8'))
         except Exception as e:
             print(f"[serve_api_cost] Uncaught exception: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_wave_prs(self):
+        """GET /api/wave/prs — open PRs + PR-less feat/* branches for the PR board.
+
+        Read-only; runs `gh pr list` / `git for-each-ref` (short timeout, cached
+        a few seconds). Degrades to a well-formed {available:false, error:...}
+        payload when gh is missing or un-authenticated — never a 500 for those.
+        """
+        try:
+            payload = wave_prs.get_wave_prs()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            print(f"[serve_api_wave_prs] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()

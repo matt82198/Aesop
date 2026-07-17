@@ -1,11 +1,11 @@
 /**
  * useHashRoute — ~10-line hash-tab routing hook (deliberately NOT react-router; see plan D1).
- * Routes: '#/' (overview), '#/work', '#/activity', '#/cost'.
+ * Routes: '#/' (overview), '#/work', '#/activity', '#/cost', '#/prs'.
  * Unknown/empty hashes normalize to '#/'.
  */
 import { useEffect, useState } from 'react';
 
-export const ROUTES = ['#/', '#/work', '#/activity', '#/cost'] as const;
+export const ROUTES = ['#/', '#/work', '#/activity', '#/cost', '#/prs'] as const;
 export type Route = (typeof ROUTES)[number];
 
 export function normalizeHash(hash: string): Route {

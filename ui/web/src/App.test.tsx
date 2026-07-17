@@ -22,6 +22,7 @@ describe('App shell', () => {
     expect(screen.getByRole('link', { name: 'Work' })).toHaveAttribute('href', '#/work');
     expect(screen.getByRole('link', { name: 'Activity' })).toHaveAttribute('href', '#/activity');
     expect(screen.getByRole('link', { name: 'Cost' })).toHaveAttribute('href', '#/cost');
+    expect(screen.getByRole('link', { name: 'PR Board' })).toHaveAttribute('href', '#/prs');
   });
 
   it('renders the overview placeholder by default', () => {
