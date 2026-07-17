@@ -68,9 +68,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install npm dependencies
-        run: npm ci
-
       - name: Set shard-specific temporary directory
         run: |
           mkdir -p /tmp/shard-${{ matrix.python-shard }}

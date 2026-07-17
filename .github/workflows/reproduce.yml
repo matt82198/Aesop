@@ -28,9 +28,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install npm dependencies
-        run: npm ci
-
       - name: Configure git (required for hook installation tests)
         run: |
           git config --global user.email "ci@example.com"
