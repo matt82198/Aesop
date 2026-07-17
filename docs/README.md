@@ -182,18 +182,12 @@ A: The pre-push hook is auto-installed. Customize `tools/secret_scan.py` with yo
 
 ## Contributing
 
-Aesop welcomes improvements. The repo uses its own `/buildsystem` loop for development—PRs from `feature/*` branches are built, tested, and merged by Aesop itself.
+Aesop is **source-available** under the PolyForm Strict License 1.0.0, which doesn't permit modification or redistribution — so outside code patches can't be merged as contributions. **Issues, bug reports, and discussion are warmly welcome**, and are the best way to help. The repo develops itself via its own `/buildsystem` loop; code changes are made by the maintainer at their discretion, or by prior arrangement.
 
-To contribute:
-1. Fork and create a `feature/*` branch
-2. Write failing tests first (TDD)
-3. Open a PR
-4. Aesop's wave cycle will verify and merge
-
-See [CARDINAL-RULES.md](CARDINAL-RULES.md) for core principles.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for details and [CARDINAL-RULES.md](CARDINAL-RULES.md) for core principles.
 
 ---
 
 ## License
 
-MIT. See `LICENSE`.
+**Source-available** under the [PolyForm Strict License 1.0.0](../LICENSE). Use is permitted for a permitted purpose; **modification and redistribution are not**. See [`LICENSE`](../LICENSE) for full terms.
