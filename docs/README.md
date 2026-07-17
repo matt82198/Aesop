@@ -94,6 +94,7 @@ Once you've completed the adopter journey, use these for operational reference:
 - **[av-resilience.md](av-resilience.md)** — Antivirus and behavioral-engine resilience patterns for reliable agent execution
 
 ### Lessons & Case Studies
+- **[autonomous-swe.md](autonomous-swe.md)** — The 0.1.0-rc.1 milestone told honestly: what "autonomous SWE" means here (a fleet running the wave loop under a human who owns the outward gates), the committed evidence behind each claim (held-out benchmark, verified audit, proven kill-switch, reproducible package), and the limits the project owns
 - **[case-study-portfolio.md](case-study-portfolio.md)** — How Aesop built its own portfolio site; full audit trail and cost breakdown
 - **[SCRIPTS-POLICY.md](SCRIPTS-POLICY.md)** — Local-only execution, shared script library (`~/scripts`), task-local vs. reusable heuristics
 
@@ -106,6 +107,9 @@ Once you've completed the adopter journey, use these for operational reference:
 
 **I want to understand the cost model**
 → [DISPATCH-MODEL.md](DISPATCH-MODEL.md) or [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md#why-its-fast--cheap)
+
+**I want to know what's actually proven vs. claimed (the rc.1 milestone)**
+→ [autonomous-swe.md](autonomous-swe.md)
 
 **I need to understand how state survives a crash**
 → [CHECKPOINTING.md](CHECKPOINTING.md)
