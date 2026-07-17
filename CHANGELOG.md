@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Wave PR Board** (wave.31): New dashboard view aggregating per-wave PR status for at-a-glance merge-train visibility.
+- **Agent Inspector** (wave.31): Drill-down dashboard view exposing individual agent transcripts, cost, and lifecycle.
+- **Kill-switch** (wave.27): Wired and proven fleet-wide halt control so an operator can stop all agents from a single signal.
+- **Real benchmark harness** (wave.28): Replaced illustrative numbers with a real offline benchmark scorer (`tools/bench_runner.py`) and a ground-truth task set.
+
+### Changed
+- **Adversarially-verified audits** (wave.25): Full audits now verify Haiku-reported findings before scheduling fixes, after all-Haiku audits inflated severity (wave-24: 4 reported P0s, 0 real).
+- **Tracker reconciliation at wave open** (wave.29): Wave startup reconciles the tracker against shipped work so already-done items are not re-dispatched.
+
 ### Fixed
+- **CI docs-deadlock** (wave.30): Broke a docs-gate deadlock that could mask HEAD failures in the CI pipeline.
 - **Waveguard worktree marker resolution** (#165): Fixed pre-commit hook to resolve marker to current worktree instead of hardcoded primary tree path (wave-24 fleet-block incident).
 
 ### Tests
