@@ -77,6 +77,8 @@ def get_fleet_agents():
             ["node", str(dash_extra_path), "--json"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=5
         )
         if result.returncode == 0 and result.stdout:
