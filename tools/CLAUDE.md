@@ -5,7 +5,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 ## FILES
 
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
-- `bench_runner.py` — Held-out benchmark runner + scorer (offline mock runner; pluggable Haiku/Sonnet/Opus runners)
+- `bench_runner.py` — Held-out benchmark runner + scorer with accuracy + cost axis (offline mock runner; pluggable Haiku/Sonnet/Opus runners return text or (text, usage))
 - `buildlog.py` — Uniform BUILDLOG.md appender
 - `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS)
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness checks)

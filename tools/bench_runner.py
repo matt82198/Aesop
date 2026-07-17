@@ -21,8 +21,18 @@ Usage:
     python tools/bench_runner.py --runner mock
     python tools/bench_runner.py --tasks path/to/tasks.jsonl --ground-truth path/to/gt.jsonl
 
+Cost axis (wave-32): accuracy alone can't settle "is Haiku good enough" — the
+whole cost thesis is "equal quality at ~1/3 the cost," which requires reporting
+cost *alongside* accuracy. A runner may therefore return either a bare string
+(text only, backward-compatible) or a `(text, usage)` pair, where usage carries
+a token count and/or a latency figure. run_bench() records per-task usage,
+summarize_cost() aggregates it, and the tables print accuracy and cost together.
+This module still never calls a real model or spends a token; usage is supplied
+by whatever runner the caller wires in.
+
 Exit codes: 0 always on a completed run (this is a measurement tool, not a gate).
-Programmatic API: load_tasks(), load_ground_truth(), score_output(), run_bench().
+Programmatic API: load_tasks(), load_ground_truth(), score_output(), run_bench(),
+normalize_runner_output(), summarize_cost(), build_summary(), print_comparison().
 """
 from __future__ import annotations
 
@@ -40,10 +50,70 @@ DEFAULT_GROUND_TRUTH_PATH = BENCH_DIR / "ground_truth.jsonl"
 REQUIRED_TASK_FIELDS = ("id", "category", "match", "prompt")
 VALID_MATCH_TYPES = ("exact", "regex")
 
-# A model runner is any callable that takes a prompt string and returns the
-# model's raw text response. Real runners (Haiku/Sonnet/Opus/etc.) are wired
-# by the caller; this module never imports a model SDK itself.
-ModelRunner = Callable[[str], str]
+# A model runner is any callable that takes a prompt string and returns either:
+#   * the model's raw text response (a str), OR
+#   * a (text, usage) pair, where `usage` is a token/latency figure — a dict
+#     like {"tokens": 812, "latency_ms": 430.0}, or a bare int/float taken as a
+#     token count.
+# The bare-str form is the original contract and stays fully supported; runners
+# that don't measure cost simply keep returning a string. Real runners
+# (Haiku/Sonnet/Opus/etc.) are wired by the caller; this module never imports a
+# model SDK itself.
+ModelRunner = Callable[[str], object]
+
+# Normalized per-task usage record: either field may be None when the runner did
+# not report it. A task where the runner returned a bare string has usage=None.
+USAGE_KEYS = ("tokens", "latency_ms")
+
+
+def normalize_runner_output(output: object) -> Tuple[Optional[str], Optional[dict]]:
+    """Normalize a runner's return value into (text, usage).
+
+    Accepts, in order:
+      * str (or None)           -> (output, None)          [original contract]
+      * (text, usage) 2-tuple   -> (text, normalized_usage)
+        where usage may be:
+          - a dict with any of USAGE_KEYS -> those fields (others None)
+          - an int/float                  -> {"tokens": int(usage), "latency_ms": None}
+          - None                          -> None
+
+    Any other shape is a runner bug and raises ValueError, so a malformed runner
+    fails loudly rather than silently scoring blank.
+    """
+    if output is None or isinstance(output, str):
+        return output, None
+    if isinstance(output, tuple):
+        if len(output) != 2:
+            raise ValueError(
+                f"runner returned a {len(output)}-tuple; expected a bare str or a "
+                f"(text, usage) 2-tuple"
+            )
+        text, usage = output
+        if text is not None and not isinstance(text, str):
+            raise ValueError(f"runner (text, usage) tuple has non-str text: {type(text).__name__}")
+        return text, _normalize_usage(usage)
+    raise ValueError(
+        f"runner returned unsupported type {type(output).__name__}; expected a bare "
+        f"str or a (text, usage) 2-tuple"
+    )
+
+
+def _normalize_usage(usage: object) -> Optional[dict]:
+    if usage is None:
+        return None
+    if isinstance(usage, bool):
+        # bool is an int subclass; a bool token count is almost certainly a bug.
+        raise ValueError("usage token count must be a number, not a bool")
+    if isinstance(usage, (int, float)):
+        return {"tokens": int(usage), "latency_ms": None}
+    if isinstance(usage, dict):
+        return {
+            "tokens": usage.get("tokens"),
+            "latency_ms": usage.get("latency_ms"),
+        }
+    raise ValueError(
+        f"usage must be a dict, an int/float token count, or None; got {type(usage).__name__}"
+    )
 
 
 def load_jsonl(path: Path) -> List[dict]:
@@ -131,20 +201,64 @@ def run_bench(
         if tid not in ground_truth:
             raise KeyError(f"no ground truth entry for task id {tid!r}")
         gt_entry = ground_truth[tid]
-        output = runner(task["prompt"])
-        ok = score_output(output, gt_entry, task["match"])
+        text, usage = normalize_runner_output(runner(task["prompt"]))
+        ok = score_output(text, gt_entry, task["match"])
         if ok:
             correct += 1
         results.append(
             {
                 "id": tid,
                 "category": task.get("category", ""),
-                "output": output,
+                "output": text,
                 "correct": ok,
+                # Cost axis: None when the runner returned a bare string.
+                "usage": usage,
+                "tokens": usage.get("tokens") if usage else None,
+                "latency_ms": usage.get("latency_ms") if usage else None,
             }
         )
     accuracy = correct / len(tasks) if tasks else 0.0
     return results, accuracy
+
+
+def summarize_cost(results: List[dict]) -> dict:
+    """Aggregate the per-task cost axis recorded by run_bench.
+
+    Returns a dict with total/average tokens and latency across the tasks that
+    reported them. Fields are None when no task reported that figure, so a
+    string-only (cost-free) run summarizes cleanly to all-None rather than 0.
+    """
+    token_vals = [r["tokens"] for r in results if r.get("tokens") is not None]
+    latency_vals = [r["latency_ms"] for r in results if r.get("latency_ms") is not None]
+    n = len(results)
+
+    def _avg(vals):
+        return (sum(vals) / len(vals)) if vals else None
+
+    return {
+        "n_tasks": n,
+        "n_with_tokens": len(token_vals),
+        "n_with_latency": len(latency_vals),
+        "total_tokens": sum(token_vals) if token_vals else None,
+        "avg_tokens": _avg(token_vals),
+        "total_latency_ms": sum(latency_vals) if latency_vals else None,
+        "avg_latency_ms": _avg(latency_vals),
+        "has_cost": bool(token_vals or latency_vals),
+    }
+
+
+def build_summary(model_name: str, results: List[dict], accuracy: float) -> dict:
+    """Combine accuracy and cost into one per-model row for a comparison table."""
+    n = len(results)
+    n_correct = sum(1 for r in results if r["correct"])
+    row = {
+        "model": model_name,
+        "n_tasks": n,
+        "n_correct": n_correct,
+        "accuracy": accuracy,
+    }
+    row.update(summarize_cost(results))
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -237,18 +351,66 @@ RUNNERS: Dict[str, ModelRunner] = {
 }
 
 
+def _fmt(value, suffix: str = "") -> str:
+    return "-" if value is None else f"{value:g}{suffix}"
+
+
 def print_table(model_name: str, results: List[dict], accuracy: float, stream=None) -> None:
     stream = stream or sys.stdout
+    cost = summarize_cost(results)
+    show_cost = cost["has_cost"]
     print(f"\nBenchmark results -- runner: {model_name}", file=stream)
-    print("-" * 60, file=stream)
-    print(f"{'id':<6}{'category':<28}{'result':<8}", file=stream)
-    for r in results:
-        mark = "PASS" if r["correct"] else "FAIL"
-        print(f"{r['id']:<6}{r['category']:<28}{mark:<8}", file=stream)
-    print("-" * 60, file=stream)
+    print("-" * 72, file=stream)
+    if show_cost:
+        print(f"{'id':<6}{'category':<28}{'result':<8}{'tokens':<10}{'latency_ms':<12}", file=stream)
+        for r in results:
+            mark = "PASS" if r["correct"] else "FAIL"
+            print(
+                f"{r['id']:<6}{r['category']:<28}{mark:<8}"
+                f"{_fmt(r.get('tokens')):<10}{_fmt(r.get('latency_ms')):<12}",
+                file=stream,
+            )
+    else:
+        print(f"{'id':<6}{'category':<28}{'result':<8}", file=stream)
+        for r in results:
+            mark = "PASS" if r["correct"] else "FAIL"
+            print(f"{r['id']:<6}{r['category']:<28}{mark:<8}", file=stream)
+    print("-" * 72, file=stream)
     n = len(results)
     n_correct = sum(1 for r in results if r["correct"])
     print(f"Accuracy: {n_correct}/{n} = {accuracy:.1%}", file=stream)
+    if show_cost:
+        # Cost axis printed right under accuracy so the two are read together.
+        print(
+            f"Cost:     total_tokens={_fmt(cost['total_tokens'])} "
+            f"avg_tokens/task={_fmt(round(cost['avg_tokens'], 1) if cost['avg_tokens'] is not None else None)} "
+            f"total_latency_ms={_fmt(cost['total_latency_ms'])} "
+            f"avg_latency_ms/task={_fmt(round(cost['avg_latency_ms'], 1) if cost['avg_latency_ms'] is not None else None)}",
+            file=stream,
+        )
+
+
+def print_comparison(summaries: List[dict], stream=None) -> None:
+    """Print accuracy AND cost side by side across models.
+
+    Each element of `summaries` is a build_summary() row. This is the table that
+    lets "equal accuracy at a fraction of the cost" be shown rather than
+    asserted: models line up in rows, accuracy and token/latency cost in columns.
+    """
+    stream = stream or sys.stdout
+    print("\nModel comparison -- accuracy vs cost", file=stream)
+    print("-" * 72, file=stream)
+    print(
+        f"{'model':<12}{'accuracy':<12}{'avg_tokens':<12}{'total_tokens':<14}{'avg_latency_ms':<16}",
+        file=stream,
+    )
+    for s in summaries:
+        acc = f"{s['n_correct']}/{s['n_tasks']}={s['accuracy']:.0%}"
+        avg_tok = _fmt(round(s["avg_tokens"], 1) if s.get("avg_tokens") is not None else None)
+        tot_tok = _fmt(s.get("total_tokens"))
+        avg_lat = _fmt(round(s["avg_latency_ms"], 1) if s.get("avg_latency_ms") is not None else None)
+        print(f"{s['model']:<12}{acc:<12}{avg_tok:<12}{tot_tok:<14}{avg_lat:<16}", file=stream)
+    print("-" * 72, file=stream)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
