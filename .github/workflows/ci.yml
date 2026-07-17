@@ -185,6 +185,14 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/verify_submit_encoding.py
 
+      - name: Run prboard browser proof (verify_prboard)
+        if: matrix.python-shard == 0
+        run: python tools/verify_prboard.py
+
+      - name: Run agent inspector browser proof (verify_agent_inspector)
+        if: matrix.python-shard == 0
+        run: python tools/verify_agent_inspector.py
+
       - name: Run watchdog GUI tests
         if: matrix.python-shard == 0
         run: bash tests/dash-watchdog-gui.test.sh
