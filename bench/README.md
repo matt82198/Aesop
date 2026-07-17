@@ -1,0 +1,169 @@
+# bench/ — Held-out benchmark scaffold
+
+## Why this exists
+
+Wave-25's autonomy expansion (self-merging portfolio PRs on green CI) rests on a
+claim that has never been independently checked: **"Haiku is sufficient for fleet
+subagent work, quality-equivalent to Sonnet/Opus."** The only evidence for that
+claim to date has been the fleet grading its own output — agents judging agents —
+with results recorded in a private `MEMORY.md`. That is not evidence a skeptical
+outside reader can check. It is agents vouching for agents.
+
+This directory, together with `tools/bench_runner.py`, is the **measurement
+apparatus** for closing that gap: a small, fixed, held-out set of tasks with
+answers checked by a plain Python string/regex comparison — no model, no agent,
+no fleet member in the scoring loop.
+
+**This wave does NOT run the comparison.** No Haiku-vs-Sonnet-vs-Opus numbers are
+produced or claimed here. This PR ships the harness, the tasks, and the ground
+truth, proven correct against a zero-cost mock runner. Producing an actual verdict
+("Haiku scores X%, Opus scores Y%") is separate future work that spends real
+tokens against real models and should be reported as its own dated result, not
+folded into this scaffold.
+
+## What's in here
+
+- `tasks.jsonl` — 12 held-out tasks, one JSON object per line. Each task has:
+  - `id` — stable identifier
+  - `category` — what kind of subagent work it represents
+  - `match` — `"exact"` or `"regex"`, tells the scorer how to check the answer
+  - `prompt` — the full text sent to a model runner
+- `ground_truth.jsonl` — one JSON object per line, keyed by `id`:
+  - exact tasks: `{"id": ..., "expected": "<string>"}`
+  - regex tasks: `{"id": ..., "expected_regex": "<pattern>"}`
+- `tools/bench_runner.py` (repo root `tools/`, not under `bench/`) — the scorer
+  and CLI. See below.
+
+## Task selection
+
+The 12 tasks are meant to be representative slices of what fleet subagents
+actually do day to day, not a general-capability IQ test:
+
+| category | represents |
+|---|---|
+| `classify_file_change` (t01-t04) | "what kind of file is this diff touching" triage, used to route review lenses |
+| `extract_test_name` (t05) | pulling a failing test's name out of a CI log to file/re-dispatch a fix |
+| `extract_issue_number` (t06) | linking a commit back to its tracked item |
+| `classify_pr_title` (t07) | conventional-commit categorization for changelog/release tooling |
+| `extract_exception_type` (t08) | triage-by-exception-class from a traceback |
+| `is_real_bug_judgment` (t09) | the actually-hard case: does a reviewer's finding hold up — semantic judgment, not string matching |
+| `extract_version` (t10) | parsing a CHANGELOG entry |
+| `transform_snake_to_camel` (t11) | small deterministic text transform, the kind of thing a "just run sed" step gets delegated as |
+| `extract_file_line` (t12) | pulling a `path:line` locator out of a log line |
+
+Eleven of the twelve tasks have an objectively checkable, unambiguous answer.
+One (`t09`) is a genuine judgment call included on purpose — most of what
+"is this finding real" review work looks like — and it is the one task the
+shipped mock runner gets wrong (see below), by design, to prove the scorer
+actually discriminates between correct and incorrect answers rather than
+rubber-stamping everything.
+
+## How to run it
+
+Offline, zero-cost, no API key, no network — runs the mock runner and prints
+a table:
+
+```bash
+python tools/bench_runner.py
+```
+
+```
+Benchmark results -- runner: mock
+------------------------------------------------------------
+id    category                    result
+t01   classify_file_change        PASS
+...
+t09   is_real_bug_judgment        FAIL
+...
+------------------------------------------------------------
+Accuracy: 11/12 = 91.7%
+```
+
+That 91.7% is a fixture of the mock heuristic's regex-parsing logic. **It is
+not a claim about any real model.** The mock runner cannot perform semantic
+judgment; it is a stand-in built only to prove the scoring pipeline works.
+
+Override the task/ground-truth files (useful for local experimentation or
+CI isolation):
+
+```bash
+python tools/bench_runner.py --tasks path/to/tasks.jsonl --ground-truth path/to/gt.jsonl
+```
+
+Programmatic use:
+
+```python
+from tools.bench_runner import load_tasks, load_ground_truth, run_bench
+
+tasks = load_tasks()
+ground_truth = load_ground_truth()
+results, accuracy = run_bench(tasks, ground_truth, my_runner)
+```
+
+## Wiring a real model runner (not implemented in this wave)
+
+`run_bench()` takes any `Callable[[str], str]` — a function that accepts a task
+`prompt` and returns the model's raw text response. To score a real model,
+write a runner that calls it and register it, e.g.:
+
+```python
+# tools/bench_runner.py (or a separate script that imports it)
+import anthropic
+
+_client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+
+def haiku_runner(prompt: str) -> str:
+    resp = _client.messages.create(
+        model="claude-haiku-4-5",       # pick the actual model id at call time
+        max_tokens=64,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text
+
+RUNNERS["haiku"] = haiku_runner
+# repeat for a sonnet_runner / opus_runner pointed at the corresponding model ids
+```
+
+Then run `python tools/bench_runner.py --runner haiku` (after adding the
+`--runner` choice, or scripting `run_bench` directly) once per model and
+compare the printed accuracy tables side by side. Deliberately NOT done in
+this wave: it costs real tokens, needs a live API key, and its result is a
+dated empirical claim that deserves its own report rather than living inside
+a harness-scaffolding PR.
+
+## Honest limits
+
+- **N=12 is small.** A handful of percentage points of difference between
+  models on a 12-task set is noise, not signal. Do not report deltas smaller
+  than a few tasks' worth of accuracy (roughly 8 percentage points here) as
+  meaningful without a much larger task set or repeated sampling.
+- **Task selection bias.** These 12 tasks were picked by one author (this
+  wave's implementer) reasoning about "what fleet subagents do," not sampled
+  from actual fleet transcripts. They may not represent the true task
+  distribution, and they skew toward extraction/classification (regex- or
+  string-checkable) because those are what a programmatic, agent-free scorer
+  can grade. Only one task (`t09`) requires genuine semantic judgment — real
+  subagent work almost certainly has a higher proportion of judgment calls
+  than that, so this benchmark likely *overstates* how well a cheap
+  extraction-shaped heuristic (or a cheap model) would do on the full mix of
+  real fleet work.
+- **No real model has been run against this yet.** Every accuracy number this
+  README shows or that `bench_runner.py` prints today comes from the offline
+  mock runner. "Haiku == Opus quality" remains an open, unmeasured question
+  after this wave — this PR only makes it *measurable*.
+- **Exact/regex match is a narrow rubric.** It can't credit a correct answer
+  phrased differently (e.g., "Yes, it's real" vs. "yes"), and it can't detect
+  a right-answer-for-the-wrong-reason. It is deliberately narrow because the
+  point is removing agents from the grading loop, not building a lenient
+  judge (a lenient judge reintroduces exactly the "agent grades agent"
+  problem this scaffold exists to avoid).
+- **Not a security/safety benchmark.** This says nothing about adversarial
+  robustness, prompt injection resistance, or anything outside plain task
+  accuracy.
+- **Known repo-hygiene gap this PR leaves open (out of scope for this
+  worktree):** adding `bench/` and `tools/bench_runner.py` trips
+  `tests/domain-map-drift.test.mjs` (root `CLAUDE.md` domain map is missing a
+  `bench/` entry; `tools/CLAUDE.md` FILES section is missing `bench_runner.py`).
+  This worktree's write scope is limited to `bench/` and the two files it
+  owns under `tools/`/`tests/`, so those two one-line doc additions are left
+  for the integrating wave rather than made here.
