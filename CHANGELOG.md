@@ -7,18 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.1] - 2026-07-17
+
+First release candidate. The dispatch-model claims are now backed by measurement, the
+kill-switch and cost-ceiling are wired into the live dispatch path and proven, and the npm
+package ships slim and reproducible from a clean clone.
+
 ### Added
-- **Wave PR Board** (wave.31): New dashboard view aggregating per-wave PR status for at-a-glance merge-train visibility.
-- **Agent Inspector** (wave.31): Drill-down dashboard view exposing individual agent transcripts, cost, and lifecycle.
-- **Kill-switch** (wave.27): Wired and proven fleet-wide halt control so an operator can stop all agents from a single signal.
-- **Real benchmark harness** (wave.28): Replaced illustrative numbers with a real offline benchmark scorer (`tools/bench_runner.py`) and a ground-truth task set.
+- **Verified Opus audit** (wave.26): Full release audit run with adversarial verification — 0 hallucinated findings, closing out the all-Haiku severity-inflation risk (wave-24: 4 reported P0s, 0 real).
+- **Kill-switch wired into dispatch** (wave.27): Fleet-wide halt control is now wired into the dispatch path and proven end-to-end — an operator can stop all agents from a single signal.
+- **Cost-ceiling guardrail** (wave.27): Per-wave spend ceiling halts dispatch when the configured budget is exceeded.
+- **Held-out benchmark measured** (wave.28): Real offline benchmark scorer (`tools/bench_runner.py`) over a held-out ground-truth set of 39 judgment tasks — Haiku scores on par with Opus at roughly 1/3 the cost, replacing the previously illustrative numbers.
+- **State-reconcile primitive** (wave.29): A reconcile primitive compares tracker state against shipped work so already-done items are not re-dispatched at wave open.
+- **Reproduce-from-clean-clone CI** (wave.30): CI job builds and validates the package from a fresh clone, proving the tarball is reproducible and self-contained.
+- **Wave PR Board** (wave.31): Dashboard view aggregating per-wave PR status for at-a-glance merge-train visibility (browser-proven).
+- **Agent Inspector** (wave.31): Drill-down dashboard view exposing individual agent transcripts, cost, and lifecycle (browser-proven).
 
 ### Changed
-- **Adversarially-verified audits** (wave.25): Full audits now verify Haiku-reported findings before scheduling fixes, after all-Haiku audits inflated severity (wave-24: 4 reported P0s, 0 real).
+- **npm package slimmed** (wave.30): Package trimmed to ~400 kB by excluding UI source and node_modules; only built artifacts (`ui/web/dist/`), Python, tools, and docs ship.
+- **Adversarially-verified audits** (wave.25): Full audits now verify Haiku-reported findings before scheduling fixes.
 - **Tracker reconciliation at wave open** (wave.29): Wave startup reconciles the tracker against shipped work so already-done items are not re-dispatched.
 
 ### Fixed
-- **CI docs-deadlock** (wave.30): Broke a docs-gate deadlock that could mask HEAD failures in the CI pipeline.
+- **CI docs-only deadlock** (wave.30): Broke a docs-gate deadlock that could mask HEAD failures in the CI pipeline.
 - **Waveguard worktree marker resolution** (#165): Fixed pre-commit hook to resolve marker to current worktree instead of hardcoded primary tree path (wave-24 fleet-block incident).
 
 ### Tests
