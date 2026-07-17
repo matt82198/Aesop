@@ -22,32 +22,32 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `wave-26-credibility-safety` (2026-07-16, current)
-Wave-25 CLOSED (2026-07-16, commit 53212d9 PR #166): Opus audit found 18/18 confirmed findings,
-16 unique fixed (secret-gate fail-closed, tests-run, py-portability, gitattributes, claudemd-drift,
-docs-currency, rotate-claim). No P0/P1. Wave-26 in progress: credibility & safety pillar.
+## Phase: `wave-29-ci-fix` (2026-07-17, current)
+Waves 25–29 shipped the credibility & safety pillar, answering the user critique (orchestration
+core untested, Haiku-sufficiency unmeasured, no cost ceiling / kill switch under autonomous self-merge):
+- **Wave-25** (PR #166): Opus-VERIFIED audit — 18/18 confirmed (0 hallucinations, vs wave-24's 4
+  fake P0s), 16 fixes, no P0/P1.
+- **Wave-26** (PR #167): `.HALT` kill-switch (`tools/halt.py`) + `tools/cost_ceiling.py`,
+  orchestration-core tests, test-hygiene enforcement, held-out benchmark scaffold.
+- **Wave-27** (PR #168): first REAL benchmark run (extraction — Haiku=Sonnet=Opus 12/12; honestly
+  too easy to discriminate); dashboard cp1252 crash fixed.
+- **Brake wired into dispatch** (claude-config `d69267d`): kill-switch/cost-ceiling gate in
+  `wave-flat-dispatch.template.mjs`, PROVEN aborting a real dispatch (0 workers spawned; cleared cleanly).
+- **Wave-28** (PR #169): state reconcile primitive (STATE.md↔state_store, git-authoritative, disjoint
+  confirmed), cost-ceiling hardening (daily=today-UTC, shared ledger parser), repro-from-clean-clone CI;
+  + judgment benchmark v2 — **Haiku/Sonnet 11/11, Opus 10/11** (harder set discriminates AND favored
+  the cheap model; N=11, rubric-compliance caveat).
+- **Wave-29** (PR #171): pure-docs PRs no longer deadlock (`ci` runs on every PR; skipped required
+  checks were the root cause).
 
-**Wave-26 focus**: Address user critique that orchestration core is untested, Haiku sufficiency
-claim unmeasured, no cost ceiling / kill switch despite autonomous self-merge. Rigor required:
-genuine measurement, not theater. Held-out benchmark scaffold, cost-ceiling enforcement,
-orchestration test harness (monitor loop tested), guard-rails verified under load.
-
-## Upcoming phases
-1. **`wave-26-measurement`** — Orchestration core instrumentation (monitor loop, lock contention,
-   heartbeat staleness, cost/token tracking per agent + fleet). Held-out benchmark fixture
-   (sealed input, measure cold-start + per-cycle time/tokens). Cost ceiling gates (set $/cycle
-   limit; agent scales adaptively). Kill-switch wiring (orchestrator pause/resume via sentinel
-   file or state-push). Guard-rail harness tests under load (concurrent writes, flaky I/O,
-   network delays). Subagent-model verification (spot-check Haiku adequacy vs Opus on a few
-   items; measure delta). Report honestly: what was/wasn't proved.
-2. **`wave-27-reconciliation`** — State-layer deep rework: move state off git (event-sourced SQLite
-   BUILDLOG/AUDIT ledger) + batch git to wave boundary (latency + team scale). Reproduce-from-
-   clean-clone CI fixture (verify onboarded checkout can replay full wave with no ambient state).
-3. **`wave-28-enforcement`** — Guardrail harness codification (branch discipline, secret gates,
-   cost ceilings as exit-1 blocks in pre-push hook + CI). Review/audit loop metrics (P0/P1
-   escape rate, fix latency, Opus vs Haiku quality delta). Automated enforcement tests.
-4. **`release-candidate`** — Full final-catch (all suites green), version bump, tag, CI badge,
-   release notes curated from the backlog's wave-by-wave history.
+## Upcoming (wave-30 seed — full list in conductor3/WAVE27-SEED.md)
+1. Larger-N + real-transcript-sampled judgment benchmark + a recorded cost axis, before asserting
+   "Haiku sufficient for judgment" rather than suggesting it.
+2. Wire phase_set events at wave-close so reconcile.py runs against a real populated state store.
+3. UX/UI feature wave (deferred since wave-26): the 19 ideation candidates.
+4. Re-add the docs-only CI speed optimization CORRECTLY (aggregator or step-gating) — wave-29 removed
+   the broken skip for safety, trading ~2min CI on docs PRs.
+5. **`release-candidate`** — full final-catch, version bump, tag, CI badge, curated release notes.
 
 ## Phase history (collapsed)
 - `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/
@@ -57,23 +57,20 @@ orchestration test harness (monitor loop tested), guard-rails verified under loa
   default (web :8770) + brain hook re-synced.
 - `merged-wave4-open` → PR #16 merged (`f259c4f`); branch-per-item adopted; audit #1
   dispatched.
+- `waves-25-29` → credibility & safety pillar shipped (PRs #166–#171): verified audit, kill-switch
+  built + wired into dispatch + PROVEN, 2 real benchmark runs (extraction tie, judgment favored
+  Haiku), reconcile primitive, cost-ceiling hardening, repro CI, docs-deadlock CI fix.
 
-## NEXT STEPS (wave-26)
-1. **Orchestration harness instrumentation** — Add telemetry to monitor loop (lock wait times,
-   write coalescing, heartbeat cadence). Cost tracking per agent + fleet. Cold-start timing.
-2. **Held-out benchmark scaffold** — Sealed input fixture (e.g. standard backlog); measure
-   wave time/tokens cold vs warm. Commit baseline to git; CI runs post-merge to detect drift.
-3. **Cost ceiling enforcement** — Configurable $/cycle budget; agent scale adapts (fewer
-   parallel, smaller footprint per agent) when approaching limit. Test: exceed limit → adapt.
-4. **Kill-switch wiring** — Sentinel file or API endpoint to pause/resume orchestrator mid-wave
-   without losing state. Verify: pause stops new agent dispatch; resume resumes cleanly.
-5. **Subagent-model verification** — A/B spot-check: Haiku vs Opus on 3–5 representative items
-   (e.g. one UI fix, one test, one docs). Measure latency/quality/cost delta objectively.
-   Publish honest verdict: sufficiency confirmed or model reclassification needed.
-6. **Guard-rail load tests** — Concurrent writes (monitor + UI emitting proposals), flaky I/O
-   (delayed responses), network jitter. Verify locks hold, no data loss, no silent failures.
-
-**Wave-27 deferrals** (not wave-26; backlog for wave-27 kickoff):
-- State-layer rework: event-sourced SQLite (BUILDLOG/AUDIT ledger off git); batch git at
-  wave boundary.
-- Reproduce-from-clean-clone CI: verify onboarded checkout replays wave without ambient state.
+## NEXT STEPS (wave-30)
+1. **Larger-N judgment benchmark** — sample judgment tasks from real fleet transcripts + record a
+   cost axis (bench/ v3), so "Haiku sufficient for judgment" can be asserted, not just suggested.
+   Current evidence (N=11): Haiku/Sonnet 11/11, Opus 10/11 — suggestive, not conclusive.
+2. **phase_set event emission** — reconcile.py has the primitive; add a wave-close hook that emits
+   a phase_set event so it runs against a populated state store instead of reporting drift-on-first-use.
+3. **UX/UI feature wave** — the 19 ideation candidates (memory: waves-need-ux-ui-features); route to
+   general-purpose Haiku with playwright proof, not the delegating specialists.
+4. **Docs-only CI speed** (optional) — re-add the fast-path correctly (aggregator/step-gating);
+   wave-29 traded it for safety (ci now runs full ~2min on docs PRs).
+5. **Deeper still-open critique items** — orchestration core is only partially in-repo-testable (true
+   model dispatch lives in the harness); external reproduction now has a repro.yml but no third party
+   has run it. Both are structural, not quick fixes — track honestly.
