@@ -54,9 +54,15 @@ class MetricsGate:
     VERIFICATION_PATTERN = re.compile(r'<!--\s*metrics-verified:\s*[^-]+\s*-->')
 
     def __init__(self, diff_range: str = "origin/main...HEAD"):
-        """Initialize with a git diff range."""
+        """Initialize with a git diff range.
+
+        The gate scans the git repository at the current working directory
+        (like git itself), not the directory the script happens to live in.
+        In CI it is invoked from the repo root, so behaviour is unchanged;
+        this also makes the gate exercisable against any repo under test.
+        """
         self.diff_range = diff_range
-        self.repo_root = Path(__file__).resolve().parent.parent
+        self.repo_root = Path.cwd()
 
     def get_diff_lines(self) -> List[Tuple[str, str]]:
         """Get lines added in diff. Returns list of (file, line_content)."""

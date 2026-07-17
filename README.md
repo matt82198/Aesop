@@ -45,11 +45,12 @@ audit + fleet-ops monitoring
 - **Self-healing watchdog** — Runs every 150s: backs up work, scans for secrets, detects drift, restores on reboot.
 - **Live web dashboard** — Real-time fleet health, security alerts, work-item kanban at `http://localhost:8770`.
 - **Secret-scan gates** — Pre-push hook blocks leaks; audit trail logged. Pair with GitHub branch protection for enforcement.
+- **Read-only MCP Fleet Server** — Expose fleet status, active agents, work items, and cost metrics to Claude Code (fleet_status, fleet_agents, fleet_tracker, fleet_cost tools). See [mcp/CLAUDE.md](./mcp/CLAUDE.md) for setup.
 - **Self-diagnosing npm publish** — OIDC token generation and publish reliability verified on each release; workflow surfaces diagnostics inline.
 
 ## Get Started (3 steps, 5 min)
 
-**Note:** Aesop is in beta. Install the `@beta` tag for the latest prerelease (v0.1.0-beta.5).
+**Note:** Aesop is in beta. Install the `@beta` tag for the latest prerelease (v0.1.0-beta.6).
 
 ### Quickest path: npx scaffold
 
@@ -129,11 +130,12 @@ Aesop pairs well with the open-source catalog of ~130 community-authored special
 If you're using **Claude Code**, invoke `/power` at the start of each session. It loads your orchestrator brain (cardinal rules, domain map, team memory, system state) and outputs a health brief. Setup once:
 
 ```bash
-# Copy the /power skill
+# Copy the /power skill and optional /healthcheck skill
 cp -r skills/power/ ~/.claude/skills/power/
+cp -r skills/healthcheck/ ~/.claude/skills/healthcheck/
 ```
 
-Then in Claude Code, type `/power` or `/buildsystem` to start a wave cycle. See [skills/power/SKILL.md](./skills/power/SKILL.md) for details.
+Then in Claude Code, type `/power` or `/buildsystem` to start a wave cycle. Use `/healthcheck` to audit fleet machinery health before running waves. See [skills/power/SKILL.md](./skills/power/SKILL.md) and [skills/healthcheck/SKILL.md](./skills/healthcheck/SKILL.md) for details.
 
 ## Core Principles
 

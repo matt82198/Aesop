@@ -906,5 +906,213 @@ class TestRangeMode(unittest.TestCase):
             )
 
 
+class TestBlobScanClosesWorktreeBypass(unittest.TestCase):
+    """Wave-25 P2 regression tests: --staged and --range must scan the git
+    OBJECT being staged/pushed, not the working-tree copy of the file.
+
+    Previously both modes built file lists via `git diff`/`git diff --cached`
+    but then read $repo/<path> straight off disk (scan_file), so a secret
+    that lived only in the staged index or in a committed-but-tip blob was
+    invisible if the on-disk working copy no longer matched it.
+    """
+
+    def _init_repo(self, tmpdir):
+        subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmpdir, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=tmpdir, capture_output=True,
+        )
+
+    def test_staged_bypass_stage_secret_then_edit_worktree_without_restaging(self):
+        """stage-secret -> edit-worktree-without-restaging: the STAGED INDEX
+        blob still carries the secret even though the on-disk file was
+        overwritten with clean content afterward (and never re-staged).
+        The old disk-based --staged scan missed this; the fixed scan (git
+        show :<path>) must catch it.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._init_repo(tmpdir)
+
+            test_file = Path(tmpdir) / "config.py"
+            test_file.write_text("clean = 1\n")
+            subprocess.run(["git", "add", "config.py"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+
+            # Stage a secret. Keyword fragment-assembled (like the rest of this
+            # file) so this test's own source never spells the assignment
+            # shape contiguously -- otherwise the push gate would flag its
+            # OWN f-string literal, unrelated to the fixture content it
+            # dynamically produces at test-run time.
+            dummy_key = _j("sk", "-1234567890abcdefghij1234567890")
+            key_field = _j("api", "_key")
+            test_file.write_text(f"{key_field} = '{dummy_key}'\n")
+            subprocess.run(["git", "add", "config.py"], cwd=tmpdir, capture_output=True)
+
+            # Edit the worktree copy WITHOUT re-staging: disk is now clean,
+            # but the staged index blob still has the secret.
+            test_file.write_text("# nothing to see here (worktree redacted this)\n")
+
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), "--staged", "--repo", tmpdir],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"Staged-index secret must be caught even though disk copy is clean. "
+                f"stdout: {result.stdout} stderr: {result.stderr}",
+            )
+            self.assertIn(
+                "openai_anthropic_key",
+                result.stdout,
+                f"Should detect sk- secret from the staged blob. stdout: {result.stdout}",
+            )
+
+    def test_range_bypass_commit_secret_then_redact_worktree_without_new_commit(self):
+        """commit-secret -> redact-in-worktree -> push: the secret is
+        committed (tip commit's blob has it), then the worktree file is
+        edited to remove it WITHOUT a new commit. The pushed commit (tip of
+        the range) still carries the secret in its blob. The old disk-based
+        --range scan (reading $repo/<path> after the redact) missed this;
+        the fixed scan (git show <tip>:<path>) must catch it.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._init_repo(tmpdir)
+
+            test_file = Path(tmpdir) / "config.py"
+            test_file.write_text("clean = 1\n")
+            subprocess.run(["git", "add", "config.py"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+
+            old_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=tmpdir, capture_output=True, text=True
+            ).stdout.strip()
+
+            # Commit a secret (this becomes the tip of the range). Keyword
+            # fragment-assembled (like the rest of this file) so this test's
+            # own source never spells the assignment shape contiguously.
+            dummy_key = _j("sk", "-1234567890abcdefghij1234567890")
+            key_field = _j("api", "_key")
+            test_file.write_text(f"{key_field} = '{dummy_key}'\n")
+            subprocess.run(["git", "add", "config.py"], cwd=tmpdir, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "add secret"], cwd=tmpdir, capture_output=True)
+
+            new_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=tmpdir, capture_output=True, text=True
+            ).stdout.strip()
+
+            # Redact in the worktree WITHOUT committing: disk is now clean,
+            # but the tip commit's blob still has the secret.
+            test_file.write_text("# nothing to see here (worktree redacted this)\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCANNER_PATH),
+                    "--range", f"{old_commit}..{new_commit}",
+                    "--repo", tmpdir,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"Tip-commit secret must be caught even though disk copy was redacted "
+                f"without a new commit. stdout: {result.stdout} stderr: {result.stderr}",
+            )
+            self.assertIn(
+                "openai_anthropic_key",
+                result.stdout,
+                f"Should detect sk- secret from the tip commit's blob. stdout: {result.stdout}",
+            )
+
+
+class TestRangeModeFailsClosedOnGitError(unittest.TestCase):
+    """Wave-25 P2 regression test: an unresolvable --range must fail CLOSED
+    (non-zero exit, no CLEAN), not be silently treated as "zero files
+    changed" -> CLEAN -> exit 0.
+    """
+
+    def _init_repo(self, tmpdir):
+        subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmpdir, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=tmpdir, capture_output=True,
+        )
+        test_file = Path(tmpdir) / "file.txt"
+        test_file.write_text("clean")
+        subprocess.run(["git", "add", "file.txt"], cwd=tmpdir, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, capture_output=True)
+
+    def test_unresolvable_range_exits_nonzero_not_clean(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._init_repo(tmpdir)
+
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCANNER_PATH),
+                    "--range", "totally-bogus-ref-aaaa..also-bogus-bbbb",
+                    "--repo", tmpdir,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                f"Unresolvable range must fail CLOSED (non-zero exit), not exit 0. "
+                f"stdout: {result.stdout} stderr: {result.stderr}",
+            )
+            self.assertNotIn(
+                "CLEAN",
+                result.stdout,
+                f"Must not report CLEAN when the git command itself failed. "
+                f"stdout: {result.stdout}",
+            )
+
+    def test_get_range_files_raises_on_git_error(self):
+        """Unit-level: get_range_files() itself must raise GitScanError on a
+        bad range rather than returning [] (indistinguishable from clean)."""
+        from secret_scan import get_range_files, GitScanError
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._init_repo(tmpdir)
+            with self.assertRaises(
+                GitScanError,
+                msg="get_range_files must raise GitScanError on an unresolvable range, "
+                    "not silently return [].",
+            ):
+                get_range_files(tmpdir, "totally-bogus-ref-aaaa..also-bogus-bbbb")
+
+    def test_get_range_files_empty_range_is_not_an_error(self):
+        """Sanity check: a VALID range with genuinely zero changed files must
+        still return [] cleanly (not raise) -- only actual git errors are
+        fail-closed."""
+        from secret_scan import get_range_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._init_repo(tmpdir)
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=tmpdir, capture_output=True, text=True
+            ).stdout.strip()
+            result = get_range_files(tmpdir, f"{head}..{head}")
+            self.assertEqual(result, [])
+
+
 if __name__ == "__main__":
     unittest.main()

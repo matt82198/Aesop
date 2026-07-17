@@ -23,6 +23,19 @@ Self-scan invariant: this file must scan CLEAN with NO pragma. Any pattern liter
 would match its own regex is runtime-assembled from fragments (see pem_private_key) so
 the pattern text never appears contiguously in this source.
 
+Scan contract (wave-25 P2 fix): --staged and --range scan committed GIT OBJECTS, not the
+working-tree copy of changed files. --staged reads each path's STAGED INDEX blob
+(`git show :<path>`); --range reads each changed path's blob at the TIP of the range
+(`git show <tip>:<path>`). This closes two bypasses that existed when these modes read
+$repo/<path> off disk: (1) stage a secret, then edit the on-disk file without
+re-staging -- the dirty blob is still what gets committed/pushed; (2) commit a secret,
+then edit it away in the worktree without a new commit -- the dirty blob is still what
+the pushed commit carries. --history is unaffected (it already walks committed diffs).
+Any git command needed to enumerate the files-to-scan that itself fails (bad ref,
+unresolvable range, git error) is NOT treated as "zero files changed" -- it raises
+GitScanError and the caller fails CLOSED (non-zero exit), so an unresolvable range can
+never silently report CLEAN.
+
 NOTE: Public repo version has NO vault allowlist.
 """
 
@@ -96,6 +109,40 @@ CREDENTIAL_FILENAMES = [
 
 # Placeholders that don't count as secrets
 PLACEHOLDERS = {"xxx", "changeme", "your-key-here", "example", "test", "demo"}
+
+# Rules that CAN be softened by pragma (doc-shaped rules only)
+SOFTENED_BY_PRAGMA = {"generic_secret_assignment", "env_access"}
+
+# Rules that are ALWAYS fatal, pragma never applies
+FATAL_RULES = {
+    "pem_private_key",
+    "aws_access_key",
+    "github_token",
+    "slack_token",
+    "openai_anthropic_key",
+    "connection_string",
+}
+
+
+def _classify_finding(rule_name, has_file_pragma):
+    """Shared fatal/softened decision, used by every scan_* variant (disk-file,
+    blob, large-file-chunked) so the pragma contract can't drift between them.
+    FATAL_RULES are always fatal. SOFTENED_BY_PRAGMA rules are fatal unless the
+    pragma is present. Everything else (e.g. env_assignment) is always fatal."""
+    if rule_name in FATAL_RULES:
+        return True
+    if rule_name in SOFTENED_BY_PRAGMA:
+        return not has_file_pragma
+    return True
+
+
+class GitScanError(Exception):
+    """Raised when a git command needed to enumerate files-to-scan fails.
+    Callers MUST treat this as fail-CLOSED (block / exit non-zero) -- it is
+    NOT equivalent to "the range/index genuinely contains zero changed
+    files" (wave-25 P2 fix: get_range_files previously returned [] on ANY
+    git-diff error, indistinguishable from a real empty range, so main()
+    printed CLEAN and exited 0 on an unresolvable range)."""
 
 
 def has_pragma(filepath):
@@ -184,22 +231,8 @@ def scan_file(filepath):
     - Large files: scan first 1MB; emit SKIPPED-LARGE to stderr if file is larger
     - Binary files: decode as latin-1; emit SKIPPED-BINARY to stderr if not fully scanned
     """
-    # Rules that CAN be softened by pragma (doc-shaped rules only)
-    SOFTENED_BY_PRAGMA = {"generic_secret_assignment", "env_access"}
-
-    # Rules that are ALWAYS fatal, pragma never applies
-    FATAL_RULES = {
-        "pem_private_key",
-        "aws_access_key",
-        "github_token",
-        "slack_token",
-        "openai_anthropic_key",
-        "connection_string",
-    }
-
     SIZE_THRESHOLD = 1024 * 1024  # 1MB
     MAX_READ_SIZE = 2 * 1024 * 1024  # 2MB max to read
-    SCAN_PREFIX_SIZE = 1024 * 1024  # Scan first 1MB of large files
 
     findings = []
 
@@ -275,17 +308,7 @@ def scan_file(filepath):
                                     if is_placeholder(match_str):
                                         continue
 
-                                    # Determine fatality based on rule category
-                                    if rule_name in FATAL_RULES:
-                                        # These are always fatal, pragma never applies
-                                        is_fatal = True
-                                    elif has_file_pragma and rule_name in SOFTENED_BY_PRAGMA:
-                                        # Only these rules can be softened by pragma
-                                        is_fatal = False
-                                    else:
-                                        # Other rules are fatal unless pragma and softened
-                                        is_fatal = not has_file_pragma if rule_name in SOFTENED_BY_PRAGMA else True
-
+                                    is_fatal = _classify_finding(rule_name, has_file_pragma)
                                     findings.append((line_num, rule_name, match_str, is_fatal))
             except (IOError, OSError) as e:
                 # FAIL CLOSED: if we cannot fully scan a large text file, exit with error
@@ -309,17 +332,7 @@ def scan_file(filepath):
                             if is_placeholder(match_str):
                                 continue
 
-                            # Determine fatality based on rule category
-                            if rule_name in FATAL_RULES:
-                                # These are always fatal, pragma never applies
-                                is_fatal = True
-                            elif has_file_pragma and rule_name in SOFTENED_BY_PRAGMA:
-                                # Only these rules can be softened by pragma
-                                is_fatal = False
-                            else:
-                                # Other rules are fatal unless pragma and softened
-                                is_fatal = not has_file_pragma if rule_name in SOFTENED_BY_PRAGMA else True
-
+                            is_fatal = _classify_finding(rule_name, has_file_pragma)
                             findings.append((line_num, rule_name, match_str, is_fatal))
 
     except Exception:
@@ -328,46 +341,190 @@ def scan_file(filepath):
     return findings
 
 
-def get_staged_files(repo_path):
-    """Get list of staged files from git repo."""
+def scan_blob(label, content_bytes):
+    """
+    Scan raw blob bytes for secrets, reporting findings against `label` as the
+    display path. Mirrors scan_file()'s rule/fatality logic, but reads content
+    already fetched from a git object (via get_git_blob) instead of opening the
+    working-tree disk file. Used by --staged (the STAGED INDEX blob) and
+    --range (the blob at the TIP of the range) so a secret present only in the
+    git object being pushed -- but absent from an out-of-sync working copy --
+    is not missed (wave-25 P2 fix; see module docstring "Scan contract").
+
+    Returns list of (line_num, rule, match_str, is_fatal), like scan_file().
+    """
+    filepath = Path(label)
+    SIZE_THRESHOLD = 1024 * 1024  # 1MB
+    MAX_READ_SIZE = 2 * 1024 * 1024  # 2MB max to read (matches scan_file's binary cap)
+
+    findings = []
+
+    if should_skip_file(filepath):
+        return findings
+
+    filename = filepath.name.lower()
+    for pattern in CREDENTIAL_FILENAMES:
+        if re.match(pattern, filename, re.IGNORECASE):
+            findings.append(
+                (0, "credential_filename", f"File name matches credential pattern: {filepath.name}", True)
+            )
+            break
+
+    # Pragma check over the first 10 lines, mirroring has_pragma() but reading
+    # from the in-memory blob instead of opening a path from disk.
+    has_file_pragma = False
+    try:
+        probe = content_bytes.decode("utf-8", errors="ignore")
+        for i, line in enumerate(probe.split("\n")):
+            if i >= 10:
+                break
+            if "secretscan: allow-pattern-docs" in line:
+                has_file_pragma = True
+                break
+    except Exception:
+        pass
+
+    is_binary = b"\x00" in content_bytes[:8192]
+    is_large = len(content_bytes) > SIZE_THRESHOLD
+
+    if is_binary:
+        raw = content_bytes[:MAX_READ_SIZE]
+        try:
+            content_str = raw.decode("latin-1")
+        except Exception:
+            content_str = raw.decode("utf-8", errors="ignore")
+
+        print(f"SKIPPED-BINARY {filepath} (scanned via latin-1)", file=sys.stderr)
+
+        for line_num, line in enumerate(content_str.split("\n"), start=1):
+            for rule_name in FATAL_RULES:
+                pattern, flags = PATTERNS[rule_name]
+                for match in re.finditer(pattern, line, flags):
+                    match_str = match.group(0)
+                    if is_placeholder(match_str):
+                        continue
+                    findings.append((line_num, rule_name, match_str, True))
+        return findings
+
+    if is_large:
+        print(f"SKIPPED-LARGE {filepath} (scanned in full from git object)", file=sys.stderr)
+
+    try:
+        content_str = content_bytes.decode("utf-8", errors="ignore")
+    except Exception:
+        content_str = content_bytes.decode("latin-1", errors="ignore")
+
+    env_file = is_env_file(filepath)
+    for line_num, line in enumerate(content_str.split("\n"), start=1):
+        for rule_name, (pattern, flags) in PATTERNS.items():
+            if rule_name == "env_assignment" and not env_file:
+                continue
+
+            for match in re.finditer(pattern, line, flags):
+                match_str = match.group(0)
+                if is_placeholder(match_str):
+                    continue
+                is_fatal = _classify_finding(rule_name, has_file_pragma)
+                findings.append((line_num, rule_name, match_str, is_fatal))
+
+    return findings
+
+
+def _range_tip_ref(commit_range):
+    """Extract the right-hand (tip) ref from a two-dot or three-dot commit
+    range string, e.g. 'main..HEAD' -> 'HEAD', 'a...b' -> 'b'. Falls back to
+    the whole string if it isn't a recognizable range (single ref/sha)."""
+    if "..." in commit_range:
+        tip = commit_range.split("...", 1)[1]
+    elif ".." in commit_range:
+        tip = commit_range.split("..", 1)[1]
+    else:
+        tip = commit_range
+    return tip or "HEAD"
+
+
+def get_git_blob(repo_path, ref_path):
+    """Fetch raw blob bytes via `git show <ref_path>` -- e.g. ref_path=':foo.py'
+    reads foo.py from the STAGED INDEX, 'abc123:foo.py' reads foo.py as it
+    exists in commit abc123.
+
+    Raises GitScanError if the git show command fails (non-zero returncode or
+    exception). Since callers use --diff-filter=d to exclude deleted paths from
+    enumeration, a git-show failure for an enumerated path is a real error
+    (e.g., corruption, permissions, unreadable blob), not a legitimate 'file
+    absent' case. Failing closed (raising GitScanError) ensures such errors
+    block the push, consistent with how enumeration failures already fail closed.
+    """
     try:
         result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
+            ["git", "show", ref_path],
+            cwd=repo_path,
+            capture_output=True,
+            timeout=15,
+        )
+    except Exception as e:
+        raise GitScanError(
+            f"git show {ref_path!r} raised {e!r}"
+        )
+    if result.returncode != 0:
+        raise GitScanError(
+            f"git show {ref_path!r} failed (rc={result.returncode}): "
+            f"{result.stderr.decode('utf-8', errors='ignore').strip()}"
+        )
+    return result.stdout
+
+
+def get_staged_files(repo_path):
+    """Get list of staged file paths (relative to repo root) from git repo.
+
+    Raises GitScanError if the underlying `git diff --cached` invocation
+    fails; callers must fail CLOSED on that, not treat it as "nothing staged".
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=d"],
             cwd=repo_path,
             capture_output=True,
             text=True,
             timeout=10,
         )
-        if result.returncode != 0:
-            return []
-        return [
-            Path(repo_path) / f
-            for f in result.stdout.strip().split("\n")
-            if f.strip()
-        ]
-    except Exception:
-        return []
+    except Exception as e:
+        raise GitScanError(f"git diff --cached raised {e!r}")
+
+    if result.returncode != 0:
+        raise GitScanError(
+            f"git diff --cached failed (rc={result.returncode}): {result.stderr.strip()}"
+        )
+
+    return [f for f in result.stdout.strip().split("\n") if f.strip()]
 
 
 def get_range_files(repo_path, commit_range):
-    """Get list of files changed in commit range (e.g., 'main..HEAD' or 'abc123..def456')."""
+    """Get list of file paths (relative to repo root) changed in commit range
+    (e.g. 'main..HEAD' or 'abc123..def456').
+
+    Raises GitScanError if the underlying `git diff` invocation fails (e.g.
+    an unresolvable ref); callers must fail CLOSED on that -- it is not the
+    same as a range that genuinely touches zero files.
+    """
     try:
         result = subprocess.run(
-            ["git", "diff", "--name-only", commit_range],
+            ["git", "diff", "--name-only", "--diff-filter=d", commit_range],
             cwd=repo_path,
             capture_output=True,
             text=True,
             timeout=10,
         )
-        if result.returncode != 0:
-            return []
-        return [
-            Path(repo_path) / f
-            for f in result.stdout.strip().split("\n")
-            if f.strip()
-        ]
-    except Exception:
-        return []
+    except Exception as e:
+        raise GitScanError(f"git diff --name-only {commit_range!r} raised {e!r}")
+
+    if result.returncode != 0:
+        raise GitScanError(
+            f"git diff --name-only {commit_range!r} failed (rc={result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+
+    return [f for f in result.stdout.strip().split("\n") if f.strip()]
 
 
 def get_history_files(repo_path):
@@ -467,33 +624,84 @@ def main():
         print("ERROR: Use exactly one of --staged, --range, --history, or path arguments", file=sys.stderr)
         sys.exit(2)
 
-    # Collect files to scan
-    if args.staged:
-        files = get_staged_files(args.repo)
-    elif args.range:
-        files = get_range_files(args.repo, args.range)
-    elif args.history:
-        # History mode: scan all files from git log
-        history_files = get_history_files(args.repo)
-        files = []  # We'll handle history differently
-    else:
-        files = scan_paths(args.paths)
-
-    # Scan files
     all_findings = []
     fatal_findings = []
     allowed_doc_count = 0
+    file_count = 0
 
-    if args.history:
-        # History scanning mode
+    if args.staged:
+        # Scan the STAGED INDEX blob for each changed path, NOT the working-tree
+        # copy -- a worktree edit made after `git add` must not be able to hide
+        # a secret still sitting in the index that would actually get committed.
+        try:
+            relpaths = get_staged_files(args.repo)
+        except GitScanError as e:
+            print(f"FATAL: could not determine staged files: {e}", file=sys.stderr)
+            print("Failing CLOSED: refusing to report CLEAN when the staged-file listing could not be determined.", file=sys.stderr)
+            sys.exit(1)
+
+        file_count = len(relpaths)
+        for relpath in relpaths:
+            try:
+                content = get_git_blob(args.repo, f":{relpath}")
+            except GitScanError as e:
+                print(f"FATAL: could not read staged blob for {relpath}: {e}", file=sys.stderr)
+                print("Failing CLOSED: refusing to report CLEAN when a staged object cannot be read.", file=sys.stderr)
+                sys.exit(1)
+            label = str(Path(args.repo) / relpath)
+            findings = scan_blob(label, content)
+            for line_num, rule, match_str, is_fatal in findings:
+                all_findings.append((label, line_num, rule, match_str, is_fatal))
+                if is_fatal:
+                    fatal_findings.append((label, line_num, rule, match_str))
+                else:
+                    allowed_doc_count += 1
+
+    elif args.range:
+        # Scan the COMMITTED blob at the TIP of the range for each changed
+        # path, NOT the working-tree copy -- a secret committed then edited
+        # away in the worktree (without a new commit) must still be caught,
+        # since the pushed commit still carries the dirty blob.
+        try:
+            relpaths = get_range_files(args.repo, args.range)
+        except GitScanError as e:
+            print(f"FATAL: could not resolve commit range {args.range!r}: {e}", file=sys.stderr)
+            print("Failing CLOSED: refusing to report CLEAN on an unresolvable range.", file=sys.stderr)
+            sys.exit(1)
+
+        file_count = len(relpaths)
+        tip_ref = _range_tip_ref(args.range)
+        for relpath in relpaths:
+            try:
+                content = get_git_blob(args.repo, f"{tip_ref}:{relpath}")
+            except GitScanError as e:
+                print(f"FATAL: could not read blob at {tip_ref}:{relpath}: {e}", file=sys.stderr)
+                print("Failing CLOSED: refusing to report CLEAN when a committed object cannot be read.", file=sys.stderr)
+                sys.exit(1)
+            label = str(Path(args.repo) / relpath)
+            findings = scan_blob(label, content)
+            for line_num, rule, match_str, is_fatal in findings:
+                all_findings.append((label, line_num, rule, match_str, is_fatal))
+                if is_fatal:
+                    fatal_findings.append((label, line_num, rule, match_str))
+                else:
+                    allowed_doc_count += 1
+
+    elif args.history:
+        # History scanning mode: unaffected by the blob-scan fix above, since
+        # it already walks committed diff content via `git log -p`.
+        history_files = get_history_files(args.repo)
+        file_count = len(set(f for f, _ in history_files))
         for filepath, content in history_files:
             findings = scan_content(content)
             for line_num, rule, match_str, is_fatal in findings:
                 all_findings.append((filepath, line_num, rule, match_str, is_fatal))
                 if is_fatal:
                     fatal_findings.append((filepath, line_num, rule, match_str))
+
     else:
-        # Regular file scanning mode
+        files = scan_paths(args.paths)
+        file_count = len(files)
         for filepath in files:
             findings = scan_file(filepath)
             for line_num, rule, match_str, is_fatal in findings:
@@ -512,8 +720,6 @@ def main():
             print(f"ALLOWED-DOC {filepath}:{line_num} {rule} ({masked})")
 
     # Summary and exit
-    file_count = len(files) if not args.history else len(set(f for f, _, _, _, _ in all_findings))
-
     if len(fatal_findings) == 0:
         if allowed_doc_count == 0:
             if args.history:

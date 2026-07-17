@@ -356,6 +356,94 @@ class TestRotateLogs(unittest.TestCase):
             content = f.read()
         self.assertIn("line 260", content, "Newest appended line should be in live file")
 
+    def test_external_append_during_rotation(self):
+        """Test that external O_APPEND writes between read and truncate aren't lost.
+
+        This test simulates the real-world scenario where external processes
+        (run-watchdog.sh, backup-fleet.sh) use >> and tee -a respectively,
+        which don't take advisory locks. The rotation must not lose these appends.
+
+        Scenario:
+        1. Rotation reads file (250 lines)
+        2. External process appends line 251 (after rotation reads, before truncate)
+        3. Rotation truncates and writes (would lose line 251 if not handled)
+        4. Line 251 must not be lost
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+
+        # Create initial log with 250 lines to trigger rotation
+        with open(logfile, 'w') as f:
+            for i in range(1, 251):
+                f.write(f"line {i}\n")
+
+        # We'll inject a simulated append into the rotation process
+        # by overriding the rotate_logs module's functions temporarily
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        import rotate_logs
+
+        original_write_lines = rotate_logs.write_lines
+
+        append_happened = {'count': 0}
+
+        def mock_write_lines_with_append(filepath, lines):
+            """Intercept the archive write to simulate an external append."""
+            # Simulate external process appending a line while rotation is computing
+            # This append happens AFTER readlines() but BEFORE the truncate+write
+            if append_happened['count'] == 0:
+                append_happened['count'] += 1
+                # Append without taking the lock (simulating external process)
+                with open(logfile, 'a') as f:
+                    for i in range(251, 261):  # Add lines 251-260
+                        f.write(f"line {i}\n")
+            return original_write_lines(filepath, lines)
+
+        # Monkey-patch to inject the append
+        rotate_logs.write_lines = mock_write_lines_with_append
+
+        try:
+            # Call rotate_log directly (not via subprocess) so the monkeypatch is used
+            result = rotate_logs.rotate_log(
+                logfile,
+                max_lines=200,
+                max_bytes=20480,
+                archive_dir=archive_dir,
+                check_only=False
+            )
+            self.assertEqual(result, 0, "Rotation should succeed")
+
+            # Count final lines
+            final_lines = self._count_lines(logfile)
+
+            # Count archived lines
+            archived_lines = 0
+            if os.path.exists(archive_dir):
+                archive_files = os.listdir(archive_dir)
+                for archive_file in archive_files:
+                    archived_lines += self._count_lines(os.path.join(archive_dir, archive_file))
+
+            # Total should be 260 (250 original + 10 externally appended)
+            total_lines = final_lines + archived_lines
+            self.assertEqual(
+                total_lines, 260,
+                f"External appends were lost: expected 260 total lines, got {total_lines} "
+                f"(live={final_lines}, archived={archived_lines})"
+            )
+
+            # Verify that some of the appended lines are in the live file
+            with open(logfile, 'r') as f:
+                content = f.read()
+            # At least some of the appended lines should be there
+            appended_count = sum(1 for i in range(251, 261) if f"line {i}" in content)
+            self.assertGreater(
+                appended_count, 0,
+                "None of the externally appended lines made it to the live file"
+            )
+
+        finally:
+            # Restore original
+            rotate_logs.write_lines = original_write_lines
+
 
 if __name__ == "__main__":
     unittest.main()

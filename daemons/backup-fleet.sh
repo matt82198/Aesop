@@ -76,12 +76,8 @@ get_untracked_files() {
 
 scan_unpushed_commits() {
   local repo="$1"
-  local file_paths=()
-  local repo_win
   local unpushed_files
-
-  # Portable path derivation (not Git-Bash pwd -W only)
-  repo_win=$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "$repo")
+  local range_expr
 
   # Detect if upstream exists (no-upstream or detached HEAD scenario)
   local upstream
@@ -91,47 +87,49 @@ scan_unpushed_commits() {
     # No upstream or detached HEAD: fallback to scanning recent commits (last 20)
     # Use git rev-list to get the base commit 20 commits back, then use git diff
     log "WARN: Repository has no upstream or detached HEAD; falling back to bounded commit range scan for $repo"
-    unpushed_files=$(
-      cd "$repo" || return 1
-      # Get the commit 20 commits ago (or earliest commit if repo is smaller)
-      local base
-      base=$(git rev-list --max-count=20 HEAD 2>/dev/null | tail -1)
-      if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD 2>/dev/null)" ]; then
-        # Multiple commits exist: scan from base to HEAD
-        git diff --name-only "$base..HEAD" 2>/dev/null | sort -u
-      elif [ -n "$base" ]; then
-        # Single commit or base == HEAD: scan just HEAD
-        git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | sort -u
-      fi
-    )
+    local base
+    base=$(cd "$repo" && git rev-list --max-count=20 HEAD 2>/dev/null | tail -1)
+    if [ -n "$base" ] && [ "$base" != "$(cd "$repo" && git rev-parse HEAD 2>/dev/null)" ]; then
+      # Multiple commits exist: scan from base to HEAD
+      range_expr="$base..HEAD"
+      unpushed_files=$(cd "$repo" && git diff --name-only "$range_expr" 2>/dev/null | sort -u)
+    elif [ -n "$base" ]; then
+      # Single commit (or base == HEAD): diff against the empty tree so the
+      # range form below (empty_tree..HEAD) still works for a root commit
+      # that has no parent to diff against.
+      local empty_tree
+      empty_tree=$(cd "$repo" && git hash-object -t tree /dev/null 2>/dev/null || echo "4b825dc642cb6eb9a060e54bf8d69288fbee4904")
+      range_expr="$empty_tree..HEAD"
+      unpushed_files=$(cd "$repo" && git diff --name-only "$range_expr" 2>/dev/null | sort -u)
+    else
+      unpushed_files=""
+    fi
   else
     # Normal case: scan commits not yet pushed to upstream
-    unpushed_files=$(
-      cd "$repo" || return 1
-      git diff --name-only @{u}..HEAD 2>/dev/null | sort -u
-    )
+    range_expr="@{u}..HEAD"
+    unpushed_files=$(cd "$repo" && git diff --name-only @{u}..HEAD 2>/dev/null | sort -u)
   fi
 
-  if [ -n "$unpushed_files" ]; then
-    while IFS= read -r file; do
-      if [ -n "$file" ] && [ -f "$repo/$file" ]; then
-        file_paths+=("$repo_win/$file")
-      fi
-    done <<EOF
-$unpushed_files
-EOF
-  fi
-
-  if [ ${#file_paths[@]} -eq 0 ]; then
+  if [ -z "$unpushed_files" ]; then
     return 0
   fi
 
+  # P2 wave-25 fix: scan the COMMITTED BLOB content of the unpushed range
+  # (via secret_scan.py --range, which reads each changed path's git object
+  # at the range's tip commit), NOT the current working-tree copy of these
+  # files. A secret committed and then cleaned up in a LATER commit -- but
+  # still present in the unpushed range being force-pushed to the backup
+  # ref -- was previously invisible here, because the old code read
+  # "$repo/$file" straight off disk (which no longer had the secret) instead
+  # of the actual blob(s) the backup push carries. --range is also robust to
+  # deleted files (git diff --diff-filter=d inside secret_scan.py already
+  # excludes them from the file list it scans).
   if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
     if command -v python3 >/dev/null 2>&1; then
-      python3 "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      python3 "$AESOP_ROOT/tools/secret_scan.py" --range "$range_expr" --repo "$repo" >/dev/null 2>&1
       return $?
     elif command -v python >/dev/null 2>&1; then
-      python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
+      python "$AESOP_ROOT/tools/secret_scan.py" --range "$range_expr" --repo "$repo" >/dev/null 2>&1
       return $?
     fi
   fi
