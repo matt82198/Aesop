@@ -4,6 +4,13 @@ Tests for tools/metrics_gate.py — NO-UNVERIFIED-METRICS gate.
 
 Tests that hard numeric claims in *.md files require source verification unless
 they are version numbers, dates, line numbers, or other acceptable values.
+
+Isolation note: the gate scans the git repo at the current working directory,
+so each test builds a throwaway temp repo and points the gate at it via
+``cwd=repo``. We deliberately do NOT ``os.chdir`` into the temp dir — a leaked
+chdir into a since-deleted temp dir poisons every later test in the same
+process (this broke wave-25 CI shard 2) and, on Windows, blocks temp-dir
+cleanup entirely.
 """
 
 import subprocess
@@ -11,64 +18,68 @@ import sys
 import tempfile
 import os
 from pathlib import Path
-import json
 import unittest
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+METRICS_GATE = REPO_ROOT / "tools" / "metrics_gate.py"
 
 
 class TestMetricsGate(unittest.TestCase):
     """Test suite for metrics_gate.py"""
 
-    def run_metrics_gate(self, *args):
-        """Run metrics_gate.py and return (exit_code, stdout, stderr)."""
-        cmd = [sys.executable, "tools/metrics_gate.py"] + list(args)
+    def run_metrics_gate(self, repo, *args):
+        """Run metrics_gate.py against ``repo`` and return (exit, out, err)."""
+        cmd = [sys.executable, str(METRICS_GATE)] + list(args)
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            cwd=Path(__file__).parent.parent,
+            cwd=str(repo),
         )
         return result.returncode, result.stdout, result.stderr
+
+    @staticmethod
+    def _init_repo(repo):
+        """git init a repo with a local (non-global) identity."""
+        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(repo), capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=str(repo), capture_output=True,
+        )
+
+    @staticmethod
+    def _commit(repo, text, message):
+        """Write test.md and commit it."""
+        repo.joinpath("test.md").write_text(text)
+        subprocess.run(["git", "add", "test.md"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", message], cwd=str(repo), capture_output=True)
 
     def test_no_metrics_pass(self):
         """Test: a diff with no numeric claims passes."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            repo.joinpath("test.md").write_text("# Test\nNo numbers here.\n")
-            os.chdir(repo)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\nNo numbers here.\n", "initial")
 
-            # Run git init and commit for diff testing
-            subprocess.run(["git", "init"], capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], capture_output=True)
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], capture_output=True)
-
-            # Since this is a fresh repo with no origin/main, test on HEAD
-            exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
-            # May fail if not enough commits, so just verify it doesn't crash
+            # Fresh repo with a single commit: HEAD~1 does not resolve, so the
+            # gate falls back cleanly (git exit 128) — verify it doesn't crash.
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
             self.assertIn(exit_code, (0, 128))  # 0 = pass, 128 = not enough commits
 
     def test_percentage_without_verification_fails(self):
         """Test: percentage claims without verification marker fail."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            os.chdir(repo)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            self._commit(repo, "# Test\n\nPerformance improved by 42%.\n", "add-metric")
 
-            subprocess.run(["git", "init"], capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], capture_output=True)
-
-            # Create initial commit
-            repo.joinpath("test.md").write_text("# Test\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], capture_output=True)
-
-            # Add unverified percentage
-            repo.joinpath("test.md").write_text("# Test\n\nPerformance improved by 42%.\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "add-metric"], capture_output=True)
-
-            exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
             self.assertEqual(exit_code, 1)
             self.assertTrue("42%" in stdout or "42%" in stderr)
 
@@ -76,148 +87,77 @@ class TestMetricsGate(unittest.TestCase):
         """Test: percentage claims with verification marker pass."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            os.chdir(repo)
-
-            subprocess.run(["git", "init"], capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], capture_output=True)
-
-            # Create initial commit
-            repo.joinpath("test.md").write_text("# Test\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], capture_output=True)
-
-            # Add verified percentage
-            repo.joinpath("test.md").write_text(
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            self._commit(
+                repo,
                 "# Test\n\nPerformance improved by 42%.\n"
-                "<!-- metrics-verified: benchmark-suite-v2 -->\n"
+                "<!-- metrics-verified: benchmarksuitev2 -->\n",
+                "add-metric",
             )
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "add-metric"], capture_output=True)
 
-            exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
-            # Should pass if verification is present
-            if exit_code != 0:
-                print(f"stdout: {stdout}")
-                print(f"stderr: {stderr}")
-            # This test verifies the mechanism works; may pass or fail depending on implementation
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            # A verified claim on an adjacent line should pass the gate.
+            self.assertEqual(exit_code, 0)
 
     def test_multiplier_without_verification_fails(self):
         """Test: multiplier claims (Nx or ×) without verification fail."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            os.chdir(repo)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            self._commit(repo, "# Test\n\nThis is 3x faster.\n", "add-metric")
 
-            subprocess.run(["git", "init"], capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n\nThis is 3x faster.\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "add-metric"], capture_output=True)
-
-            exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
-            # Should fail if no verification
-            if exit_code != 1:
-                print(f"Note: multiplier test exit code {exit_code}")
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            self.assertEqual(exit_code, 1)
 
     def test_dollar_amount_without_verification_fails(self):
         """Test: dollar amounts without verification fail."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            os.chdir(repo)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            self._commit(repo, "# Test\n\nCost is $15000 per year.\n", "add-metric")
 
-            subprocess.run(["git", "init"], capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n\nCost is $15000 per year.\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "add-metric"], capture_output=True)
-
-            exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
-            # Should fail if no verification
-            if exit_code != 1:
-                print(f"Note: dollar test exit code {exit_code}")
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            self.assertEqual(exit_code, 1)
 
     def test_version_numbers_excluded(self):
         """Test: version numbers (e.g., v1.2.3, 2.0) don't require verification."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            os.chdir(repo)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            self._commit(repo, "# Test\n\nVersion 2.0 released.\n", "add-version")
 
-            subprocess.run(["git", "init"], capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n\nVersion 2.0 released.\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "add-version"], capture_output=True)
-
-            exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
-            # Version numbers should be excluded; should pass
-            if exit_code != 0:
-                print(f"Note: version test output: {stdout}")
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            # Version numbers are not hard claims; should pass.
+            self.assertEqual(exit_code, 0)
 
     def test_date_numbers_excluded(self):
         """Test: dates (2024, 2025) don't require verification."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            os.chdir(repo)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            self._commit(repo, "# Test\n\nCreated in 2024.\n", "add-date")
 
-            subprocess.run(["git", "init"], capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n\nCreated in 2024.\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "add-date"], capture_output=True)
-
-            exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
-            # Dates should be excluded; should pass
-            if exit_code != 0:
-                print(f"Note: date test output: {stdout}")
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            # Dates are not hard claims; should pass.
+            self.assertEqual(exit_code, 0)
 
     def test_line_numbers_excluded(self):
         """Test: line numbers don't require verification."""
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
-            os.chdir(repo)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            self._commit(repo, "# Test\n\nSee line 42 for details.\n", "add-line")
 
-            subprocess.run(["git", "init"], capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "initial"], capture_output=True)
-
-            repo.joinpath("test.md").write_text("# Test\n\nSee line 42 for details.\n")
-            subprocess.run(["git", "add", "test.md"], capture_output=True)
-            subprocess.run(["git", "commit", "-m", "add-line"], capture_output=True)
-
-            exit_code, stdout, stderr = self.run_metrics_gate("HEAD~1...HEAD")
-            # Line numbers should be excluded; should pass
-            if exit_code != 0:
-                print(f"Note: line number test output: {stdout}")
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            # Bare "line 42" has no %/x/$ claim; should pass.
+            self.assertEqual(exit_code, 0)
 
 
 if __name__ == "__main__":
-    import unittest
     unittest.main()
