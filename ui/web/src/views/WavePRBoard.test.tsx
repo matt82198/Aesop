@@ -5,7 +5,7 @@
  * global fetch.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { WavePRBoard } from './WavePRBoard';
 import {
@@ -131,5 +131,41 @@ describe('WavePRBoard', () => {
     const refresh = screen.getByTestId(TESTIDS.prBoardRefresh);
     expect(refresh.tagName).toBe('BUTTON');
     expect(refresh).toHaveAccessibleName(/refresh/i);
+  });
+
+  it('cancels in-flight fetch when unmounting', async () => {
+    // A slow fetcher to ensure the component unmounts before it resolves
+    const slowFetcher = async () => {
+      return new Promise<WavePRBoardData>((resolve) => {
+        setTimeout(() => resolve(fixtureWavePRBoard), 100);
+      });
+    };
+
+    // Spy on console.error to detect setState-on-unmounted-component warnings
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { unmount } = render(<WavePRBoard fetcher={slowFetcher} />);
+
+    // Wait for loading state to be rendered
+    expect(screen.getByTestId(TESTIDS.prBoardLoading)).toBeInTheDocument();
+
+    // Unmount the component before the fetch completes
+    unmount();
+
+    // Wait for the async fetch to complete and any setState attempts to occur
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // Verify no "setState on unmounted component" warning was logged
+    const errorCalls = consoleErrorSpy.mock.calls;
+    const unmountWarnings = errorCalls.filter((call) =>
+      call.some(
+        (arg) =>
+          typeof arg === 'string' &&
+          (arg.includes('unmounted component') || arg.includes('Can\'t perform a React state update'))
+      )
+    );
+
+    expect(unmountWarnings).toHaveLength(0);
+    consoleErrorSpy.mockRestore();
   });
 });
