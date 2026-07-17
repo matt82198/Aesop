@@ -9,10 +9,19 @@
 - **Help**: `npx @matt82198/aesop --help` or `-h`
 - **Interactive wizard**: `npx @matt82198/aesop wizard` (on a TTY, prompts; with `--yes`, uses defaults)
 
+## Runtime subcommands
+
+cli.js dispatches runtime management subcommands to `tools/{subcommand}.js`:
+
+- **`aesop doctor`** (or `node bin/cli.js doctor`) — Preflight readiness check; validates Node.js, Python, git, config, directories, hooks, and dashboard port availability.
+- **`aesop watch`** (or `node bin/cli.js watch`) — Launch the watchdog daemon; spawns `daemons/run-watchdog.sh` for continuous fleet monitoring.
+- **`aesop dash`** (or `node bin/cli.js dash`) — Launch the web dashboard; spawns `python ui/serve.py` to serve realtime fleet status at localhost:8770 (default).
+- **`aesop status`** (or `node bin/cli.js status`) — One-shot fleet status snapshot; displays heartbeats, dashboard port, and git branch status.
+
 ## What gets copied
 
-Files in `filesToCopy` array (cli.js line 209–225):
-- **Directories**: `daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`, `state_store/`, `skills/`, `mcp/`, `scan/`
+Files in `filesToCopy` array (cli.js lines 239–256):
+- **Directories**: `daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`, `state_store/`, `skills/`, `mcp/`, `scan/`, `hooks/`
 - **Files**: `aesop.config.example.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `CLAUDE-TEMPLATE.md`
 - **Brain templates** (in docs/): `MEMORY-TEMPLATE.md` (via docs/ directory copy)
 
@@ -61,7 +70,7 @@ The wizard mode provides an interactive onboarding flow for new adopters, guidin
 ## Invariants & gotchas
 
 - **Idempotent on empty targets**: Fails if `targetDir` exists and is non-empty (non-destructive). Safe to retry.
-- **Adding shipped files**: Any new file/dir added to `filesToCopy` array must also be added to `package.json` `files` array (lines 9–21 in package.json) so npm publish includes it.
+- **Adding shipped files**: Any new file/dir added to `filesToCopy` array must also be added to `package.json` `files` array (lines 9–27 in package.json) so npm publish includes it.
 - **No machine-specific paths**: Use relative paths only; `__dirname` and `path.join()` handle cross-platform resolution.
 - **Wizard prompts are async**: Main execution is wrapped in async IIFE to support readline prompts
 - **Help text accuracy**: If invocation steps or output paths change, update help text
