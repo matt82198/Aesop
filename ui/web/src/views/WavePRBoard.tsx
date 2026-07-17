@@ -99,14 +99,33 @@ export function WavePRBoard({ fetcher = fetchWavePRs }: WavePRBoardProps) {
   // Keep the latest fetcher without re-subscribing the poll interval on each render.
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
+  // Track if component is mounted to prevent setState on unmounted component
+  const isMountedRef = useRef(true);
 
   const load = useCallback(async () => {
+    // Create an AbortController for this fetch to allow cancellation on unmount
+    const abortController = new AbortController();
+
     try {
       const result = await fetcherRef.current();
+      // Check if still mounted before updating state
+      if (!isMountedRef.current) {
+        abortController.abort();
+        return;
+      }
       setData(result);
       setErrorMsg(null);
       setState('ready');
     } catch (err) {
+      // If the component was unmounted or fetch was aborted, don't setState
+      if (!isMountedRef.current) {
+        abortController.abort();
+        return;
+      }
+      // Ignore abort errors (component was unmounted)
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       setErrorMsg(err instanceof Error ? err.message : 'Failed to load PR board');
       // Preserve any previously loaded data; only flip to the error screen
       // when we have nothing to show.
@@ -115,9 +134,18 @@ export function WavePRBoard({ fetcher = fetchWavePRs }: WavePRBoardProps) {
   }, []);
 
   useEffect(() => {
+    // Mark as mounted when effect runs
+    isMountedRef.current = true;
+
     load();
     const id = setInterval(load, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
+
+    return () => {
+      // Mark as unmounted when component unmounts
+      isMountedRef.current = false;
+      // Clear the interval timer
+      clearInterval(id);
+    };
   }, [load]);
 
   const prs = data?.prs ?? [];
