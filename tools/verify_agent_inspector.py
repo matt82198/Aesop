@@ -24,6 +24,7 @@ Fails with exit 1 if playwright/chromium is unavailable (unless --allow-skip).
 """
 import argparse
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -34,6 +35,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
+
+# Generous, CI-safe waits. A cold ubuntu runner (cold chromium, cold `node`
+# spawn for dash-extra.mjs, shared CPU) is much slower than a warm dev box, so
+# every server/selector wait below is sized for the slow path, env-overridable.
+SERVER_BOOT_TRIES = int(os.environ.get("AESOP_VERIFY_BOOT_TRIES", "150"))   # *0.2s = 30s
+SERVER_BOOT_SLEEP = 0.2
+SEL_TIMEOUT_MS = int(os.environ.get("AESOP_VERIFY_SEL_TIMEOUT_MS", "30000"))
 
 # The stub agent id (also the transcript filename stem). Full id — the frontend
 # fetches /api/agent?id=<this> and the backend prefix-globs agent-<id>*.jsonl.
@@ -118,7 +126,6 @@ def build_root():
 
 
 def start_server(root: Path, port: int):
-    import os
     state_root = root / "state"
     real_state = Path.home() / "aesop" / "state"
     if state_root.resolve() == real_state.resolve():
@@ -131,12 +138,12 @@ def start_server(root: Path, port: int):
                PORT=str(port))
     server = subprocess.Popen([sys.executable, str(SERVE)], env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(50):
+    for _ in range(SERVER_BOOT_TRIES):
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
             return server
         except OSError:
-            time.sleep(0.2)
+            time.sleep(SERVER_BOOT_SLEEP)
     server.kill()
     raise RuntimeError("server never came up")
 
@@ -162,10 +169,10 @@ def run_populated(pw, failures):
     try:
         page.goto(f"http://127.0.0.1:{port}/", wait_until="domcontentloaded")
         try:
-            page.wait_for_selector("[data-testid='health-header']", timeout=15000)
+            page.wait_for_selector("[data-testid='health-header']", timeout=SEL_TIMEOUT_MS)
             page.evaluate("location.hash = '#/'")
             # Agents panel is on Overview; the Inspect trigger appears per row.
-            page.wait_for_selector("[data-testid='agent-inspect-open']", timeout=10000)
+            page.wait_for_selector("[data-testid='agent-inspect-open']", timeout=SEL_TIMEOUT_MS)
         except Exception as e:
             failures.append(f"(b) agent row / inspect trigger never mounted: {e}")
             return
@@ -173,7 +180,7 @@ def run_populated(pw, failures):
         # (b) open the drawer
         try:
             page.click("[data-testid='agent-inspect-open']")
-            page.wait_for_selector("[data-testid='agent-inspector']", timeout=8000)
+            page.wait_for_selector("[data-testid='agent-inspector']", timeout=SEL_TIMEOUT_MS)
             dialog = page.locator("[data-testid='agent-inspector']")
             assert dialog.get_attribute("role") == "dialog", "drawer is not role=dialog"
             assert dialog.get_attribute("aria-modal") == "true", "drawer not aria-modal"
@@ -183,7 +190,7 @@ def run_populated(pw, failures):
 
         # (c) transcript tail rendered (wait for the fetched detail)
         try:
-            page.wait_for_selector("[data-testid='agent-inspector-transcript']", timeout=8000)
+            page.wait_for_selector("[data-testid='agent-inspector-transcript']", timeout=SEL_TIMEOUT_MS)
             tail_text = page.inner_text("[data-testid='agent-inspector-transcript']")
             assert TAIL_MARKER in tail_text, f"tail marker missing; got: {tail_text[:200]!r}"
         except Exception as e:
@@ -223,7 +230,7 @@ def run_populated(pw, failures):
         # (g) Escape closes AND focus returns to the Inspect trigger
         try:
             page.keyboard.press("Escape")
-            page.wait_for_selector("[data-testid='agent-inspector']", state="detached", timeout=5000)
+            page.wait_for_selector("[data-testid='agent-inspector']", state="detached", timeout=10000)
             focus_on_trigger = page.evaluate(
                 "document.activeElement && document.activeElement.getAttribute('data-testid')"
                 " === 'agent-inspect-open'")
