@@ -194,13 +194,18 @@ class TestDailySemanticsMultipleDays(CostCeilingTestCase):
             "| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n"
             "|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n"
         )
-        # Day 1 (2026-07-15): 500 tokens
-        day1_line = "| 2026-07-15T10:00:00Z | build | haiku | 10 | 200 | 300 | OK | build | 26 |\n"
-        # Day 2 (2026-07-16): 600 tokens
-        day2_line1 = "| 2026-07-16T08:00:00Z | build | haiku | 10 | 150 | 250 | OK | build | 26 |\n"
-        day2_line2 = "| 2026-07-16T15:30:00Z | verify | haiku | 5 | 100 | 100 | OK | verify | 26 |\n"
-        # Day 3 (2026-07-17): 400 tokens (TODAY in the test context)
-        day3_line = "| 2026-07-17T09:15:00Z | build | haiku | 8 | 150 | 250 | OK | build | 27 |\n"
+        # Dates derive from the real clock (UTC): a hardcoded "today" rots at
+        # midnight UTC and bricked CI once (wave-rc.3).
+        from datetime import datetime, timedelta, timezone
+        today = datetime.now(timezone.utc).date()
+        d1, d2 = today - timedelta(days=2), today - timedelta(days=1)
+        # Day 1: 500 tokens
+        day1_line = f"| {d1}T10:00:00Z | build | haiku | 10 | 200 | 300 | OK | build | 26 |\n"
+        # Day 2: 600 tokens
+        day2_line1 = f"| {d2}T08:00:00Z | build | haiku | 10 | 150 | 250 | OK | build | 26 |\n"
+        day2_line2 = f"| {d2}T15:30:00Z | verify | haiku | 5 | 100 | 100 | OK | verify | 26 |\n"
+        # Day 3 (today): 400 tokens
+        day3_line = f"| {today}T09:15:00Z | build | haiku | 8 | 150 | 250 | OK | build | 27 |\n"
         lines = [header, day1_line, day2_line1, day2_line2, day3_line]
         ledger_file.write_text("".join(lines), encoding="utf-8")
         return ledger_file
@@ -208,16 +213,15 @@ class TestDailySemanticsMultipleDays(CostCeilingTestCase):
     def test_daily_filters_to_today_only(self):
         """For period='daily', verify only today's rows are summed."""
         self._write_ledger_multi_day()
-        # Today is 2026-07-17 (from MEMORY.md currentDate)
-        # Expected: only 2026-07-17 rows = 150 + 250 = 400 tokens
+        # Expected: only today's rows = 150 + 250 = 400 tokens
         result = self.cost_ceiling.check(period="daily", config={"limits": {"max_daily_tokens": 1000}})
-        self.assertEqual(result["spent"], 400, f"Expected 400 tokens for today (2026-07-17), got {result['spent']}")
+        self.assertEqual(result["spent"], 400, f"Expected 400 tokens for today, got {result['spent']}")
         self.assertFalse(result["exceeded"])
 
     def test_daily_exceeds_with_today_spend(self):
         """Verify daily ceiling trip uses today's spend only, not lifetime."""
         self._write_ledger_multi_day()
-        # Today (2026-07-17) has 400 tokens; set ceiling to 300
+        # Today has 400 tokens; set ceiling to 300
         result = self.cost_ceiling.check(period="daily", config={"limits": {"max_daily_tokens": 300}})
         self.assertTrue(result["exceeded"])
         self.assertTrue(result["tripped"])

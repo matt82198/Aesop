@@ -27,6 +27,9 @@ import type {
   TrackerSnapshot,
   WavePR,
   WavePRBoardData,
+  WaveFailureData,
+  WaveFailureJob,
+  WaveFailureRun,
 } from '../lib/types';
 
 /* ------------------------------------------------------------------ */
@@ -102,6 +105,18 @@ export const TESTIDS = {
   prBoardError: 'prboard-error',
   prBoardLoading: 'prboard-loading',
   prBoardRefresh: 'prboard-refresh',
+
+  // Failure Drill-down component
+  failureDrilldown: 'failure-drilldown',
+  failureDrilldownToggle: 'failure-drilldown-toggle',
+  failureDrilldownContent: 'failure-drilldown-content',
+  failureDrilldownLoading: 'failure-drilldown-loading',
+  failureDrilldownError: 'failure-drilldown-error',
+  failureDrilldownUnavailable: 'failure-drilldown-unavailable',
+  failureDrilldownEmpty: 'failure-drilldown-empty',
+  failureDrilldownRun: 'failure-drilldown-run',
+  failureDrilldownJob: 'failure-drilldown-job',
+  failureDrilldownLogExcerpt: 'failure-drilldown-log-excerpt',
 } as const;
 
 export type TestId = (typeof TESTIDS)[keyof typeof TESTIDS];
@@ -503,4 +518,63 @@ export const fixtureFullState: FullState = {
   tracker: fixtureTracker,
   status: fixtureStatus,
   cost: fixtureCost,
+};
+
+export const fixtureWaveFailureRun: WaveFailureRun = {
+  id: 'run-12345',
+  name: 'CI / test',
+  status: 'completed',
+  conclusion: 'failure',
+  url: 'https://github.com/matt82198/aesop/actions/runs/12345',
+};
+
+export const fixtureWaveFailureJobs: WaveFailureJob[] = [
+  {
+    id: 1001,
+    name: 'test (ubuntu)',
+    status: 'completed',
+    conclusion: 'failure',
+    url: 'https://github.com/matt82198/aesop/actions/runs/12345/job/1001',
+    log_excerpt:
+      'error: test suite failed\n' +
+      'FAILED tests/test_serve.py::test_api_state_response_shape\n' +
+      'AssertionError: expected "wave" in response\n' +
+      'Expected dict to contain "wave" key\n' +
+      'Actual keys: ["available", "error"]\n',
+  },
+  {
+    id: 1002,
+    name: 'lint (ubuntu)',
+    status: 'completed',
+    conclusion: 'success',
+    url: 'https://github.com/matt82198/aesop/actions/runs/12345/job/1002',
+    log_excerpt: null,
+  },
+];
+
+export const fixtureWaveFailureData: WaveFailureData = {
+  available: true,
+  error: null,
+  pr_number: 172,
+  branch: 'feat/wave30-ledger-failopen',
+  latest_run: fixtureWaveFailureRun,
+  jobs: fixtureWaveFailureJobs,
+};
+
+export const fixtureWaveFailureDataUnavailable: WaveFailureData = {
+  available: false,
+  error: 'GitHub CLI is not authenticated (run: gh auth login).',
+  pr_number: 172,
+  branch: '',
+  latest_run: null,
+  jobs: [],
+};
+
+export const fixtureWaveFailureDataEmpty: WaveFailureData = {
+  available: true,
+  error: null,
+  pr_number: 173,
+  branch: 'feat/wave30-pr-board',
+  latest_run: null,
+  jobs: [],
 };

@@ -271,6 +271,46 @@ export interface WavePRBoardData {
 }
 
 /**
+ * One CI job from a workflow run, with an optional log excerpt.
+ * Part of the wave failure drill-down (GET /api/wave/failure?pr=N).
+ */
+export interface WaveFailureJob {
+  id: number;
+  name: string;
+  status: 'completed' | 'in_progress' | 'queued' | string;
+  conclusion: 'success' | 'failure' | 'cancelled' | 'timed_out' | null | string;
+  url: string;
+  log_excerpt: string | null; // ~100 lines tail, null if fetch failed
+}
+
+/**
+ * One workflow run (the latest run for a PR branch).
+ * Part of the wave failure drill-down (GET /api/wave/failure?pr=N).
+ */
+export interface WaveFailureRun {
+  id: string;
+  name: string;
+  status: 'completed' | 'in_progress' | 'queued' | string;
+  conclusion: 'success' | 'failure' | 'cancelled' | 'timed_out' | null | string;
+  url: string;
+}
+
+/**
+ * GET /api/wave/failure?pr=N response.
+ * When `available` is false (gh missing / un-authenticated), `error` carries a
+ * human reason and `jobs` is empty — the drill-down renders a degraded state,
+ * not a crash.
+ */
+export interface WaveFailureData {
+  available: boolean;
+  error: string | null;
+  pr_number: number;
+  branch: string;
+  latest_run: WaveFailureRun | null;
+  jobs: WaveFailureJob[];
+}
+
+/**
  * SSE event sections emitted by GET /events.
  * Initial sections: data, backlog, agents, tracker, status
  * Added in U3: cost

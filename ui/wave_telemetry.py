@@ -4,18 +4,64 @@ Wave telemetry collector — current wave phase, cost metrics, and blockers.
 
 Reads state at CALL TIME (not import time) to ensure test isolation.
 State sources:
-  - STATE.md: current phase and wave info
+  - state/orchestrator-status.json: current phase and activity (preferred, <24h)
+  - STATE.md: current phase and wave info (fallback if status file missing/stale)
   - AUDIT-BACKLOG.md: top blocker via parse
   - state/ledger/OUTCOMES-LEDGER.md: cost data (re-uses cost.py logic)
-  - state/orchestrator-status.json: orchestrator activity
 """
 import json
 import re
 import sys
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import config
 import cost
+
+
+def _read_orchestrator_status():
+    """Read orchestrator-status.json if fresh (<24h old).
+
+    Returns:
+        tuple: (phase_str, activity_str, source_str) or (None, None, None) if missing/stale/malformed
+    """
+    try:
+        status_file = config.ORCH_STATUS_FILE
+        if not status_file.exists():
+            return None, None, None
+
+        content = status_file.read_text(encoding='utf-8')
+        data = json.loads(content)
+
+        # Extract updated_at and check freshness
+        updated_at_str = data.get("updated_at")
+        if not updated_at_str:
+            return None, None, None
+
+        # Parse ISO format timestamp (handle both "Z" and "+00:00" suffixes)
+        updated_at_str_normalized = updated_at_str.replace("Z", "+00:00")
+        try:
+            updated_at = datetime.fromisoformat(updated_at_str_normalized)
+        except ValueError:
+            return None, None, None
+
+        # Check if fresh (<24h)
+        now = datetime.now(timezone.utc)
+        age = now - updated_at
+        if age > timedelta(hours=24):
+            return None, None, None
+
+        # Extract phase and activity
+        phase = data.get("phase", "").lower()
+        activity = data.get("activity", "").lower()
+
+        if not phase:
+            return None, None, None
+
+        return phase, activity, "orchestrator-status"
+    except Exception as e:
+        print(f"[wave_telemetry] Error reading orchestrator-status.json: {e}", file=sys.stderr)
+        return None, None, None
 
 
 def _parse_state_md_phase():
@@ -173,6 +219,7 @@ def _get_wave_cost_metrics():
 def get_wave_telemetry():
     """Get consolidated wave telemetry snapshot.
 
+    Prefers state/orchestrator-status.json (if fresh <24h) over STATE.md regex parsing.
     Reads all state at call time (not import time) to ensure test isolation.
 
     Returns:
@@ -182,11 +229,26 @@ def get_wave_telemetry():
             "blocker": str,
             "tokens_used": int,
             "top_model": str,
-            "ok_rate": float
+            "ok_rate": float,
+            "source": "orchestrator-status" | "state-md"
         }
     """
     try:
-        phase_info = _parse_state_md_phase()
+        # Try orchestrator-status.json first (fresh <24h)
+        orch_phase, orch_activity, source = _read_orchestrator_status()
+
+        if orch_phase:
+            # Fresh orchestrator-status.json found; use it
+            phase_info = {
+                "wave": orch_phase.split("-")[0] if "-" in orch_phase else "wave",
+                "phase": orch_phase
+            }
+            source_field = source
+        else:
+            # Fall back to STATE.md
+            phase_info = _parse_state_md_phase()
+            source_field = "state-md"
+
         blocker = _parse_top_blocker()
         cost_metrics = _get_wave_cost_metrics()
 
@@ -196,7 +258,8 @@ def get_wave_telemetry():
             "blocker": blocker,
             "tokens_used": cost_metrics["tokens_used"],
             "top_model": cost_metrics["top_model"],
-            "ok_rate": cost_metrics["ok_rate"]
+            "ok_rate": cost_metrics["ok_rate"],
+            "source": source_field
         }
     except Exception as e:
         print(f"[wave_telemetry] Uncaught error: {e}", file=sys.stderr)
@@ -206,5 +269,6 @@ def get_wave_telemetry():
             "blocker": "error",
             "tokens_used": 0,
             "top_model": "unknown",
-            "ok_rate": 0.0
+            "ok_rate": 0.0,
+            "source": "error"
         }

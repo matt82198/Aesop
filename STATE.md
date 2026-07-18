@@ -22,7 +22,7 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `rc-1-published-source-available` (2026-07-17, current)
+## Phase: `wave-rc.3` (2026-07-17, current)
 **0.1.0 STABLE promoted to npm `@latest` 2026-07-17** (PR #187, main `ce8b21f`) — from
 `0.1.0-rc.1` (npm trusted publishing via OIDC). Waves 25–rc.1 shipped the **credibility, safety,
 and release-readiness** pillars; relicensed PolyForm Strict 1.0.0 (SOURCE-AVAILABLE).

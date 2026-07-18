@@ -19,6 +19,7 @@ import { fetchWavePRs } from '../lib/api';
 import { formatTimestamp } from '../lib/format';
 import { sanitizeUrl } from '../lib/sanitizeUrl';
 import { TESTIDS } from '../test/fixtures';
+import { FailureDrilldown } from '../components/FailureDrilldown';
 import './WavePRBoard.css';
 
 const POLL_INTERVAL_MS = 15000;
@@ -50,8 +51,12 @@ function PRRow({ pr }: { pr: WavePR }) {
   const merge = mergeableDisplay(pr.mergeable);
   const href = pr.has_pr ? sanitizeUrl(pr.url) : null;
   const age = pr.created_at ? formatTimestamp(pr.created_at) : '—';
+  // Failing PRs get an expandable drill-down (PR → CI jobs → failed step → log excerpt).
+  const [expanded, setExpanded] = useState(false);
+  const canDrill = pr.ci === 'failing' && pr.has_pr && pr.number != null;
 
   return (
+    <>
     <tr data-testid={TESTIDS.prBoardRow}>
       <td className="prboard-num">
         {pr.number != null ? `#${pr.number}` : <span className="prboard-branch-tag">branch</span>}
@@ -76,6 +81,16 @@ function PRRow({ pr }: { pr: WavePR }) {
           </span>
           <span>{ci.label}</span>
         </span>
+        {canDrill && (
+          <button
+            type="button"
+            className="prboard-refresh"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? 'Hide details' : 'Details'}
+          </button>
+        )}
       </td>
       <td className="prboard-mergecol">
         <span className={merge.cls}>{merge.label}</span>
@@ -89,6 +104,14 @@ function PRRow({ pr }: { pr: WavePR }) {
         )}
       </td>
     </tr>
+    {canDrill && expanded && (
+      <tr>
+        <td colSpan={7}>
+          <FailureDrilldown prNumber={pr.number as number} />
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 

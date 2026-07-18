@@ -66,6 +66,26 @@ FIXTURE_LEDGER = """| timestamp | agent_type | model | duration | tokens_in | to
 | 2026-07-17T10:10:00 | Agent | claude-sonnet-4-5 | 15 | 800 | 600 | FAILED |
 """
 
+# Fixture orchestrator-status.json (fresh, <24h)
+FIXTURE_ORCH_STATUS_FRESH = """{
+  "id": "main",
+  "role": "orchestrator",
+  "parent_id": null,
+  "activity": "dispatching wave-rc.3",
+  "phase": "wave-rc.3: dispatch",
+  "updated_at": "2026-07-17T10:00:00Z"
+}"""
+
+# Fixture orchestrator-status.json (stale, >24h)
+FIXTURE_ORCH_STATUS_STALE = """{
+  "id": "main",
+  "role": "orchestrator",
+  "parent_id": null,
+  "activity": "old activity",
+  "phase": "wave-rc.2",
+  "updated_at": "2026-07-16T09:00:00Z"
+}"""
+
 
 def load_serve(fixture_root, extra_env=None):
     """Import a fresh serve module instance bound to a fixture AESOP_ROOT."""
@@ -266,6 +286,98 @@ class MissingFiles(WaveTelemetryFixtureCase):
 
         # Should have zero tokens, not error
         self.assertEqual(body["tokens_used"], 0)
+
+
+class OrchestratorStatusSource(WaveTelemetryFixtureCase):
+    """Wave telemetry source selection: orchestrator-status.json vs STATE.md."""
+
+    def test_wave_telemetry_fresh_orchestrator_status_wins(self):
+        """Fresh orchestrator-status.json (<24h) is preferred over STATE.md."""
+        # Write fresh orchestrator status
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            FIXTURE_ORCH_STATUS_FRESH, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should extract phase from orchestrator-status.json
+        self.assertIn("rc.3", body["phase"].lower())
+        # Should indicate source
+        self.assertEqual(body["source"], "orchestrator-status")
+
+    def test_wave_telemetry_stale_orchestrator_status_falls_back(self):
+        """Stale orchestrator-status.json (>24h) falls back to STATE.md."""
+        # Write stale orchestrator status
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            FIXTURE_ORCH_STATUS_STALE, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should fall back to STATE.md phase
+        self.assertTrue(
+            "rc.2" in body["phase"].lower() or "wave" in body["phase"].lower(),
+            f"Phase should contain 'rc.2' or 'wave': {body['phase']}"
+        )
+        # Should indicate fallback source
+        self.assertEqual(body["source"], "state-md")
+
+    def test_wave_telemetry_missing_orchestrator_status_falls_back(self):
+        """Missing orchestrator-status.json falls back to STATE.md."""
+        # Don't create orchestrator-status.json
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should fall back to STATE.md phase
+        self.assertTrue(
+            "rc.2" in body["phase"].lower() or "wave" in body["phase"].lower(),
+            f"Phase should contain 'rc.2' or 'wave': {body['phase']}"
+        )
+        # Should indicate fallback source
+        self.assertEqual(body["source"], "state-md")
+
+    def test_wave_telemetry_malformed_orchestrator_status_degrades(self):
+        """Malformed orchestrator-status.json degrades gracefully."""
+        # Write malformed JSON
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            "{invalid json", encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should fall back to STATE.md
+        self.assertTrue(
+            "rc.2" in body["phase"].lower() or "wave" in body["phase"].lower(),
+            f"Phase should contain 'rc.2' or 'wave': {body['phase']}"
+        )
+        self.assertEqual(body["source"], "state-md")
+
+    def test_wave_telemetry_orchestrator_status_missing_updated_at(self):
+        """Orchestrator status without updated_at field degrades gracefully."""
+        # Write orchestrator status without updated_at
+        bad_status = """{
+  "id": "main",
+  "role": "orchestrator",
+  "activity": "test",
+  "phase": "wave-test"
+}"""
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            bad_status, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should fall back to STATE.md
+        self.assertEqual(body["source"], "state-md")
+
+    def test_wave_telemetry_source_field_always_present(self):
+        """Source field is always present in the response."""
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Source field should be present and valid
+        self.assertIn("source", body)
+        self.assertIn(body["source"], ["orchestrator-status", "state-md", "error"])
 
 
 if __name__ == "__main__":
