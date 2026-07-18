@@ -209,6 +209,9 @@ def get_cost_summary():
         result["error"] = "ledger format invalid"
         return result
 
+    # Track ledger entries for per-week-per-model calculation
+    ledger_entries = []
+
     # Parse each line
     for line in lines:
         line = line.strip()
@@ -283,6 +286,16 @@ def get_cost_summary():
             result["skipped_lines"] += 1
             continue
 
+        # Store ledger entry for per-week calculation
+        ledger_entries.append({
+            "timestamp": timestamp,
+            "date_str": date_str,
+            "model": model,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "verdict": verdict
+        })
+
         # Aggregate by model
         if model not in result["models"]:
             result["models"][model] = {
@@ -345,18 +358,23 @@ def get_cost_summary():
                 }
 
     # Calculate per-week costs and model mix trend
-    _calculate_weekly_costs(result, pricing_map)
+    _calculate_weekly_costs(result, pricing_map, ledger_entries)
     _calculate_verdict_weighted_cost(result, pricing_map)
     _calculate_model_mix_trend(result)
 
     return result
 
 
-def _calculate_weekly_costs(result, pricing_map):
-    """Calculate per-week cost rollup from daily totals.
+def _calculate_weekly_costs(result, pricing_map, ledger_entries):
+    """Calculate per-week cost rollup from ledger entries.
 
-    Groups daily_totals by ISO week (YYYY-Www format) and aggregates
-    tokens and model distribution. If pricing is available, includes cost estimates.
+    Groups ledger entries by ISO week (YYYY-Www format) and aggregates
+    per-model tokens for each week. If pricing is available, includes cost estimates.
+
+    BUG FIX: This function now uses EACH WEEK'S OWN per-model token counts
+    from the ledger, not the global model distribution. This prevents inflating
+    each week's cost by applying global model mix that may not be accurate
+    for that particular week.
 
     Modifies result["per_week_costs"] in-place with structure:
     {
@@ -368,17 +386,17 @@ def _calculate_weekly_costs(result, pricing_map):
         }
     }
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
-    if not result["daily_totals"]:
+    if not ledger_entries:
         return
 
-    # Group by ISO week
+    # Group ledger entries by ISO week and aggregate per-model within each week
     weeks = {}
-    for date_str, daily in result["daily_totals"].items():
+    for entry in ledger_entries:
         try:
-            # Parse YYYY-MM-DD
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            # Parse YYYY-MM-DD to ISO week
+            dt = datetime.strptime(entry["date_str"], "%Y-%m-%d")
             iso_year, iso_week, _ = dt.isocalendar()
             week_key = f"{iso_year}-W{iso_week:02d}"
 
@@ -390,22 +408,21 @@ def _calculate_weekly_costs(result, pricing_map):
                     "cost": 0.0
                 }
 
-            weeks[week_key]["tokens_in"] += daily["tokens_in"]
-            weeks[week_key]["tokens_out"] += daily["tokens_out"]
-        except (ValueError, AttributeError):
-            # Ignore invalid dates
+            # Aggregate this entry's tokens into the week
+            weeks[week_key]["tokens_in"] += entry["tokens_in"]
+            weeks[week_key]["tokens_out"] += entry["tokens_out"]
+
+            # Track per-model tokens within this week
+            model = entry["model"]
+            if model not in weeks[week_key]["model_tokens"]:
+                weeks[week_key]["model_tokens"][model] = 0
+            weeks[week_key]["model_tokens"][model] += entry["tokens_in"] + entry["tokens_out"]
+
+        except (ValueError, KeyError):
+            # Ignore entries with invalid dates or missing fields
             continue
 
-    # Populate model distribution per week by looking at models active in that week
-    # For a more accurate model_mix per week, we'd need to track model-per-day, which isn't in daily_totals
-    # For now, we'll use the overall model distribution as a proxy
-    if result["models"]:
-        for week_key in weeks:
-            for model, stats in result["models"].items():
-                if stats["runs"] > 0:
-                    weeks[week_key]["model_tokens"][model] = stats["tokens_out"] + stats["tokens_in"]
-
-    # If pricing available, calculate cost per week
+    # If pricing available, calculate cost per week based on THAT WEEK'S model mix
     if pricing_map:
         for week_key, week_data in weeks.items():
             total_cost = 0.0
@@ -414,10 +431,21 @@ def _calculate_weekly_costs(result, pricing_map):
                     pricing = pricing_map[model]
                     input_price = pricing.get("input_per_mtok", 0.0)
                     output_price = pricing.get("output_per_mtok", 0.0)
-                    # Rough estimate: assume 1:2 input:output ratio for cost calculation
-                    tokens_in_estimate = total_tokens * 0.333
-                    tokens_out_estimate = total_tokens * 0.667
-                    model_cost = (tokens_in_estimate * input_price + tokens_out_estimate * output_price) / 1_000_000
+                    # Use the week's actual input/output split
+                    # Find entries for this model in this week and calculate actual ratio
+                    model_entries_in_week = [e for e in ledger_entries
+                                             if e["model"] == model and
+                                             (datetime.strptime(e["date_str"], "%Y-%m-%d").isocalendar()[:2] ==
+                                              (int(week_key.split('-')[0]), int(week_key.split('-W')[1])))]
+                    if model_entries_in_week:
+                        week_model_tokens_in = sum(e["tokens_in"] for e in model_entries_in_week)
+                        week_model_tokens_out = sum(e["tokens_out"] for e in model_entries_in_week)
+                        model_cost = (week_model_tokens_in * input_price + week_model_tokens_out * output_price) / 1_000_000
+                    else:
+                        # Fallback: if we can't find the entries, use 1:2 ratio estimate
+                        tokens_in_estimate = total_tokens * 0.333
+                        tokens_out_estimate = total_tokens * 0.667
+                        model_cost = (tokens_in_estimate * input_price + tokens_out_estimate * output_price) / 1_000_000
                     total_cost += model_cost
             week_data["cost"] = total_cost
 
