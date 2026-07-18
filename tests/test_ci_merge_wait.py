@@ -72,20 +72,20 @@ class TestCiMergeWait(unittest.TestCase):
                 # Can't easily patch subprocess inside a subprocess, so test exit behavior
                 self.assertNotEqual(result.returncode, 0)
 
-    def test_check_ci_status_function_checkrun_completed_success(self):
-        """Test check_ci_status with real CheckRun: COMPLETED + success conclusion."""
+    def test_check_ci_status_function_checkrun_completed_null_conclusion(self):
+        """Test check_ci_status with real CheckRun: COMPLETED + null conclusion (fail-closed)."""
         import importlib.util
         spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        # Real CheckRun payload with COMPLETED status and null/empty conclusion = success
-        checkrun_success = [
+        # Real CheckRun payload with COMPLETED status and null/empty conclusion = fail-closed to PENDING
+        checkrun_null = [
             {"name": "test-unit", "status": "COMPLETED", "conclusion": None},
             {"name": "lint", "status": "COMPLETED", "conclusion": ""},
         ]
-        result = module.check_ci_status(checkrun_success)
-        self.assertEqual(result[0], "success", "COMPLETED + no/empty conclusion should be success")
+        result = module.check_ci_status(checkrun_null)
+        self.assertEqual(result[0], "pending", "COMPLETED + null/empty conclusion should fail-closed to PENDING")
 
     def test_check_ci_status_function_checkrun_completed_failure(self):
         """Test check_ci_status with real CheckRun: COMPLETED + failure conclusion."""
@@ -154,6 +154,23 @@ class TestCiMergeWait(unittest.TestCase):
         ]
         result = module.check_ci_status(checkrun)
         self.assertEqual(result[0], "failure", "COMPLETED + STARTUP_FAILURE should be failure")
+
+    def test_check_ci_status_function_checkrun_completed_stale(self):
+        """Test check_ci_status with real CheckRun: COMPLETED + STALE conclusion (P1 bug fix).
+
+        STALE is a real GitHub CheckRun conclusion that means the check was invalidated by a
+        force-push or branch update. It must block merge just like FAILURE.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        checkrun = [
+            {"name": "test", "status": "COMPLETED", "conclusion": "STALE"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "failure", "COMPLETED + STALE should be failure (invalidated check blocks merge)")
 
     def test_check_ci_status_function_checkrun_in_progress(self):
         """Test check_ci_status with real CheckRun: IN_PROGRESS should be pending."""
@@ -232,7 +249,7 @@ class TestCiMergeWait(unittest.TestCase):
 
         # Real mixed payload from gh pr view
         mixed = [
-            {"name": "test-unit", "status": "COMPLETED", "conclusion": None},  # CheckRun: success
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": "SUCCESS"},  # CheckRun: success
             {"name": "travis-ci", "state": "success"},  # StatusContext: success
             {"name": "lint", "status": "IN_PROGRESS", "conclusion": None},  # CheckRun: pending
         ]
@@ -247,7 +264,7 @@ class TestCiMergeWait(unittest.TestCase):
         spec.loader.exec_module(module)
 
         mixed = [
-            {"name": "test-unit", "status": "COMPLETED", "conclusion": None},  # CheckRun: success
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": "SUCCESS"},  # CheckRun: success
             {"name": "travis-ci", "state": "failure"},  # StatusContext: failure
         ]
         result = module.check_ci_status(mixed)
@@ -352,6 +369,20 @@ class TestCiMergeWait(unittest.TestCase):
         # Verify no error about missing PR
         self.assertNotIn("required", result.stderr.lower())
 
+    def test_check_ci_status_function_checkrun_completed_success(self):
+        """Test check_ci_status with CheckRun: COMPLETED + explicit SUCCESS conclusion."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # CheckRun with explicit SUCCESS conclusion should be success
+        checkrun = [
+            {"name": "test-suite", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        ]
+        result = module.check_ci_status(checkrun)
+        self.assertEqual(result[0], "success", "COMPLETED + SUCCESS should be success")
+
     def test_check_ci_status_function_checkrun_completed_neutral(self):
         """Test check_ci_status with CheckRun: COMPLETED + NEUTRAL conclusion should be success."""
         import importlib.util
@@ -432,7 +463,7 @@ class TestCiMergeWait(unittest.TestCase):
 
         # Mix of required, neutral, and skipped checks - should all be success
         mixed = [
-            {"name": "test-unit", "status": "COMPLETED", "conclusion": None},  # Regular success
+            {"name": "test-unit", "status": "COMPLETED", "conclusion": "SUCCESS"},  # Regular success
             {"name": "advisory-lint", "status": "COMPLETED", "conclusion": "NEUTRAL"},  # Advisory
             {"name": "optional-scan", "status": "COMPLETED", "conclusion": "SKIPPED"},  # Skipped
             {"name": "travis-ci", "state": "success"},  # StatusContext success
@@ -471,9 +502,9 @@ class TestCiMergeWait(unittest.TestCase):
 
         # All expected checks present and successful
         rollup = [
-            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
-            {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},
-            {"name": "lint", "status": "COMPLETED", "conclusion": None},
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS"},
         ]
         ci_status, _ = module.check_ci_status(
             rollup,
@@ -490,8 +521,8 @@ class TestCiMergeWait(unittest.TestCase):
 
         # Missing expected check (e.g., new run hasn't registered yet)
         rollup = [
-            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
-            {"name": "lint", "status": "COMPLETED", "conclusion": None},
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS"},
         ]
         ci_status, _ = module.check_ci_status(
             rollup,
@@ -509,7 +540,7 @@ class TestCiMergeWait(unittest.TestCase):
         # One expected check failed
         rollup = [
             {"name": "unit-tests", "status": "COMPLETED", "conclusion": "FAILURE"},
-            {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
         ]
         ci_status, failed_check = module.check_ci_status(
             rollup,
@@ -527,7 +558,7 @@ class TestCiMergeWait(unittest.TestCase):
 
         # One expected check still in progress
         rollup = [
-            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
             {"name": "integration-tests", "status": "IN_PROGRESS", "conclusion": None},
         ]
         ci_status, _ = module.check_ci_status(
@@ -550,8 +581,8 @@ class TestCiMergeWait(unittest.TestCase):
 
         # Expected checks all pass, but a non-expected check failed
         rollup = [
-            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},  # expected, success
-            {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},  # expected, success
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},  # expected, success
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},  # expected, success
             {"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"},  # non-expected, FAILURE
         ]
         ci_status, failed_check = module.check_ci_status(
@@ -571,8 +602,8 @@ class TestCiMergeWait(unittest.TestCase):
 
         # Expected checks all pass, non-expected check is still pending (should be OK)
         rollup = [
-            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},  # expected, success
-            {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},  # expected, success
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},  # expected, success
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},  # expected, success
             {"name": "optional-scan", "status": "IN_PROGRESS", "conclusion": None},  # non-expected, pending
         ]
         ci_status, _ = module.check_ci_status(
@@ -591,8 +622,8 @@ class TestCiMergeWait(unittest.TestCase):
 
         # Phase 1: Old run completed successfully
         old_run = [
-            {"name": "build", "status": "COMPLETED", "conclusion": None},
-            {"name": "test", "status": "COMPLETED", "conclusion": None},
+            {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"},
         ]
         ci_status, _ = module.check_ci_status(old_run)
         self.assertEqual(ci_status, "success", "Old run should be SUCCESS")
@@ -613,8 +644,8 @@ class TestCiMergeWait(unittest.TestCase):
 
         # Phase 4: New run completes
         new_run_complete = [
-            {"name": "build", "status": "COMPLETED", "conclusion": None},
-            {"name": "test", "status": "COMPLETED", "conclusion": None},
+            {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"},
         ]
         ci_status, _ = module.check_ci_status(new_run_complete)
         self.assertEqual(ci_status, "success", "New run completed should be SUCCESS")
