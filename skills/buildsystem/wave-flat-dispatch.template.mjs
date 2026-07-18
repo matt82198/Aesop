@@ -44,6 +44,10 @@
 //              // Absent => unchanged behavior (backward-compatible).
 //   postBuild:  { cmd: string, afterItems: [string] } | null  // optional: run cmd (via agent) as soon as
 //                                                               // all named items pass self-check (pipeline semantics)
+//   agentTimeboxNote: number | null  // optional: per-agent wall-clock budget in minutes (latency fix #2)
+//                                     // when set: adds hard timebox line to Build/SelfCheck/Repair prompts,
+//                                     // caps repair rounds to top 3 worst failing items (rest deferred).
+//                                     // when absent: no timebox line, no cap (backward-compatible).
 // }
 // Returns: { preflight, build, integration:{green,passed,failed}, repairsUsed,
 //            tokens:{buildOut,verifyOut,repairOut,totalOut}, mergeReady:boolean, aborted, reason }
@@ -70,6 +74,12 @@ const ITEMS = Array.isArray(A.items) ? A.items : []
 const CAP = typeof A.repairCap === 'number' ? A.repairCap : 1
 const HINT = A.contractHint || `Read the shared contract/spec files in ${WORK} before implementing.`
 const CEILING = A.ceiling ? { tokens: A.ceiling.tokens, recheckBrake: A.ceiling.recheckBrake } : null
+const TIMEBOX_MINUTES = typeof A.agentTimeboxNote === 'number' ? A.agentTimeboxNote : null
+// Helper to build timebox line for agent prompts (latency fix #2).
+function timeboxLine() {
+  if (!TIMEBOX_MINUTES) return ''
+  return `\nTIMEBOX: if your remaining work exceeds ~${TIMEBOX_MINUTES} minutes of effort, STOP and report exactly what is done + what remains in your note — an incomplete honest report beats grinding.`
+}
 
 const DONE = {
   type: 'object', additionalProperties: false,
@@ -203,16 +213,14 @@ if (A.setup && A.setup.prompt) {
 // ---------------- Build (flat Haiku fan-out) ----------------
 phase('Build')
 const buildStart = budget.spent()
-const built = await parallel(ITEMS.map((it) => () =>
-  agent(
-    `FLAT ONE-TURN-WAVE worker for item "${it.slug}". Working dir: ${WORK}. ${HINT}\n` +
+const built = await parallel(ITEMS.map((it) => () => {
+  const buildPrompt = `FLAT ONE-TURN-WAVE worker for item "${it.slug}". Working dir: ${WORK}. ${HINT}\n` +
     `You OWN and may write ONLY these files: ${(it.ownsFiles || []).join(', ')}. Do NOT create or edit any other file (strict ownership — another worker owns the rest, in parallel).\n` +
     `IMPORTANT: All file writes MUST use absolute paths under ${WORK}.\n` +
     `TASK:\n${it.prompt}\n` +
-    `Use the Write tool. Run any quick local self-check you can, but the integration suite is run centrally, not by you. Report which files you wrote.`,
-    { label: `build:${it.slug}`, phase: 'Build', model: 'haiku', schema: DONE }
-  )
-))
+    `Use the Write tool. Run any quick local self-check you can, but the integration suite is run centrally, not by you. Report which files you wrote.${timeboxLine()}`
+  return agent(buildPrompt, { label: `build:${it.slug}`, phase: 'Build', model: 'haiku', schema: DONE })
+}))
 const buildOut = budget.spent() - buildStart
 log(`Build done: ${built.filter(Boolean).length}/${ITEMS.length} workers reported.`)
 
@@ -243,18 +251,16 @@ const selfCheckAgents = ITEMS
   .filter(it => it.selfCheckCmd)
   .map((it) => () => {
     const checkDir = it.workDir || WORK
-    return agent(
-      `SELF-CHECK after Build for item "${it.slug}". Working dir: ${checkDir}.\n` +
+    const selfCheckPrompt = `SELF-CHECK after Build for item "${it.slug}". Working dir: ${checkDir}.\n` +
       `Run this command: ${it.selfCheckCmd}\n` +
       `ALSO validate file existence: for each file listed in the item's build report, run \`ls -L\` to confirm it exists under ${WORK}.\n` +
       `Exit code: 0 = pass, non-0 = fail. Derive the result from EXIT CODE only (ignore the tail output below).\n` +
-      `Report: passed=true if the command AND file-existence checks both exit 0; passed=false and a reason otherwise.`,
-      { label: `selfcheck:${it.slug}`, phase: 'Self-Check', model: 'haiku', effort: 'low', schema: {
-        type: 'object', additionalProperties: false,
-        properties: { passed: { type: 'boolean' }, reason: { type: 'string' } },
-        required: ['passed', 'reason'],
-      } }
-    )
+      `Report: passed=true if the command AND file-existence checks both exit 0; passed=false and a reason otherwise.${timeboxLine()}`
+    return agent(selfCheckPrompt, { label: `selfcheck:${it.slug}`, phase: 'Self-Check', model: 'haiku', effort: 'low', schema: {
+      type: 'object', additionalProperties: false,
+      properties: { passed: { type: 'boolean' }, reason: { type: 'string' } },
+      required: ['passed', 'reason'],
+    } })
   })
 
 if (selfCheckAgents.length > 0) {
@@ -418,17 +424,41 @@ while (v && !v.green && round < CAP) {
   // Include both integration-failing items AND self-check-failing items in repair targets.
   const failingSlugs = (v.failingItems || []).filter(s => ITEMS.some(i => i.slug === s))
   const allFailingItems = Array.from(new Set([...failingSlugs, ...selfCheckFailed]))
-  const targets = allFailingItems.length ? ITEMS.filter(i => allFailingItems.includes(i.slug)) : ITEMS
+  let targets = allFailingItems.length ? ITEMS.filter(i => allFailingItems.includes(i.slug)) : ITEMS
+
+  // FIX 2: Cap repair targets to top 3 worst failing items when timebox is set (latency fix #2).
+  // Rest are deferred to the orchestrator tail (logged but not in this round).
+  const deferredItems = []
+  if (TIMEBOX_MINUTES && targets.length > 3) {
+    deferredItems.push(...targets.slice(3))
+    targets = targets.slice(0, 3)
+    log(`Repair round ${round} capped at 3 items (timebox); deferred: ${deferredItems.map(t => t.slug).join(', ')}`)
+  }
+
   log(`Integration red (${v.failed} failed) — repair round ${round}/${CAP} on: ${targets.map(t => t.slug).join(', ')}`)
   repairsUsed = targets.length
   const rStart = budget.spent()
-  await parallel(targets.map((it) => () =>
-    agent(
-      `ONE-TURN-WAVE repair for item "${it.slug}". Working dir: ${WORK}. The integration suite failed: ${v.detail}\n` +
-      `You own: ${(it.ownsFiles || []).join(', ')}. You MAY now read sibling files and the full contract/specs to reconcile drift, but still edit ONLY your owned files. Fix them with Edit/Write. Report.`,
-      { label: `repair:${it.slug}`, phase: 'Repair', model: 'haiku', schema: DONE }
-    )
-  ))
+  await parallel(targets.map((it) => () => {
+    // FIX 1: Build targeted test command for this item only (latency fix #1).
+    // The verify result's failingItems tells us which items have failing tests.
+    // Construct a prompt that directs repair workers to run ONLY tests for their owned files,
+    // run commands ONCE to a file, never re-run to grep, and never run full union suites.
+    const itemFiles = (it.ownsFiles || []).map(f => `  ${f}`).join('\n')
+    const repairPrompt = `ONE-TURN-WAVE repair for item "${it.slug}". Working dir: ${WORK}. The integration suite failed: ${v.detail}\n` +
+      `\n** TARGETED TEST DISCIPLINE (latency fix #1): **\n` +
+      `You own these files (run tests ONLY for these, never the full union suite):\n${itemFiles}\n` +
+      `\nTo run tests for ONLY your files:\n` +
+      `  - Identify which test files/tests exercise your owned files (from the integration failure details).\n` +
+      `  - Run ONLY those specific tests, e.g., 'pytest test_foo.py::test_bar' or 'python -m unittest tests.test_module.TestClass.test_method'.\n` +
+      `  - Do NOT run the full 'npm test' / 'python -m unittest discover' / 'pytest' suite yourself.\n` +
+      `\n** RUN-ONCE-TO-FILE (latency fix #1): **\n` +
+      `When running a command that produces verbose output:\n` +
+      `  1. Run it ONCE with full timeout (>= 5 minutes): cmd > /tmp/repair-output.log 2>&1; echo "exit=$?" >> /tmp/repair-output.log\n` +
+      `  2. Read the file to see results (tail, grep, etc) — never re-run the suite to see another slice.\n` +
+      `  3. Fix based on that ONE output; multiple runs of the same suite burn wall-clock minutes.\n` +
+      `\nYou MAY now read sibling files and the full contract/specs to reconcile drift, but still edit ONLY your owned files. Fix them with Edit/Write. Report.${timeboxLine()}`
+    return agent(repairPrompt, { label: `repair:${it.slug}`, phase: 'Repair', model: 'haiku', schema: DONE })
+  }))
   const rEnd = budget.spent()
   repairOut += rEnd - rStart
   v = await verify(`repair-${round}`, 'Repair')

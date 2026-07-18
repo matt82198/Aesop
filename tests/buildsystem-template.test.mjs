@@ -104,3 +104,62 @@ test('existing backward compatibility: single testCmd still works', () => {
   assert.ok(src.includes('testCmd:'), 'single testCmd support removed');
   assert.ok(src.includes('verify('), 'verify function still exists');
 });
+
+// ============================================================================
+// FIX 1: Repair prompt with targeted-tests + run-once-to-file directives
+// ============================================================================
+test('FIX 1: repair prompt contains targeted-tests directive (latency fix #1)', () => {
+  assert.ok(src.includes('TARGETED TEST DISCIPLINE'), 'TARGETED TEST DISCIPLINE directive missing');
+  assert.ok(src.includes('You own these files'), 'owned files listing missing from repair prompt');
+  assert.ok(src.includes('Identify which test files/tests exercise your owned files'), 'targeted tests identification missing');
+  assert.ok(src.includes('never the full union suite'), 'full suite prohibition missing');
+});
+
+test('FIX 1: repair prompt contains run-once-to-file directive (latency fix #1)', () => {
+  assert.ok(src.includes('RUN-ONCE-TO-FILE'), 'RUN-ONCE-TO-FILE directive missing');
+  assert.ok(src.includes('/tmp/repair-output.log'), 'output file name missing');
+  assert.ok(src.includes('never re-run the suite'), 'no-rerun guidance missing');
+  assert.ok(src.includes('Read the file to see results'), 'read file instead of rerun missing');
+});
+
+// ============================================================================
+// FIX 2: Per-agent timebox support
+// ============================================================================
+test('FIX 2: agentTimeboxNote parameter documented (latency fix #2)', () => {
+  assert.ok(src.includes('agentTimeboxNote'), 'agentTimeboxNote parameter missing from args docs');
+  assert.ok(src.includes('wall-clock budget'), 'timebox description missing');
+  assert.ok(src.includes('backward-compatible'), 'backward compatibility note missing');
+});
+
+test('FIX 2: timeboxLine() helper function defined (latency fix #2)', () => {
+  assert.ok(src.includes('function timeboxLine()'), 'timeboxLine() helper missing');
+  assert.ok(src.includes('TIMEBOX_MINUTES'), 'TIMEBOX_MINUTES constant missing');
+  assert.ok(src.includes('remaining work exceeds'), 'timebox guidance text missing');
+});
+
+test('FIX 2: Build phase includes timebox line when agentTimeboxNote set (latency fix #2)', () => {
+  const buildSection = src.substring(src.indexOf("phase('Build')"), src.indexOf("phase('Self-Check')"));
+  assert.ok(buildSection.includes('timeboxLine()'), 'timeboxLine() call missing from Build phase');
+});
+
+test('FIX 2: SelfCheck phase includes timebox line when agentTimeboxNote set (latency fix #2)', () => {
+  const selfCheckSection = src.substring(src.indexOf("const selfCheckPrompt"), src.indexOf("phase('Integrate')"));
+  assert.ok(selfCheckSection.includes('timeboxLine()'), 'timeboxLine() call missing from SelfCheck phase');
+});
+
+test('FIX 2: Repair phase includes timebox line when agentTimeboxNote set (latency fix #2)', () => {
+  const repairSection = src.substring(src.indexOf("const repairPrompt"), src.indexOf("return agent(repairPrompt"));
+  assert.ok(repairSection.includes('timeboxLine()'), 'timeboxLine() call missing from Repair phase');
+});
+
+test('FIX 2: Repair targets capped at 3 items when timebox is set (latency fix #2)', () => {
+  assert.ok(src.includes('TIMEBOX_MINUTES && targets.length > 3'), 'timebox-conditional cap missing');
+  assert.ok(src.includes('targets = targets.slice(0, 3)'), 'top-3 slice missing');
+  assert.ok(src.includes('deferredItems.push'), 'deferred items tracking missing');
+  assert.ok(src.includes('repair round'), 'repair round capping message missing');
+});
+
+test('FIX 2: timebox line only added when agentTimeboxNote is set (backward compat)', () => {
+  assert.ok(src.includes('if (!TIMEBOX_MINUTES) return'), 'conditional return for absent timebox missing');
+  assert.ok(src.includes('return `\\n'), 'conditional newline prefix missing');
+});
