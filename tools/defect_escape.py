@@ -39,7 +39,7 @@ def run_git(args, repo_path, check=True):
         result = subprocess.run(
             ["git", "-C", str(repo_path)] + args,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=check,
         )
         return result.stdout
