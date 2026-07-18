@@ -1,58 +1,54 @@
-# state_store/ — event-sourced state layer (DB source of truth, git as export)
+# state_store/ — event-sourced state layer (SQLite WAL, projections, git-as-export)
 
-**Purpose**: the durable substrate to move aesop's coordination/state off git —
-which cannot scale to a team (single-writer control files, hot-file merge
-conflicts, no transactions/concurrency/real-time). State becomes an append-only
-event log with per-stream versioning; current state is a projection; git is
-demoted to a rendered, diffable **export**.
+## Universal rules (every domain)
+- Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
+- Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
+- In worktrees use ABSOLUTE paths under the worktree for every write.
+- Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
-**Status (2026-07-14)**: additive prototype. The live `ui/` tracker path
-(`collectors.py` → `state/tracker.json`) is UNCHANGED. This package ships the
-store + tracker projection + backfill + export, ready for a later dual-read
-cutover. Full architecture & migration design: `docs/TEAM-STATE.md`.
+## Purpose & Status
+Durable substrate moving aesop's coordination/state off git (which cannot scale to a team due to single-writer control files, hot-file merge conflicts, no transactions/concurrency). State becomes an append-only event log with per-stream versioning; current state is a projection; git is demoted to a rendered, diffable **export**. Status (2026-07-14): additive prototype. The live `ui/` tracker path is UNCHANGED. Full architecture & migration design: `docs/TEAM-STATE.md`.
 
-## Files (stdlib only — sqlite3/json/threading/time)
-- **store.py** — `EventStore(db_path)`: append-only SQLite (WAL) log.
-  Concurrency-safe across threads and processes via `busy_timeout` +
-  `BEGIN IMMEDIATE` (atomic read-max-version-then-insert). `append/read/read_all`.
-- **projections.py** — `project_tracker(events)`: folds `item_created` /
-  `item_updated` / `item_archived` into the full `tracker.json` shape,
-  preserving first-seen order.
-- **api.py** — `StateAPI(db_path)`: the swap seam (`append`/`get`/`project`).
-  Backend swaps SQLite→Postgres here without touching callers.
-- **export.py** — `export_tracker(api, out_path)`: render the projection back to
-  a git-tracked JSON snapshot (indent=2, ascii-escaped to match the live file).
-- **ingest.py** — `ingest_tracker_json(api, path)`: backfill one `item_created`
-  per existing item (the migration/backfill path).
+## API Surface (state_store.api.StateAPI)
+**Facade over EventStore + projections; swap backend (SQLite→Postgres) here without touching callers.**
+- `append(stream, event_type, payload, actor="system") → int`: Append one event; return its new per-stream version.
+- `get(stream) → list`: Return all events in ``stream`` ascending by version.
+- `project(view) → dict`: Fold the same-named stream through its projector into current state. Registered views: "tracker" (via `project_tracker`).
+
+## Concurrency Model & Measured Safety
+**Multi-writer safe via SQLite WAL + atomicity:**
+- `PRAGMA journal_mode=WAL` — many readers; serialized writers via write lock.
+- `PRAGMA busy_timeout=5000` — retry for 5s on contention before erroring.
+- `BEGIN IMMEDIATE` in `append()` — atomic read-max-version-then-insert; two writers never collide or duplicate a version.
+- **Measured safety (2026-07-18 spike):** 4 concurrent writers, 800 events each (800/800), 0 lock errors, ~704 events/sec throughput.
+
+## Module Layout
+- **store.py** — `EventStore(db_path)`: append-only SQLite log. `append(stream, type, payload, actor)` returns new version; `read(stream)` / `read_all()` return event rows. Corrupt JSON payloads are skipped with stderr log; snapshot read/write for tail-replay optimization.
+- **projections.py** — `project_tracker(events)`: folds `item_created` / `item_updated` / `item_archived` into the full `tracker.json` shape, preserving first-seen order.
+- **api.py** — `StateAPI(db_path)`: the swap seam. Callers use this only; backend implementation hidden.
+- **export.py** — `export_tracker(api, out_path)`: render the projection back to a git-tracked JSON snapshot (indent=2, ascii-escaped to match the live file).
+- **ingest.py** — `ingest_tracker_json(api, path)`: backfill one `item_created` per existing item; validates event structure at boundary.
 
 ## Invariants
 - **Append-only**: never mutate/delete events; state changes are new events.
 - **Per-stream version is 1-based and gapless** (enforced atomically).
 - **git as export, not source**: nothing here reads git for state.
-- **Round-trip fidelity**: ingest → project → export reproduces the same items
-  (tested against the real `state/tracker.json`).
+- **Round-trip fidelity**: ingest → project → export reproduces the same items (tested against the real `state/tracker.json`).
 
-## Architecture & Migration Path
+## CI Isolation & Concurrency Gotcha
+**SQLite tests deadlock under parallel CI shards** (false positive; no code defect). When running pytest with `--maxfail` or `-n` parallel shards, multiple test files may contend on filesystem-level WAL locks. **Solution:** Use `_retry_on_db_lock(func, max_retries=3, delay=0.1)` wrapper for DB initialization and appends; apply exponential backoff. Real fix = per-shard DB isolation (future work). On CI re-run, the shard passes.
 
-Full design doc: `docs/TEAM-STATE.md`. Maps **current truth** (git-as-state, single-writer
-orchestrator pattern) → **target** (SQLite WAL event log as LIVE substrate, git as EXPORT)
-→ **migration path** (which readers/writers move first, concurrency model, what stays
-git-authoritative). Every claim in the design doc is grounded in the actual code here.
+## Test Commands
+Run from repo root:
+- `python -m pytest tests/test_state_store.py -v` — Core API, concurrency, round-trip tests.
+- `python -m pytest tests/test_state_store_hardening.py -v` — Corrupt event handling, input validation.
+- `python -m pytest tests/test_state_store_snapshots.py -v` — Snapshot read/write and tail-replay.
+- `npm run test:py` — All Python test suites (includes state_store).
 
 ## Next (cutover, follow-up — NOT this increment)
+**Phase 1 (early)**: Add `orchestrator_status` stream (orchestrator_status → `append("orchestrator_status", "phase_changed", ...)`, read from `project("orchestrator_status")` on recovery).
+**Phase 2 (middle)**: Tracker dual-read (StateAPI for CRUD, export job keeps `tracker.json` rendered).
+**Phase 3 (cutover complete)**: Flip all readers to API; remove git fallback.
+**Phase 4 (optional, team scale)**: Postgres backend swap (no change to call sites).
 
-**Phase 1 (early)**: Add `orchestrator_status` stream (see `docs/TEAM-STATE.md` "Phase 1: Add orchestrator_status Stream").
-Point orchestrator writes to `append("orchestrator_status", "phase_changed"|"next_steps_updated", ...)`.
-Orchestrator reads from `project("orchestrator_status")` on recovery (not git).
-Export job renders to STATE.md periodically for durability.
-
-**Phase 2 (middle)**: Tracker dual-read.
-Point tracker CRUD at `StateAPI` (create→`item_created`, update→`item_updated`,
-move→lane update, delete→`item_archived`); add dual-read logic (try event store, fall back to git);
-run the `export_tracker` job to keep `tracker.json` rendered during dual-read.
-
-**Phase 3 (cutover complete)**: Flip all readers to API.
-Remove dual-read fallback; all tracker reads go through `api.project("tracker")`.
-
-**Phase 4 (optional, team scale)**: Postgres backend swap.
-Implement Postgres connector in `api.py` (no change to call sites); deploy to team infra.
+Map of all domains: /CLAUDE.md

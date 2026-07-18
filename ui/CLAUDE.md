@@ -1,133 +1,193 @@
-# ui/ — Web dashboard
+# ui/ — Web dashboard (self-contained domain guide)
 
-**Purpose**: Stdlib-only local observability dashboard. Serves a dark-theme HTML dashboard on a configurable port (realtime via Server-Sent Events), enabling real-time fleet monitoring without external dependencies.
+**Purpose**: Local observability dashboard. Python backend serves a React+Vite frontend on a configurable port via Server-Sent Events (realtime updates), with CSRF + session protection and event-sourced state.
 
-## Files (wave-14 U9 cutover: new React+Vite app structure)
+## Universal rules (every domain)
+- Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
+- Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
+- In worktrees use ABSOLUTE paths under the worktree for every write.
+- Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
-**Backend (Python, unchanged from wave-9 split)**:
-- **serve.py** — Thin (~65-line) entry point + composition layer. Wires the sibling modules, calls `config.reload()` / `csrf.init()` / `sse.reset_state()`, and re-exports their symbols so `serve.X` keeps resolving for the test suite (which loads serve.py by path) and for `python ui/serve.py`.
-- **config.py** — Path / env / `aesop.config.json` resolution. `reload()` recomputes all path globals from the current environment. **Load-bearing rule: every other module reads `config.X` at call time (`import config`), never `from config import <path>` — a frozen import would go stale after reload() (breaks test-fixture isolation).** Added in wave-14: `WEB_DIST` path pointing to `ui/web/dist/`.
-- **csrf.py** — Session-token generation (atomic O_EXCL 0600) + `validate_csrf_request()`; `init()` sets `SESSION_TOKEN`.
-- **collectors.py** — Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD, and SSE section snapshots (incl. `read`-style tracker/orchestrator-status snapshots + inbox drain).
-- **agents.py** — Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`) and path-traversal-safe agent-id handling (`_AGENT_ID_FORBIDDEN`).
-- **sse.py** — SSE client registry, bounded broadcast, hash-gated `_maybe_emit`, and the background `collector_loop`. `reset_state()` restores per-import collector isolation (the `sse` module is cached across test re-imports). Extended in wave-14: emits "cost" as a 6th SSE section.
-- **render.py** — Renders `ui/web/dist/index.html` (wave-14 U9 cutover: no fallback), substituting the CSRF token via a unique sentinel (the sentinel persists through Vite's build). Requires `template_path` parameter; legacy fallback removed.
-- **handler.py** — `DashboardHandler` (HTTP routing + all GET/POST endpoints incl. /api/tracker) and `run_server()`. Wave-14 additions: static serving (`GET /assets/*` from `ui/web/dist/assets/`), `/api/state` consolidated snapshot, `/api/session` for Vite dev server, `/api/cost` scorecard. Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
-- **cost.py** — Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model and per-day aggregates, verdict scorecards, and optional dollar estimates (only if `aesop.config.json` supplies `pricing` map).
-- **wave_prs.py** — Wave PR board collector: `get_wave_prs()` gathers open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), rolls check runs into passing/failing/pending/none, derives the top blocker, caches ~5s. Read-only; subprocess reads use `encoding='utf-8', errors='replace'`; degrades to `{available:false, error}` when gh is missing/un-authed. `AESOP_GH_BIN` overrides the gh binary.
-- **wave_telemetry.py** — Wave telemetry collector: `get_wave_telemetry()` extracts current phase from `STATE.md`, top blocker from `AUDIT-BACKLOG.md`, and cost metrics from the ledger via `cost.py`. Reads state at call time (no caching); degrades gracefully on missing files (returns "unknown" / zero metrics).
-- **wave_failure.py** — Wave PR failure drill-down collector: `get_wave_failure(pr_number)` shells `gh run view --json jobs` to list jobs on a PR branch, then `gh api .../jobs/{id}/logs` for failing jobs to extract ~100-line tail excerpts. Caches ~5s per PR; subprocess reads use `encoding='utf-8', errors='replace'`; degrades to `{available:false, error}` when gh is missing/un-authed. `AESOP_GH_BIN` overrides the gh binary.
+## Backend Python modules (stdlib-only)
 
-## State Store Integration (Wave-15)
+**serve.py** (~65 lines): Composition layer. Calls `config.reload()`, `csrf.init()`, `sse.reset_state()`, re-exports their symbols for test suite.
 
-The tracker uses a **dual-path mutation model** backed by an event-sourced SQLite WAL store:
+**config.py** (call-time config, load-bearing rule):
+- Path/env/`aesop.config.json` resolution; `reload()` recomputes all paths from current environment.
+- **RULE: Every other module reads `config.X` at call time (`import config`), NEVER `from config import <path>`.** Frozen imports go stale after `reload()` (breaks test fixture isolation).
+- Exports: `PORT`, `AESOP_ROOT`, `CONFIG_FILE`, `STATE_DIR`, `TRANSCRIPTS_ROOT`, `WEB_DIST`, `WATCHDOG_HEARTBEAT`, `MONITOR_HEARTBEAT`, `REPOS_JSON`, `ALERTS_LOG`, `INBOX_FILE`, `AUDIT_BACKLOG_FILE`, `UI_SESSION_TOKEN_FILE`, `TRACKER_FILE`, `ORCH_STATUS_FILE`, `LEDGER_FILE`, `COLLECTOR_INTERVAL`, `SSE_KEEPALIVE_SECONDS`, `SSE_MAX_CLIENTS`.
 
-- **Write path**: Mutations append events to `tracker_events.db` (WAL mode) via the StateAPI layer (`state_store/api.py`). Each mutation (create/update/delete) produces an immutable event in the event log.
-- **Read path**: `tracker.json` is re-rendered as an export (projection) from the event log on every read. This export is committed to git for checkpoint durability.
-- **Location**: `state/tracker_events.db` (SQLite WAL, never committed). `tracker.json` (rendered export, committed).
-- **Render-failure recovery**: If projection rendering fails, the UI falls back to the last-known good `tracker.json`; no data loss. Stale renders are repaired on the next successful mutation (idempotent re-render).
+**csrf.py**: Session-token generation (atomic O_EXCL 0600 mode) + `validate_csrf_request()` (Origin/Referer check + X-Aesop-Token header). `init()` sets `SESSION_TOKEN` (43-char URL-safe base64). Token persisted to `state/.ui-session-token` (readable only by owner).
 
-This design provides:
-- **Durable event audit trail** (append-only events in WAL)
-- **Git-friendly checkpoints** (rendered tracker.json snapshots)
-- **Atomic mutations** (events append, projection re-renders)
-- **Graceful degradation** (fallback to last-known-good on render failure)
+**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD, and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status`, etc.
 
-**Frontend (React 18 + Vite + TypeScript, wave-14 U1–U8)**:
-- **ui/web/** — Complete React application (TypeScript, Vite, TypeScript strict mode).
-  - **src/main.tsx** — Vite entry point; renders `<App />` to `#root`.
-  - **src/App.tsx** — App shell: header + hash-routed view slots (/#/, /#/work, /#/activity, /#/cost).
-  - **src/styles/tokens.css** + **src/styles/global.css** — Design tokens (light/dark color palettes, spacing, typography) + base resets.
-  - **src/views/** — Page-level components (Overview, Work, Activity, Cost, WavePRBoard) with SSE bindings.
-    - **WavePRBoard.tsx** — Wave PR board page: lists open PRs + PR-less feat/* branches with CI status rollup (passing/failing/pending), top blockers, age, and mergeable state. Polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
-  - **src/components/** — Reusable UI components (HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, FailureDrilldown, etc.).
-    - **FailureDrilldown.tsx** — Wave PR failure drill-down drawer: expands on row click to show CI job list for the latest run on a PR branch, with status + ~100-line log excerpts for failing jobs. Fetches `/api/wave/failure?pr=N` on expand; gracefully degrades when gh is unavailable.
-  - **src/lib/api.ts** — Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
-  - **src/lib/useSSE.ts** — EventSource hook with reconnect logic, per-section state, connection status.
-  - **src/lib/types.ts** — TypeScript types for all API payloads (contract with backend).
-  - **src/lib/sanitizeUrl.ts** — XSS-safe URL parsing (PR links inert on bad schemes).
-  - **vite.config.ts** — Vite config with API proxy for `/data`, `/api`, `/events`, `/agent`, `/submit` to :8770.
-  - **dist/** — Built static files (committed to git; served by Python handler). Filenames are content-hashed by Vite.
-- **README.md** — User guide and configuration reference (updated for wave-14).
+**agents.py**: Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`, `get_agent_detail`), path-traversal-safe agent-id handling via `_AGENT_ID_FORBIDDEN`.
 
-## Configuration & Path Precedence
+**sse.py** (Server-Sent Events): Client registry, bounded broadcast, hash-gated `_maybe_emit()`, background `collector_loop()` thread. `reset_state()` restores per-import collector isolation (cached module across test re-imports). Sections emitted (in order): "data", "backlog", "agents", "tracker", "status", "cost" (wave-14 addition). Keepalive comment-line (`: keepalive`) every ~15s.
 
-Configuration is resolved in this order (first match wins):
+**render.py**: Renders `ui/web/dist/index.html` with CSRF token substituted via unique sentinel `__AESOP_CSRF_SENTINEL__` (no `.format()` — Vite build passes it through verbatim). Requires `template_path` parameter; legacy fallback removed.
 
-1. **Environment variables** (highest priority):
-   - `PORT` — HTTP server port (default: 8770)
-   - `AESOP_ROOT` — aesop installation root (default: `$HOME/aesop`)
-   - `AESOP_STATE_ROOT` — state directory (overrides config state_root)
-   - `AESOP_TRANSCRIPTS_ROOT` — Claude transcript directory (overrides config transcripts_root)
-   - `AESOP_UI_COLLECT_INTERVAL` — collector thread poll cadence in seconds (default: 1.0)
+**handler.py** (HTTP routing + GET/POST endpoints):
+- `DashboardHandler` class (extends `http.server.BaseHTTPRequestHandler`).
+- `run_server(host, port, app_handler_fn)` — ThreadingHTTPServer required (SSE holds one connection per client).
+- Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
 
-2. **Config file** (`aesop.config.json`):
-   - `state_root` — path to state/ directory
-   - `transcripts_root` — path to Claude transcript directory
+**cost.py**: Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model + per-day aggregates, verdict scorecards, optional dollar estimates (if `aesop.config.json` supplies `pricing` map).
 
-3. **Built-in defaults** (lowest priority):
-   - `AESOP_ROOT/state` for state directory
-   - `~/.claude/projects` for transcripts
+**wave_prs.py** — Wave PR board: `get_wave_prs()` gathers open PRs + PR-less `feat/*` branches, rolls CI checks into passing/failing/pending/none, derives top blocker, caches ~5s. Degrades to `{available:false, error}` when gh missing/un-authed. Subprocess reads use `encoding='utf-8', errors='replace'`. Override gh binary: `AESOP_GH_BIN` env var.
 
-## CSRF & Session Protection
+**wave_telemetry.py** — Wave telemetry: `get_wave_telemetry()` extracts current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
 
-**Token model**:
-- Per-session CSRF token generated at startup, persisted to `state/.ui-session-token` (mode 0600, readable only by owner)
-- Token is 43-character URL-safe base64 string (256 bits)
-- Persistent across server restarts (read from file if exists, generate fresh if not)
-- Used to validate mutations via /submit endpoint
+**wave_failure.py** — Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
-**Validation on /submit POST**:
-1. **Origin/Referer check**: if present, must be local (http://127.0.0.1:<port>, http://localhost:<port>, or http://[::1]:<port>)
-2. **X-Aesop-Token header check**: must match SESSION_TOKEN exactly
-- Both checks fail-closed (missing header = rejection)
-- GET /events (SSE, read-only) requires no token
+**api/__init__.py**, **api/tracker.py**, **api/submit.py**: API handlers for mutations (tracker CRUD, inbox append).
 
-**Local CLI access**:
-- CLI tools read token from `state/.ui-session-token` (0600) to submit to /submit endpoint
-- Legitimate browser clients: token injected into HTML template, sent by JavaScript
+## Frontend (React 18 + Vite + TypeScript)
 
-## API Endpoints (wave-14 wave additions)
+**ui/web/src/**:
+- **main.tsx**: Vite entry point; renders `<App />` to `#root`.
+- **App.tsx**: App shell; hash-routed views (/#/, /#/work, /#/activity, /#/cost).
+- **styles/tokens.css** + **global.css**: Design tokens (light/dark palettes, spacing, typography).
+- **views/**: Overview, Work, Activity, Cost, WavePRBoard (with SSE bindings). WavePRBoard polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
+- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, FailureDrilldown, etc.
+  - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
+- **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
+- **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status.
+- **lib/types.ts**: TypeScript types for all API payloads (backend contract).
+- **lib/sanitizeUrl.ts**: XSS-safe URL parsing (inerts PR links on bad schemes).
+- **vite.config.ts**: Vite config with API proxy to :8770.
+- **dist/**: Built static files (committed to git; served by Python handler). Content-hashed by Vite.
+
+**testids-in-fixtures pattern** (both Python + React): Test components with `data-testid` attributes. React tests use `getByTestId()` (via `@testing-library/react`). Python tests use fixtures to set testids for integration proofs.
+
+## API Routes (complete list)
 
 **Read-only (no CSRF required)**:
 - `GET /` — Renders `ui/web/dist/index.html` with CSRF token substituted (hard 500 if dist missing).
 - `GET /assets/*` — Static files from `ui/web/dist/assets/` (content-hashed, immutable cache headers, path-traversal-safe).
-- `GET /api/state` — Consolidated first-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip (reuses latest snapshots).
-- `GET /api/session` — Returns `{token}` for Vite dev server; Origin-checked fail-closed (only local origins).
-- `GET /api/cost` — Cost/scorecard summary from `state/ledger/OUTCOMES-LEDGER.md` (per-model, per-day, verdicts, optional pricing estimates).
-- `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup / mergeable / age / top blocker. Cached ~5s; degrades to `{available:false, error}` when gh is missing/un-authenticated (never a 500). `wave_prs.py` collector; polled by the frontend (not an SSE section — `gh` is too slow for the collector tick). Set `AESOP_GH_BIN` to override the gh binary path.
-- `GET /api/wave/telemetry` — Wave telemetry: current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), and cost metrics. Reads state at call time; degrades gracefully on missing files. `wave_telemetry.py` collector.
-- `GET /api/wave/failure?pr=N` — Wave PR failure drill-down: CI jobs for the latest run on a PR branch, with ~100-line log excerpts for failing jobs. Cached ~5s per PR; degrades to `{available:false, error}` when gh is missing/un-authenticated. `wave_failure.py` collector; polled by the frontend on expand (not SSE). Set `AESOP_GH_BIN` to override the gh binary path.
-- `GET /events` — Server-Sent Events stream (read-only, no CSRF).
+- `GET /api/state` — Consolidated first-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip (reuses latest SSE snapshots).
+- `GET /api/session` — Returns `{token}` for Vite dev server; Origin-checked fail-closed (local origins only).
+- `GET /api/cost` — Cost/scorecard summary from `state/ledger/OUTCOMES-LEDGER.md` (per-model, per-day, verdicts, optional pricing).
+- `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup/mergeable/age/top blocker. Cached ~5s; degrades `{available:false, error}`. NOT an SSE section (gh too slow for collector tick). Set `AESOP_GH_BIN` to override gh binary.
+- `GET /api/wave/telemetry` — Wave telemetry: current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics. Reads state at call time; degrades on missing files. NOT SSE.
+- `GET /api/wave/failure?pr=N` — Wave PR failure drill-down: CI jobs for latest run on PR branch, with ~100-line log excerpts for failing jobs. Cached ~5s per PR; degrades `{available:false, error}`. NOT SSE. Set `AESOP_GH_BIN` to override gh binary.
+- `GET /events` — Server-Sent Events stream (6 sections: data, backlog, agents, tracker, status, cost). Keepalive every ~15s. Read-only; no CSRF.
 
 **Mutations (CSRF-gated)**:
-- `POST /submit` — Append to inbox.
-- `POST /api/tracker`, `POST /api/tracker/<id>` — Tracker CRUD.
+- `POST /submit` — Append to inbox (X-Aesop-Token + Origin/Referer validation, fail-closed).
+- `POST /api/tracker` — Create tracker item.
+- `POST /api/tracker/<id>` — Update/delete tracker item.
 
-## Server-Sent Events (SSE) Model
+## CSRF & Session Protection (Invariants)
 
-**Realtime streaming via GET /events**:
-- ThreadingHTTPServer required (SSE holds one connection per client)
-- Streams JSON frames: `event: <section>` / `data: <json>`
-- Keepalive comment-line (`: keepalive`) sent every ~15s to prevent timeout
-- Read-only stream; no mutations
+- Token model: Per-session 43-char URL-safe base64 (256 bits), generated at startup, persisted to `state/.ui-session-token` (mode 0600). Persistent across server restarts; regenerated if missing.
+- Validation on `/submit POST`:
+  1. **Origin/Referer check**: if present, must be local (http://127.0.0.1:<port>, http://localhost:<port>, or http://[::1]:<port>).
+  2. **X-Aesop-Token header**: must match `SESSION_TOKEN` exactly.
+  - Both checks fail-closed (missing header = rejection).
+- Local CLI access: tools read token from `state/.ui-session-token` (0600) for `/submit`.
+- Browser clients: token injected into HTML template, sent by JavaScript via `api.ts` helpers.
 
-**Sections emitted** (only on content change, in order):
-1. **data** — heartbeat status, daemon state, log tail
-2. **backlog** — AUDIT-BACKLOG.md parsed into tier buckets (P0/P1/P2/Needs decision)
-3. **agents** — fleet agent activity (from Claude transcripts directory)
-4. **tracker** — tracker items (CRUD mutations reflected in realtime)
-5. **status** — orchestrator phase + activity
-6. **cost** — cost/scorecard summary (wave-14 addition)
+## SSE (Server-Sent Events) Contract
 
-## Background Collector Thread
+- Realtime streaming via `GET /events` (ThreadingHTTPServer required).
+- Streams JSON frames: `event: <section>` / `data: <json>` (one section per frame).
+- Keepalive comment-line (`: keepalive`) every ~15s (tunable: `SSE_KEEPALIVE_SECONDS`).
+- 6 Sections emitted (only on content change, in this order):
+  1. **data** — heartbeat, daemon state, log tail.
+  2. **backlog** — `AUDIT-BACKLOG.md` parsed into tiers (P0/P1/P2/Needs decision).
+  3. **agents** — fleet agent activity (from Claude transcripts directory).
+  4. **tracker** — tracker items (CRUD mutations reflected realtime).
+  5. **status** — orchestrator phase + activity.
+  6. **cost** — cost/scorecard summary.
+- Background collector thread: daemon polling heartbeats/logs (mtime/fingerprint gates), re-derives SSE sections only on input change, broadcasts only when content-hash differs. Started on first HTTP request via `start_collector_thread()`, single-instance guard `_collector_lock`, wakes every `COLLECTOR_INTERVAL` (default 1.0s, env override: `AESOP_UI_COLLECT_INTERVAL`).
+- If collector thread crashes, server continues serving; realtime updates stop but dashboard remains accessible (fail-open).
 
-Daemon thread polling heartbeats/logs via mtime/fingerprint gates; re-derives SSE sections only on input change, broadcasts only when content-hash differs (avoids expensive operations on every tick). Started idempotently on first HTTP request via `start_collector_thread()`, runs with single-instance guard `_collector_lock`, wakes every `COLLECTOR_INTERVAL` (default 1.0s, `AESOP_UI_COLLECT_INTERVAL`).
+## State Store Integration (Wave-15)
+
+**Dual-path mutation model** backed by event-sourced SQLite WAL:
+- **Write path**: Mutations append events to `tracker_events.db` (WAL mode) via StateAPI layer (`state_store/api.py`). Each mutation (create/update/delete) produces immutable event.
+- **Read path**: `tracker.json` re-rendered as export (projection) from event log on every read. Export committed to git for checkpoint durability.
+- **Location**: `state/tracker_events.db` (SQLite WAL, never committed). `tracker.json` (rendered export, committed).
+- **Render-failure recovery**: If projection rendering fails, UI falls back to last-known good `tracker.json`; no data loss. Stale renders repaired on next successful mutation (idempotent re-render).
+
+## Configuration & Path Precedence
+
+Environment variables override config file, which overrides built-in defaults:
+1. **Environment variables** (highest priority):
+   - `PORT` — HTTP server port (default: 8770).
+   - `AESOP_ROOT` — aesop installation root (default: `$HOME/aesop`).
+   - `AESOP_STATE_ROOT` — state directory (overrides config `state_root`).
+   - `AESOP_TRANSCRIPTS_ROOT` — Claude transcript directory (overrides config `transcripts_root`).
+   - `AESOP_UI_COLLECT_INTERVAL` — collector thread poll cadence in seconds (default: 1.0).
+   - `AESOP_GH_BIN` — gh CLI binary path (default: `gh` on PATH).
+
+2. **Config file** (`aesop.config.json`):
+   - `state_root` — path to state/ directory.
+   - `transcripts_root` — path to Claude transcript directory.
+   - `aesop_root` — override derived AESOP_ROOT (tier 3).
+   - `pricing` — optional {model: cost_per_mtok} map for dollar estimates.
+
+3. **Built-in defaults** (lowest priority):
+   - `AESOP_ROOT/state` for state directory.
+   - `~/.claude/projects` for transcripts.
+
+## Build & Deployment (Wave-14 U9 rule)
+
+**dist/ rebuild**: React app must be built (`cd ui/web && npm run build`) BEFORE dist is served. Wave-14 cutover: `ui/web/dist/index.html` is **always required** (no fallback to legacy template). **Orchestrator tail (last agent in fleet) rebuilds dist on every wave close** (before merge to main) so main is always deployable. Dev workflow: run `npm run dev` from `ui/web/` to use Vite dev server (vite.config.ts proxies `/api`, `/events`, `/submit` to :8770).
+
+## Test Commands
+
+**Python backend** (pytest via unittest):
+```bash
+# All UI tests
+python -m unittest discover -s tests
+
+# Specific suite
+python -m unittest tests.test_ui_config -v
+python -m unittest tests.test_ui_handlers -v
+python -m unittest tests.test_wave13_ui_correctness -v
+python -m unittest tests.test_ui_collectors -v
+python -m unittest tests.test_ui_cost -v
+python -m unittest tests.test_ui_hardening -v
+```
+
+**React frontend** (vitest + jsdom):
+```bash
+cd ui/web
+npm test
+# Or filtered: npx vitest run src/components/TrackerBoard.test.tsx
+```
+
+**Integration/browser tests** (playwright, if available):
+```bash
+# From repo root (requires playwright install: npm install @playwright/test)
+npx playwright test
+# Run one test: npx playwright test tests/ui-integration.spec.ts
+# Headed mode (debug): npx playwright test --headed
+```
+
+**Full suite** (from repo root):
+```bash
+npm run test:py && npm run test:node && npm run test:all
+```
 
 ## Invariants & Gotchas
 
-- **Stdlib only**: No external dependencies (requests, flask, etc.). Uses only `http.server`, `json`, `subprocess`, `threading`.
-- **ThreadingHTTPServer required**: SSE model requires one thread per client connection. Standard HTTPServer (processes) cannot hold SSE connections open.
-- **Collector fail-open**: If collector thread crashes, server continues serving; realtime updates stop but dashboard remains accessible.
-- **Token file permissions**: On Unix-like systems, token file is chmod 0600 (user-only). Windows ignores mode bits but respects file permissions via ACLs.
+- **Stdlib-only backend**: No external Python dependencies (requests, flask, etc.). Uses only `http.server`, `json`, `subprocess`, `threading`.
+- **ThreadingHTTPServer required**: SSE model requires one thread per client. Standard HTTPServer (processes) cannot hold SSE connections open.
+- **Collector fail-open**: If collector thread crashes, server continues; realtime updates stop but dashboard accessible.
+- **Token file permissions**: Unix: chmod 0600 (user-only). Windows: respects file permissions via ACLs.
 - **Paths git-ignored**: `state/.ui-session-token` is ephemeral (regenerated if missing), never committed.
+- **Config read at call time**: `import config` + `config.X` on every call; never `from config import X` (breaks test isolation).
+- **Dist always required**: No fallback to legacy template (wave-14 U9); missing dist = hard 500.
+- **Content-hashed assets**: Vite build outputs `assets/` with content hashes in filenames (immutable cache headers).
+- **Vite dev server**: Proxies API to :8770; run `npm run dev` from `ui/web/`.
+
+## Dropped (reason)
+- Wave-14 dashboard rewrite plan details (separate docs; use `frontend-design` skill for UX/UI decisions).
+- Legacy HTML template (wave-9 split); only React app (`ui/web/dist/`) now served.
+- Detailed MCP server role (separate domain: `mcp/CLAUDE.md`).
+- State store internals (separate domain: `state_store/CLAUDE.md`).
+
+Map of all domains: /CLAUDE.md
