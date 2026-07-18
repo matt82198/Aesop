@@ -3,15 +3,26 @@ External coding grader with hidden test cases.
 
 This grader evaluates candidate solutions against objective test cases
 that are NOT shown in the task prompts, ensuring honest evaluation.
+
+Deterministic on Linux, macOS, and Windows:
+  * Entrypoint names are embedded (DEFAULT_ENTRYPOINTS) so the grader is fully
+    self-contained and does not depend on any git-ignored task file existing.
+  * Candidate solutions run under the SAME interpreter (sys.executable) that
+    invoked the grader, so no hardcoded ``python``/``python3`` assumption.
+  * Each candidate runs in its own process group with a hard timeout; on
+    timeout the whole group is killed so a hanging candidate cannot wedge CI.
+  * Subprocess I/O is decoded as UTF-8 (errors replaced) and all emitted text
+    is ASCII, so a non-ASCII candidate cannot crash the grader on cp1252.
 """
 
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
-import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Optional, Tuple
 
 
 # Hidden test cases for each task (not shown to the model)
@@ -93,7 +104,100 @@ HIDDEN_TEST_CASES = {
     ],
 }
 
+# Embedded entrypoint (function name) for each task. Keeping this in-code makes
+# the grader deterministic on any fresh checkout: the hidden test cases already
+# live here, so the entrypoint map belongs here too. An optional
+# ``coding_tasks.jsonl`` beside this module may override/extend these, but its
+# absence is NOT an error (that file is git-ignored via ``*.jsonl``).
+DEFAULT_ENTRYPOINTS = {
+    "fizzbuzz": "fizzbuzz",
+    "is_palindrome": "is_palindrome",
+    "find_prime": "is_prime",
+    "reverse_string": "reverse_string",
+    "remove_duplicates": "remove_duplicates",
+    "fibonacci_nth": "fibonacci",
+    "binary_search": "binary_search",
+    "count_vowels": "count_vowels",
+}
+
 TIMEOUT_SECONDS = 5
+
+
+def _resolve_entrypoint(task_id: str) -> Optional[str]:
+    """Return the entrypoint function name for ``task_id``.
+
+    Uses the embedded DEFAULT_ENTRYPOINTS first so a missing task file never
+    breaks grading. If an optional ``coding_tasks.jsonl`` exists beside this
+    module it may override the default, but any read/parse problem silently
+    falls back to the embedded value.
+    """
+    entrypoint = DEFAULT_ENTRYPOINTS.get(task_id)
+
+    tasks_path = Path(__file__).parent / "coding_tasks.jsonl"
+    if tasks_path.exists():
+        try:
+            with open(tasks_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    task = json.loads(line)
+                    if task.get("id") == task_id and task.get("entrypoint"):
+                        entrypoint = task["entrypoint"]
+                        break
+        except (OSError, ValueError):
+            # Corrupt or unreadable optional file: keep the embedded default.
+            pass
+
+    return entrypoint
+
+
+def _run_candidate(cmd, timeout: int) -> Tuple[Optional[int], str, str, bool]:
+    """Run ``cmd`` with a hard timeout, killing the whole process group on expiry.
+
+    Returns ``(returncode, stdout, stderr, timed_out)``. ``returncode`` is None
+    when the candidate timed out. stdin is closed so a candidate cannot block
+    on input, and output is decoded as UTF-8 (bad bytes replaced) so a
+    non-ASCII candidate never crashes the grader on a cp1252 console.
+    """
+    popen_kwargs = dict(
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    # Put the child in its own process group so we can kill descendants too.
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
+    else:
+        popen_kwargs["creationflags"] = getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return proc.returncode, stdout, stderr, False
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
+        return None, stdout, stderr, True
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Best-effort hard kill of a subprocess and any children it spawned."""
+    try:
+        if os.name == "posix":
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        else:
+            proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
 
 
 def grade_solution(task_id: str, solution_file: str) -> Dict:
@@ -126,7 +230,7 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
 
     # Read the solution file
     try:
-        with open(solution_file, 'r', encoding='utf-8') as f:
+        with open(solution_file, "r", encoding="utf-8") as f:
             solution_code = f.read()
     except Exception as e:
         return {
@@ -138,35 +242,22 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
             "error": f"Failed to read solution file: {e}",
         }
 
-    # Get the entrypoint function name from task definition
-    try:
-        with open(Path(__file__).parent / "coding_tasks.jsonl", 'r') as f:
-            for line in f:
-                task = json.loads(line)
-                if task['id'] == task_id:
-                    entrypoint = task['entrypoint']
-                    break
-            else:
-                return {
-                    "task_id": task_id,
-                    "passed": 0,
-                    "total": 0,
-                    "results": [],
-                    "success": False,
-                    "error": f"Task not found in coding_tasks.jsonl: {task_id}",
-                }
-    except Exception as e:
+    # Resolve the entrypoint function name (embedded default; optional file override).
+    entrypoint = _resolve_entrypoint(task_id)
+    if not entrypoint:
         return {
             "task_id": task_id,
             "passed": 0,
             "total": 0,
             "results": [],
             "success": False,
-            "error": f"Failed to read task definition: {e}",
+            "error": f"No entrypoint defined for task: {task_id}",
         }
 
     # Create a temporary file to execute
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False, encoding="utf-8"
+    ) as f:
         temp_file = f.name
         f.write(solution_code)
 
@@ -196,33 +287,40 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
                 for arg in args
             )
 
-            exec_code = f"""
-import sys
-sys.path.insert(0, {repr(str(Path(temp_file).parent))})
-exec(open({repr(temp_file)}).read())
-result = {entrypoint}({args_repr})
-print(json.dumps(result))
-"""
+            exec_code = (
+                "import sys\n"
+                f"sys.path.insert(0, {repr(str(Path(temp_file).parent))})\n"
+                f"exec(open({repr(temp_file)}, encoding='utf-8').read())\n"
+                f"result = {entrypoint}({args_repr})\n"
+                "print(json.dumps(result))\n"
+            )
 
             try:
-                result = subprocess.run(
-                    [sys.executable, '-c', f'import json\n{exec_code}'],
-                    capture_output=True,
-                    text=True,
+                returncode, stdout, stderr, timed_out = _run_candidate(
+                    [sys.executable, "-c", "import json\n" + exec_code],
                     timeout=TIMEOUT_SECONDS,
                 )
 
-                if result.returncode != 0:
+                if timed_out:
                     results.append({
                         "test": i,
                         "input": args,
                         "expected": expected,
                         "passed": False,
-                        "error": result.stderr.strip() or "Non-zero return code",
+                        "error": f"Timeout after {TIMEOUT_SECONDS}s",
+                    })
+                elif returncode != 0:
+                    # Syntax error, runtime exception, etc. surfaced via stderr.
+                    results.append({
+                        "test": i,
+                        "input": args,
+                        "expected": expected,
+                        "passed": False,
+                        "error": stderr.strip() or "Non-zero return code",
                     })
                 else:
                     try:
-                        actual = json.loads(result.stdout.strip())
+                        actual = json.loads(stdout.strip())
                         passed = actual == expected
                         if passed:
                             passed_count += 1
@@ -239,16 +337,8 @@ print(json.dumps(result))
                             "input": args,
                             "expected": expected,
                             "passed": False,
-                            "error": f"Output not JSON: {result.stdout.strip()}",
+                            "error": f"Output not JSON: {stdout.strip()}",
                         })
-            except subprocess.TimeoutExpired:
-                results.append({
-                    "test": i,
-                    "input": args,
-                    "expected": expected,
-                    "passed": False,
-                    "error": f"Timeout after {TIMEOUT_SECONDS}s",
-                })
             except Exception as e:
                 results.append({
                     "test": i,
@@ -270,7 +360,7 @@ print(json.dumps(result))
         # Clean up temp file
         try:
             os.unlink(temp_file)
-        except:
+        except OSError:
             pass
 
 
