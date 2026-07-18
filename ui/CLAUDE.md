@@ -15,6 +15,8 @@
 - **handler.py** — `DashboardHandler` (HTTP routing + all GET/POST endpoints incl. /api/tracker) and `run_server()`. Wave-14 additions: static serving (`GET /assets/*` from `ui/web/dist/assets/`), `/api/state` consolidated snapshot, `/api/session` for Vite dev server, `/api/cost` scorecard. Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
 - **cost.py** — Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model and per-day aggregates, verdict scorecards, and optional dollar estimates (only if `aesop.config.json` supplies `pricing` map).
 - **wave_prs.py** — Wave PR board collector: `get_wave_prs()` gathers open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), rolls check runs into passing/failing/pending/none, derives the top blocker, caches ~5s. Read-only; subprocess reads use `encoding='utf-8', errors='replace'`; degrades to `{available:false, error}` when gh is missing/un-authed. `AESOP_GH_BIN` overrides the gh binary.
+- **wave_telemetry.py** — Wave telemetry collector: `get_wave_telemetry()` extracts current phase from `STATE.md`, top blocker from `AUDIT-BACKLOG.md`, and cost metrics from the ledger via `cost.py`. Reads state at call time (no caching); degrades gracefully on missing files (returns "unknown" / zero metrics).
+- **wave_failure.py** — Wave PR failure drill-down collector: `get_wave_failure(pr_number)` shells `gh run view --json jobs` to list jobs on a PR branch, then `gh api .../jobs/{id}/logs` for failing jobs to extract ~100-line tail excerpts. Caches ~5s per PR; subprocess reads use `encoding='utf-8', errors='replace'`; degrades to `{available:false, error}` when gh is missing/un-authed. `AESOP_GH_BIN` overrides the gh binary.
 
 ## State Store Integration (Wave-15)
 
@@ -36,8 +38,10 @@ This design provides:
   - **src/main.tsx** — Vite entry point; renders `<App />` to `#root`.
   - **src/App.tsx** — App shell: header + hash-routed view slots (/#/, /#/work, /#/activity, /#/cost).
   - **src/styles/tokens.css** + **src/styles/global.css** — Design tokens (light/dark color palettes, spacing, typography) + base resets.
-  - **src/views/** — Page-level components (Overview, Work, Activity, Cost) with SSE bindings.
-  - **src/components/** — Reusable UI components (HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, etc.).
+  - **src/views/** — Page-level components (Overview, Work, Activity, Cost, WavePRBoard) with SSE bindings.
+    - **WavePRBoard.tsx** — Wave PR board page: lists open PRs + PR-less feat/* branches with CI status rollup (passing/failing/pending), top blockers, age, and mergeable state. Polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
+  - **src/components/** — Reusable UI components (HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, FailureDrilldown, etc.).
+    - **FailureDrilldown.tsx** — Wave PR failure drill-down drawer: expands on row click to show CI job list for the latest run on a PR branch, with status + ~100-line log excerpts for failing jobs. Fetches `/api/wave/failure?pr=N` on expand; gracefully degrades when gh is unavailable.
   - **src/lib/api.ts** — Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
   - **src/lib/useSSE.ts** — EventSource hook with reconnect logic, per-section state, connection status.
   - **src/lib/types.ts** — TypeScript types for all API payloads (contract with backend).
@@ -92,6 +96,8 @@ Configuration is resolved in this order (first match wins):
 - `GET /api/session` — Returns `{token}` for Vite dev server; Origin-checked fail-closed (only local origins).
 - `GET /api/cost` — Cost/scorecard summary from `state/ledger/OUTCOMES-LEDGER.md` (per-model, per-day, verdicts, optional pricing estimates).
 - `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup / mergeable / age / top blocker. Cached ~5s; degrades to `{available:false, error}` when gh is missing/un-authenticated (never a 500). `wave_prs.py` collector; polled by the frontend (not an SSE section — `gh` is too slow for the collector tick). Set `AESOP_GH_BIN` to override the gh binary path.
+- `GET /api/wave/telemetry` — Wave telemetry: current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), and cost metrics. Reads state at call time; degrades gracefully on missing files. `wave_telemetry.py` collector.
+- `GET /api/wave/failure?pr=N` — Wave PR failure drill-down: CI jobs for the latest run on a PR branch, with ~100-line log excerpts for failing jobs. Cached ~5s per PR; degrades to `{available:false, error}` when gh is missing/un-authenticated. `wave_failure.py` collector; polled by the frontend on expand (not SSE). Set `AESOP_GH_BIN` to override the gh binary path.
 - `GET /events` — Server-Sent Events stream (read-only, no CSRF).
 
 **Mutations (CSRF-gated)**:

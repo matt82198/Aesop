@@ -6,10 +6,12 @@
  * Resolves AESOP_ROOT from env or --root flag; gracefully handles missing state files.
  *
  * Tools:
- *   fleet_status    - heartbeat ages + orchestrator status + alert count
- *   fleet_agents    - active agents from transcripts via dash-extra.mjs passthrough
- *   fleet_tracker   - open items by lane from state/tracker.json
- *   fleet_cost      - per-model token totals from state/ledger/OUTCOMES-LEDGER.md
+ *   fleet_status       - heartbeat ages + orchestrator status + alert count
+ *   fleet_agents       - active agents from transcripts via dash-extra.mjs passthrough
+ *   fleet_tracker      - open items by lane from state/tracker.json
+ *   fleet_cost         - per-model token totals from state/ledger/OUTCOMES-LEDGER.md
+ *   fleet_cost_by_wave - per-wave token totals from state/ledger/OUTCOMES-LEDGER.md
+ *   fleet_budget       - cost ceiling, current spend, remaining headroom, halt status
  *
  * All tools are read-only; no state mutations, no file writes.
  */
@@ -399,6 +401,154 @@ function getFleetCost() {
   return result;
 }
 
+/**
+ * fleet_cost_by_wave: Parse ledger and aggregate token counts by wave
+ */
+function getFleetCostByWave() {
+  const result = {
+    absent: !fs.existsSync(LEDGER_FILE),
+    by_wave: {},
+    total_tokens_in: 0,
+    total_tokens_out: 0
+  };
+
+  try {
+    if (fs.existsSync(LEDGER_FILE)) {
+      const lines = fs.readFileSync(LEDGER_FILE, 'utf8').split('\n');
+
+      for (const line of lines) {
+        // Parse markdown table row: | ts | agent_type | model | dur | tokens_in | tokens_out | verdict | phase | wave |
+        // Regex to extract all pipe-delimited columns
+        if (!line.startsWith('|') || !line.endsWith('|')) continue;
+
+        const parts = line.split('|').map(p => p.trim()).filter(p => p !== '');
+
+        // Need at least 9 parts (ts, agent_type, model, dur, tokens_in, tokens_out, verdict, phase, wave)
+        if (parts.length < 9) continue;
+
+        // Skip header line
+        if (parts[0].toLowerCase() === 'iso ts' || parts[0].toLowerCase() === 'timestamp') continue;
+        if (parts[0].toLowerCase().includes('iso') || parts[1].toLowerCase() === 'agent_type') continue;
+
+        // Skip separator lines (all dashes and pipes)
+        if (/^-+$/.test(parts[0])) continue;
+
+        try {
+          const tokensIn = parseInt(parts[4], 10);
+          const tokensOut = parseInt(parts[5], 10);
+
+          // Skip if tokens are not valid numbers
+          if (isNaN(tokensIn) || isNaN(tokensOut)) continue;
+
+          const wave = parts[8].trim() || 'unknown';
+
+          if (!result.by_wave[wave]) {
+            result.by_wave[wave] = {
+              tokens_in: 0,
+              tokens_out: 0,
+              total_tokens: 0,
+              count: 0
+            };
+          }
+
+          result.by_wave[wave].tokens_in += tokensIn;
+          result.by_wave[wave].tokens_out += tokensOut;
+          result.by_wave[wave].total_tokens += tokensIn + tokensOut;
+          result.by_wave[wave].count += 1;
+
+          result.total_tokens_in += tokensIn;
+          result.total_tokens_out += tokensOut;
+        } catch (e) {
+          // Skip malformed rows
+          continue;
+        }
+      }
+    }
+  } catch (e) {
+    // Silently ignore errors
+  }
+
+  return result;
+}
+
+/**
+ * fleet_budget: Read cost ceiling from config and calculate remaining headroom
+ */
+function getFleetBudget() {
+  const result = {
+    period: 'wave',
+    ceiling: null,
+    spent: 0,
+    remaining: null,
+    halted: false,
+    halt_reason: null,
+    halt_timestamp: null
+  };
+
+  try {
+    // Check if halted
+    const haltSentinelPath = path.join(STATE_ROOT, '.HALT');
+    if (fs.existsSync(haltSentinelPath)) {
+      result.halted = true;
+      try {
+        const haltData = JSON.parse(fs.readFileSync(haltSentinelPath, 'utf8'));
+        result.halt_reason = haltData.reason || null;
+        result.halt_timestamp = haltData.timestamp || null;
+      } catch (e) {
+        result.halt_reason = '(unreadable sentinel)';
+      }
+    }
+
+    // Read ceiling from config
+    if (config && config.limits && config.limits.max_wave_tokens !== null) {
+      result.ceiling = config.limits.max_wave_tokens;
+    }
+
+    // Calculate spent tokens from ledger
+    if (fs.existsSync(LEDGER_FILE)) {
+      const lines = fs.readFileSync(LEDGER_FILE, 'utf8').split('\n');
+
+      for (const line of lines) {
+        if (!line.startsWith('|') || !line.endsWith('|')) continue;
+
+        const parts = line.split('|').map(p => p.trim()).filter(p => p !== '');
+
+        // Need at least 7 parts (ts, agent_type, model, dur, tokens_in, tokens_out, verdict, ...)
+        if (parts.length < 7) continue;
+
+        // Skip header lines
+        if (parts[0].toLowerCase() === 'iso ts' || parts[0].toLowerCase() === 'timestamp') continue;
+        if (parts[0].toLowerCase().includes('iso') || parts[1].toLowerCase() === 'agent_type') continue;
+
+        // Skip separator lines (all dashes)
+        if (/^-+$/.test(parts[0])) continue;
+
+        try {
+          const tokensIn = parseInt(parts[4], 10);
+          const tokensOut = parseInt(parts[5], 10);
+
+          // Skip if tokens are not valid numbers
+          if (isNaN(tokensIn) || isNaN(tokensOut)) continue;
+
+          result.spent += tokensIn + tokensOut;
+        } catch (e) {
+          // Skip malformed rows
+          continue;
+        }
+      }
+    }
+
+    // Calculate remaining headroom
+    if (result.ceiling !== null) {
+      result.remaining = Math.max(0, result.ceiling - result.spent);
+    }
+  } catch (e) {
+    // Silently ignore errors
+  }
+
+  return result;
+}
+
 // ============================================================================
 // MCP Tool & Resource Definitions
 // ============================================================================
@@ -431,6 +581,22 @@ const TOOLS = [
   {
     name: 'fleet_cost',
     description: 'Get per-model token usage totals from outcomes ledger',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'fleet_cost_by_wave',
+    description: 'Get per-wave token usage totals from outcomes ledger, grouped by wave column',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'fleet_budget',
+    description: 'Get cost budget status: configured ceiling, current spend, remaining headroom, and halt status',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -478,6 +644,12 @@ async function handleToolCall(requestId, params) {
         break;
       case 'fleet_cost':
         result = getFleetCost();
+        break;
+      case 'fleet_cost_by_wave':
+        result = getFleetCostByWave();
+        break;
+      case 'fleet_budget':
+        result = getFleetBudget();
         break;
       default:
         mcp.writeError(requestId, -32601, `Unknown tool: ${name}`);

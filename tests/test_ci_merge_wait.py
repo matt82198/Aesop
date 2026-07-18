@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Unit tests for ci_merge_wait.py CI-gated merge helper."""
-import os
 import sys
 import subprocess
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call, Mock
-import tempfile
+from unittest.mock import patch, MagicMock, call
 
 
 class TestCiMergeWait(unittest.TestCase):
@@ -441,6 +439,163 @@ class TestCiMergeWait(unittest.TestCase):
         ]
         result = module.check_ci_status(mixed)
         self.assertEqual(result[0], "success", "All non-blocking checks should result in success")
+
+    def test_check_ci_status_function_empty_rollup_fail_closed(self):
+        """Test check_ci_status with empty rollup defaults to PENDING (fail-closed)."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Empty rollup: should be PENDING by default (fail-closed)
+        ci_status, _ = module.check_ci_status([])
+        self.assertEqual(ci_status, "pending", "Empty rollup should default to PENDING (fail-closed)")
+
+    def test_check_ci_status_function_empty_rollup_with_allow_no_checks(self):
+        """Test check_ci_status with empty rollup and allow_no_checks=True."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Empty rollup with allow_no_checks=True should be SUCCESS
+        ci_status, _ = module.check_ci_status([], allow_no_checks=True)
+        self.assertEqual(ci_status, "success", "Empty rollup with allow_no_checks=True should be SUCCESS")
+
+    def test_check_ci_status_function_expected_checks_all_present(self):
+        """Test check_ci_status with expected_checks when all are present and successful."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # All expected checks present and successful
+        rollup = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},
+            {"name": "lint", "status": "COMPLETED", "conclusion": None},
+        ]
+        ci_status, _ = module.check_ci_status(
+            rollup,
+            expected_checks={"unit-tests", "integration-tests"}
+        )
+        self.assertEqual(ci_status, "success", "All expected checks present and successful should be SUCCESS")
+
+    def test_check_ci_status_function_expected_checks_missing_one(self):
+        """Test check_ci_status with expected_checks when one is missing (window transition)."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Missing expected check (e.g., new run hasn't registered yet)
+        rollup = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
+            {"name": "lint", "status": "COMPLETED", "conclusion": None},
+        ]
+        ci_status, _ = module.check_ci_status(
+            rollup,
+            expected_checks={"unit-tests", "integration-tests"}
+        )
+        self.assertEqual(ci_status, "pending", "Missing expected check should return PENDING (window transition)")
+
+    def test_check_ci_status_function_expected_checks_one_failed(self):
+        """Test check_ci_status with expected_checks when one fails."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # One expected check failed
+        rollup = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "FAILURE"},
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},
+        ]
+        ci_status, failed_check = module.check_ci_status(
+            rollup,
+            expected_checks={"unit-tests", "integration-tests"}
+        )
+        self.assertEqual(ci_status, "failure", "Failed expected check should return FAILURE")
+        self.assertEqual(failed_check, "unit-tests", "Should report which expected check failed")
+
+    def test_check_ci_status_function_expected_checks_one_still_pending(self):
+        """Test check_ci_status with expected_checks when one is still pending."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # One expected check still in progress
+        rollup = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
+            {"name": "integration-tests", "status": "IN_PROGRESS", "conclusion": None},
+        ]
+        ci_status, _ = module.check_ci_status(
+            rollup,
+            expected_checks={"unit-tests", "integration-tests"}
+        )
+        self.assertEqual(ci_status, "pending", "Pending expected check should return PENDING")
+
+    def test_check_ci_status_function_superseded_run_window(self):
+        """Test check_ci_status with superseded-run window simulation (old checks vanish → empty → new pending)."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Phase 1: Old run completed successfully
+        old_run = [
+            {"name": "build", "status": "COMPLETED", "conclusion": None},
+            {"name": "test", "status": "COMPLETED", "conclusion": None},
+        ]
+        ci_status, _ = module.check_ci_status(old_run)
+        self.assertEqual(ci_status, "success", "Old run should be SUCCESS")
+
+        # Phase 2: Transition window - old checks have vanished, new run hasn't registered yet (EMPTY)
+        # This is the BUG window: empty rollup should be PENDING, not SUCCESS
+        empty_window = []
+        ci_status, _ = module.check_ci_status(empty_window)
+        self.assertEqual(ci_status, "pending", "Empty transition window should be PENDING (fail-closed)")
+
+        # Phase 3: New run appears with pending checks
+        new_run = [
+            {"name": "build", "status": "IN_PROGRESS", "conclusion": None},
+            {"name": "test", "status": "QUEUED", "conclusion": None},
+        ]
+        ci_status, _ = module.check_ci_status(new_run)
+        self.assertEqual(ci_status, "pending", "New run pending checks should be PENDING")
+
+        # Phase 4: New run completes
+        new_run_complete = [
+            {"name": "build", "status": "COMPLETED", "conclusion": None},
+            {"name": "test", "status": "COMPLETED", "conclusion": None},
+        ]
+        ci_status, _ = module.check_ci_status(new_run_complete)
+        self.assertEqual(ci_status, "success", "New run completed should be SUCCESS")
+
+    def test_allow_no_checks_flag_in_help(self):
+        """Test that --allow-no-checks appears in help."""
+        result = self._run_tool_subprocess("--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--allow-no-checks", result.stdout)
+        self.assertIn("repos without", result.stdout.lower())
+
+    def test_expect_checks_flag_in_help(self):
+        """Test that --expect-checks appears in help."""
+        result = self._run_tool_subprocess("--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--expect-checks", result.stdout)
+        self.assertIn("MUST", result.stdout.upper())
+
+    def test_self_test_includes_new_tests(self):
+        """Test that --self-test includes new fail-closed and expected-checks tests."""
+        result = self._run_tool_subprocess("--self-test")
+        self.assertEqual(result.returncode, 0)
+        # Check for tests covering the new functionality
+        self.assertIn("empty rollup", result.stdout.lower())
+        self.assertIn("allow_no_checks", result.stdout.lower())
+        self.assertIn("expected", result.stdout.lower())
+        self.assertIn("window", result.stdout.lower())
 
 
 if __name__ == "__main__":

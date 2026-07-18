@@ -1,0 +1,432 @@
+#!/usr/bin/env python3
+"""
+Wave preflight validator — check repo readiness before starting a wave.
+
+Validates:
+  1. Current repo is on a feature branch (never main/master)
+  2. Working tree clean
+  3. STATE.md phase heading consistent with state/orchestrator-status.json phase (warn-level if drifted)
+  4. No .HALT sentinel
+  5. Heartbeats fresh (configurable max-age; default 200s for watchdog, 300s for orchestrator)
+  6. state/tracker.json parses as JSON
+  7. secret_scan importable
+
+Exit codes:
+  0 = ready (all checks pass or only warnings)
+  1 = blocked (one or more checks failed)
+
+Output:
+  --text (default): numbered list of checks with status and detail
+  --json: {ready: bool, checks: [{name, ok, detail}]}
+
+Usage:
+  python tools/wave_preflight.py [--root REPO_ROOT] [--json]
+
+Environment:
+  AESOP_STATE_ROOT: state dir (default: REPO_ROOT/state or ./state)
+  AESOP_ROOT: repo root (default: cwd or inferred from .git)
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+try:
+    from common import get_state_dir, check_heartbeat_staleness
+except ImportError:
+    from tools.common import get_state_dir, check_heartbeat_staleness
+
+try:
+    import halt
+except ImportError:
+    from tools import halt
+
+
+def load_config(root_dir=None):
+    """Load aesop.config.json from root, return dict (or {} if absent/bad)."""
+    if root_dir is None:
+        root_dir = Path.cwd()
+    else:
+        root_dir = Path(root_dir)
+
+    config_file = root_dir / "aesop.config.json"
+    if not config_file.exists():
+        return {}
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def resolve_state_dir(root_dir=None, config=None):
+    """Resolve state dir: AESOP_STATE_ROOT env > config state_root > ./state."""
+    if os.environ.get("AESOP_STATE_ROOT"):
+        return Path(os.environ["AESOP_STATE_ROOT"])
+
+    if root_dir is None:
+        root_dir = Path.cwd()
+    else:
+        root_dir = Path(root_dir)
+
+    if config is None:
+        config = load_config(root_dir)
+
+    state_root = config.get("state_root") if isinstance(config, dict) else None
+    if state_root:
+        p = Path(state_root).expanduser()
+        if not p.is_absolute():
+            p = root_dir / p
+        return p
+
+    return root_dir / "state"
+
+
+def parse_state_md_phase(state_md_path):
+    """Extract phase from STATE.md heading: ## Phase: `<phase>` ...
+
+    Returns:
+        str or None: the phase name, or None if not found/unparseable.
+    """
+    if not state_md_path.exists():
+        return None
+
+    try:
+        content = state_md_path.read_text(encoding="utf-8")
+        # Match: ## Phase: `<phase>` ...
+        match = re.search(r'^##\s+Phase:\s+`([^`]+)`', content, re.MULTILINE)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+
+    return None
+
+
+def parse_orchestrator_status_phase(status_json_path):
+    """Extract phase from orchestrator-status.json.
+
+    Returns:
+        str or None: the phase field, or None if not found/unparseable.
+    """
+    if not status_json_path.exists():
+        return None
+
+    try:
+        data = json.loads(status_json_path.read_text(encoding="utf-8"))
+        return data.get("phase")
+    except Exception:
+        pass
+
+    return None
+
+
+def is_git_repo(root_dir):
+    """Check if root_dir is a git repository."""
+    git_dir = Path(root_dir) / ".git"
+    return git_dir.exists()
+
+
+def get_current_branch(root_dir):
+    """Get current git branch name.
+
+    Returns:
+        str or None: branch name, or None if unable to determine (e.g., not a repo, detached HEAD).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=root_dir,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+            if branch == "HEAD":
+                # Detached HEAD
+                return None
+            return branch
+    except Exception:
+        pass
+    return None
+
+
+def is_working_tree_clean(root_dir):
+    """Check if git working tree is clean (ignores untracked files).
+
+    Returns:
+        (bool, str or None): (is_clean, detail_msg if not clean)
+    """
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=root_dir,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if not output:
+                return True, None
+            # Filter out untracked files (lines starting with ??)
+            # and only consider tracked file changes (M, A, D, etc.)
+            dirty_lines = [
+                line for line in output.split("\n")
+                if line and not line.startswith("??")
+            ]
+            if not dirty_lines:
+                return True, None
+            # List first few dirty files
+            lines = dirty_lines[:3]
+            detail = "uncommitted changes: " + "; ".join(lines)
+            if len(dirty_lines) > 3:
+                detail += f" (+{len(dirty_lines) - 3} more)"
+            return False, detail
+    except Exception:
+        pass
+    return False, "unable to check git status"
+
+
+def can_import_secret_scan():
+    """Check if secret_scan can be imported.
+
+    Returns:
+        (bool, str or None): (importable, detail_msg if not)
+    """
+    try:
+        import secret_scan
+        return True, None
+    except ImportError as e:
+        return False, str(e)
+
+
+def run_checks(root_dir=None, state_dir=None, config=None):
+    """Run all preflight checks.
+
+    Args:
+        root_dir: repo root (inferred from cwd if None)
+        state_dir: state dir (resolved if None)
+        config: aesop.config.json dict (loaded if None)
+
+    Returns:
+        dict: {
+            ready: bool (all checks pass/warn),
+            checks: [
+                {name: str, ok: bool, detail: str},
+                ...
+            ]
+        }
+    """
+    if root_dir is None:
+        root_dir = Path.cwd()
+    else:
+        root_dir = Path(root_dir)
+
+    if config is None:
+        config = load_config(root_dir)
+
+    if state_dir is None:
+        state_dir = resolve_state_dir(root_dir, config)
+    else:
+        state_dir = Path(state_dir)
+
+    checks = []
+
+    # Check 1: Git repo exists
+    is_repo = is_git_repo(root_dir)
+    checks.append({
+        "name": "Git repository",
+        "ok": is_repo,
+        "detail": "repo found" if is_repo else "not a git repo",
+    })
+
+    if not is_repo:
+        # Can't proceed without a repo
+        return {"ready": False, "checks": checks}
+
+    # Check 2: On a feature branch (not main/master)
+    branch = get_current_branch(root_dir)
+    if branch is None:
+        on_feature_branch = False
+        detail = "detached HEAD or unable to determine branch"
+    else:
+        on_feature_branch = branch not in ("main", "master")
+        detail = f"branch={branch}"
+
+    checks.append({
+        "name": "Feature branch (not main/master)",
+        "ok": on_feature_branch,
+        "detail": detail,
+    })
+
+    # Check 3: Working tree clean
+    clean, dirty_detail = is_working_tree_clean(root_dir)
+    checks.append({
+        "name": "Working tree clean",
+        "ok": clean,
+        "detail": dirty_detail or "no uncommitted changes",
+    })
+
+    # Check 4: No .HALT sentinel
+    is_halted = halt.is_halted(state_dir)
+    halt_detail = "not halted"
+    if is_halted:
+        halt_info = halt.get_halt_info(state_dir)
+        halt_detail = halt_info.get("reason", "halted") if halt_info else "halted"
+
+    checks.append({
+        "name": "No .HALT sentinel",
+        "ok": not is_halted,
+        "detail": halt_detail,
+    })
+
+    # Check 5: STATE.md phase vs orchestrator-status.json phase (warn-level)
+    state_md_path = root_dir / "STATE.md"
+    status_json_path = state_dir / "orchestrator-status.json"
+
+    state_phase = parse_state_md_phase(state_md_path)
+    status_phase = parse_orchestrator_status_phase(status_json_path)
+
+    phase_consistent = state_phase == status_phase or state_phase is None or status_phase is None
+
+    phase_detail = f"STATE.md={state_phase}, status.json={status_phase}"
+    if not phase_consistent:
+        phase_detail += " [DRIFT]"
+
+    checks.append({
+        "name": "STATE.md phase consistent with orchestrator-status.json (warning-level)",
+        "ok": phase_consistent,
+        "detail": phase_detail,
+    })
+
+    # Check 6: Heartbeats fresh
+    # Check watchdog heartbeat (200s threshold) and orchestrator heartbeat (300s)
+    heartbeat_details = []
+    all_heartbeats_ok = True
+
+    watchdog_hb = state_dir / ".watchdog-heartbeat"
+    is_stale, age, info = check_heartbeat_staleness(watchdog_hb, 200)
+    hb_name = "watchdog"
+    if is_stale:
+        all_heartbeats_ok = False
+        heartbeat_details.append(f"{hb_name}: {info} (age={age}s)")
+    else:
+        heartbeat_details.append(f"{hb_name}: fresh (age={age}s)")
+
+    orchestrator_hb = state_dir / "heartbeats" / "orchestrator"
+    is_stale, age, info = check_heartbeat_staleness(orchestrator_hb, 300)
+    hb_name = "orchestrator"
+    if is_stale:
+        all_heartbeats_ok = False
+        heartbeat_details.append(f"{hb_name}: {info} (age={age}s)")
+    else:
+        heartbeat_details.append(f"{hb_name}: fresh (age={age}s)")
+
+    checks.append({
+        "name": "Heartbeats fresh",
+        "ok": all_heartbeats_ok,
+        "detail": "; ".join(heartbeat_details),
+    })
+
+    # Check 7: state/tracker.json parses as JSON
+    tracker_json_path = state_dir / "tracker.json"
+    tracker_ok = False
+    tracker_detail = "tracker.json not found"
+
+    if tracker_json_path.exists():
+        try:
+            json.loads(tracker_json_path.read_text(encoding="utf-8"))
+            tracker_ok = True
+            tracker_detail = "valid JSON"
+        except json.JSONDecodeError as e:
+            tracker_detail = f"invalid JSON: {e}"
+        except Exception as e:
+            tracker_detail = f"unreadable: {e}"
+
+    checks.append({
+        "name": "state/tracker.json parses as JSON",
+        "ok": tracker_ok,
+        "detail": tracker_detail,
+    })
+
+    # Check 8: secret_scan importable
+    can_import, import_detail = can_import_secret_scan()
+    checks.append({
+        "name": "secret_scan importable",
+        "ok": can_import,
+        "detail": import_detail or "importable",
+    })
+
+    # Determine overall readiness: pass if all checks ok (warnings don't fail)
+    # For now, all checks must pass (warnings are just flags in detail)
+    all_ok = all(c["ok"] for c in checks)
+
+    return {
+        "ready": all_ok,
+        "checks": checks,
+    }
+
+
+def main(argv=None):
+    """CLI entry point."""
+    argv = sys.argv[1:] if argv is None else argv
+
+    root_dir = None
+    output_format = "text"
+
+    # Parse arguments
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--root":
+            i += 1
+            if i < len(argv):
+                root_dir = argv[i]
+            i += 1
+        elif arg.startswith("--root="):
+            root_dir = arg[len("--root="):]
+            i += 1
+        elif arg == "--json":
+            output_format = "json"
+            i += 1
+        else:
+            print(f"Unknown argument: {arg}", file=sys.stderr)
+            return 2
+
+    if root_dir is None:
+        root_dir = Path.cwd()
+    else:
+        root_dir = Path(root_dir)
+
+    config = load_config(root_dir)
+    state_dir = resolve_state_dir(root_dir, config)
+
+    result = run_checks(root_dir, state_dir, config)
+
+    if output_format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        # Text format: numbered list
+        print("Wave preflight checks:")
+        for i, check in enumerate(result["checks"], 1):
+            status = "PASS" if check["ok"] else "FAIL"
+            print(f"{i}. {check['name']}: {status}")
+            if check["detail"]:
+                print(f"   {check['detail']}")
+
+        if result["ready"]:
+            print("\nPASS: Ready for wave")
+        else:
+            print("\nFAIL: Not ready for wave (see failures above)")
+
+    return 0 if result["ready"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

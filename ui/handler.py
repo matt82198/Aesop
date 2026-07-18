@@ -15,6 +15,7 @@ import csrf
 import sse
 import wave_prs
 import wave_telemetry
+import wave_failure
 import api
 import api.tracker
 import api.submit
@@ -200,6 +201,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_wave_prs()
         elif self.path == "/api/wave/telemetry":
             self.serve_api_wave_telemetry()
+        elif self.path.startswith("/api/wave/failure"):
+            self.serve_api_wave_failure()
         elif self.path == "/api/backlog":
             self.serve_backlog()
         elif self.path == "/api/agents":
@@ -445,6 +448,43 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
             print(f"[serve_api_wave_telemetry] Uncaught exception: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_wave_failure(self):
+        """GET /api/wave/failure?pr=N — CI job logs and failure details for a PR.
+
+        Read-only; shells `gh run view --json jobs` / `gh api .../logs` (short timeout,
+        cached a few seconds). Degrades to {available:false, error:...} when gh is
+        missing or un-authenticated — never a 500 for those.
+
+        Query params:
+          pr: PR number (required)
+        """
+        try:
+            # Parse query string for pr parameter
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            pr_str = params.get('pr', [None])[0]
+
+            if not pr_str or not pr_str.isdigit():
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "pr parameter required and must be a number"}).encode('utf-8'))
+                return
+
+            pr_number = int(pr_str)
+            payload = wave_failure.get_wave_failure(pr_number)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            print(f"[serve_api_wave_failure] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()

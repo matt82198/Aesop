@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """
-ci_merge_wait.py — CI-gated merge helper: wait for PR checks to conclude, then merge.
+ci_merge_wait.py - CI-gated merge helper: wait for PR checks to conclude, then merge.
 
 Polls gh pr view until all status checks conclude (SUCCESS/FAILURE), then merges ONLY
 if all checks are SUCCESS. The gh pr merge call is STRUCTURALLY UNREACHABLE unless the
-status is SUCCESS — this is the whole point (prevents merge-on-CI-failure edge cases).
+status is SUCCESS - this is the whole point (prevents merge-on-CI-failure edge cases).
+
+Fail-closed semantics: empty rollup -> PENDING by default; use --allow-no-checks to treat
+empty rollups as SUCCESS. Use --expect-checks to require specific named checks to be present
+and successful before merging.
 
 Usage:
   python ci_merge_wait.py <PR-number> [--timeout SECONDS] [--poll SECONDS] [--merge-method merge|squash|rebase]
-                          [--dry-run] [--self-test]
+                          [--dry-run] [--allow-no-checks] [--expect-checks NAME1,NAME2,...] [--self-test]
 
 Options:
-  --timeout SECONDS      Max seconds to wait for CI to conclude (default: 3600)
-  --poll SECONDS         Poll interval in seconds (default: 10)
-  --merge-method METHOD  Merge strategy: merge, squash, rebase (default: merge)
-  --dry-run              Skip actual merge, just verify CI status and report what would happen
-  --self-test            Run offline self-test of polling/decision logic (no network, no PR required)
+  --timeout SECONDS              Max seconds to wait for CI (default: 3600)
+  --poll SECONDS                 Poll interval in seconds (default: 10)
+  --merge-method METHOD          Merge strategy: merge, squash, rebase (default: merge)
+  --dry-run                      Skip actual merge, just verify CI status and report what would happen
+  --allow-no-checks              Allow merge when no CI checks present (repos without CI)
+  --expect-checks NAME1,NAME2    Comma-separated list of checks that MUST be present and successful
+  --self-test                    Run offline self-test of polling/decision logic (no network, no PR required)
 
 Exit codes:
   0 = PR merged successfully, dry-run verified, or self-test passed
@@ -73,7 +79,7 @@ def get_pr_status(pr_number):
     return data
 
 
-def check_ci_status(status_rollup):
+def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
     """
     Analyze status check rollup from gh pr view --json statusCheckRollup.
     Handles both CheckRun (status + conclusion) and StatusContext (state) entries.
@@ -95,15 +101,35 @@ def check_ci_status(status_rollup):
 
     GitHub semantics: NEUTRAL and SKIPPED conclusions/states are non-blocking and do not prevent merge.
 
+    Empty rollup (fail-closed):
+      - If allow_no_checks=True: ("success", None)
+      - If allow_no_checks=False: ("pending", None) [fail-closed default]
+
+    Expected checks (if provided):
+      - ALL named checks must be present in rollup
+      - ALL named checks must be in SUCCESS state
+      - If any expected check is missing: ("pending", None)
+      - If any expected check fails: ("failure", check_name)
+
+    Args:
+      status_rollup: list of check dicts from gh pr view
+      allow_no_checks: if True, empty rollup → success; if False (default), empty rollup → pending
+      expected_checks: set of check names that MUST be present and successful
+
     Returns: ("pending", None), ("success", None), or ("failure", check_name)
     """
+    # Fail-closed: empty rollup defaults to PENDING unless explicitly allowed
     if not status_rollup:
-        # No checks (unusual but treat as success)
-        return ("success", None)
+        if allow_no_checks:
+            return ("success", None)
+        else:
+            # Empty rollup: fail-closed to PENDING (window where checks vanished/haven't registered yet)
+            return ("pending", None)
 
     # Collect statuses
     pending_checks = []
     failed_checks = []
+    found_checks = {}  # Map of check name → status
 
     for check in status_rollup:
         check_name = check.get("name", "unknown")
@@ -148,11 +174,27 @@ def check_ci_status(status_rollup):
             # Unrecognized shape (no status or state field) - fail-closed
             check_status = "pending"
 
+        # Record this check's status
+        found_checks[check_name] = check_status
+
         # Collect check status
         if check_status == "failure":
             failed_checks.append(check_name)
         elif check_status == "pending":
             pending_checks.append(check_name)
+
+    # If expected checks provided, verify all are present and successful
+    if expected_checks:
+        for expected_name in expected_checks:
+            if expected_name not in found_checks:
+                # Expected check not found (missing in the window)
+                return ("pending", None)
+            if found_checks[expected_name] == "failure":
+                # Expected check failed
+                return ("failure", expected_name)
+            if found_checks[expected_name] == "pending":
+                # Expected check still pending
+                return ("pending", None)
 
     # Determine overall status
     if failed_checks:
@@ -277,14 +319,21 @@ def run_self_test():
         return False
     print("[OK] Mixed payloads with QUEUED (pending)")
 
-    # Test 9: No checks (treat as success)
+    # Test 9: Empty checks array (fail-closed: should be PENDING by default)
     ci_status, _ = check_ci_status([])
-    if ci_status != "success":
-        print(f"FAIL: Expected 'success' for no checks, got '{ci_status}'")
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' for empty rollup (fail-closed), got '{ci_status}'")
         return False
-    print("[OK] No-checks case: treated as success")
+    print("[OK] Empty rollup case: treated as PENDING (fail-closed)")
 
-    # Test 10: Unrecognized shape (fail-closed: should not succeed)
+    # Test 10: Empty checks array with --allow-no-checks flag (should be SUCCESS)
+    ci_status, _ = check_ci_status([], allow_no_checks=True)
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' for empty rollup with allow_no_checks=True, got '{ci_status}'")
+        return False
+    print("[OK] Empty rollup with allow_no_checks=True: treated as SUCCESS")
+
+    # Test 11: Unrecognized shape (fail-closed: should not succeed)
     unrecognized = [
         {"name": "mystery-check"},
     ]
@@ -294,7 +343,7 @@ def run_self_test():
         return False
     print("[OK] Unrecognized check shape (fail-closed)")
 
-    # Test 11: CheckRun cancelled (counts as failure)
+    # Test 12: CheckRun cancelled (counts as failure)
     cancelled_check = [
         {"name": "test-unit", "status": "COMPLETED", "conclusion": "CANCELLED"},
     ]
@@ -304,7 +353,7 @@ def run_self_test():
         return False
     print("[OK] CheckRun CANCELLED (failure)")
 
-    # Test 12: CheckRun neutral conclusion (non-blocking advisory, should be success)
+    # Test 13: CheckRun neutral conclusion (non-blocking advisory, should be success)
     neutral_check = [
         {"name": "advisory-lint", "status": "COMPLETED", "conclusion": "NEUTRAL"},
     ]
@@ -314,7 +363,7 @@ def run_self_test():
         return False
     print("[OK] CheckRun NEUTRAL conclusion (success, non-blocking)")
 
-    # Test 13: CheckRun skipped conclusion (non-blocking, should be success)
+    # Test 14: CheckRun skipped conclusion (non-blocking, should be success)
     skipped_check = [
         {"name": "optional-test", "status": "COMPLETED", "conclusion": "SKIPPED"},
     ]
@@ -324,7 +373,7 @@ def run_self_test():
         return False
     print("[OK] CheckRun SKIPPED conclusion (success, non-blocking)")
 
-    # Test 14: StatusContext neutral state (non-blocking advisory, should be success)
+    # Test 15: StatusContext neutral state (non-blocking advisory, should be success)
     neutral_state = [
         {"name": "advisory-check", "state": "neutral"},
     ]
@@ -334,7 +383,7 @@ def run_self_test():
         return False
     print("[OK] StatusContext neutral state (success, non-blocking)")
 
-    # Test 15: StatusContext skipped state (non-blocking, should be success)
+    # Test 16: StatusContext skipped state (non-blocking, should be success)
     skipped_state = [
         {"name": "optional-check", "state": "skipped"},
     ]
@@ -344,7 +393,7 @@ def run_self_test():
         return False
     print("[OK] StatusContext skipped state (success, non-blocking)")
 
-    # Test 16: Fabricated unknown state (fail-closed to pending)
+    # Test 17: Fabricated unknown state (fail-closed to pending)
     unknown_state = [
         {"name": "mystery-state", "state": "fabricated_unknown_state"},
     ]
@@ -353,6 +402,80 @@ def run_self_test():
         print(f"FAIL: Expected 'pending' for unknown state, got '{ci_status}'")
         return False
     print("[OK] Fabricated unknown state (pending, fail-closed)")
+
+    # Test 18: Expected checks - all present and successful
+    rollup_with_expected = [
+        {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
+        {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},
+        {"name": "lint", "status": "COMPLETED", "conclusion": None},
+    ]
+    ci_status, _ = check_ci_status(
+        rollup_with_expected,
+        expected_checks={"unit-tests", "integration-tests"}
+    )
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' with expected checks present, got '{ci_status}'")
+        return False
+    print("[OK] Expected checks all present and successful")
+
+    # Test 19: Expected checks - one missing (should be PENDING)
+    rollup_missing_expected = [
+        {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
+        {"name": "lint", "status": "COMPLETED", "conclusion": None},
+    ]
+    ci_status, _ = check_ci_status(
+        rollup_missing_expected,
+        expected_checks={"unit-tests", "integration-tests"}
+    )
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' with missing expected check, got '{ci_status}'")
+        return False
+    print("[OK] Missing expected check (window transition): returns PENDING")
+
+    # Test 20: Expected checks - one failed (should be FAILURE)
+    rollup_failed_expected = [
+        {"name": "unit-tests", "status": "COMPLETED", "conclusion": "FAILURE"},
+        {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},
+    ]
+    ci_status, failed_check = check_ci_status(
+        rollup_failed_expected,
+        expected_checks={"unit-tests", "integration-tests"}
+    )
+    if ci_status != "failure" or failed_check != "unit-tests":
+        print(f"FAIL: Expected 'failure' with expected check failed, got '{ci_status}' / '{failed_check}'")
+        return False
+    print("[OK] Expected check failed: returns FAILURE")
+
+    # Test 21: Superseded-run window simulation (old checks vanish, new pending appear)
+    # First: old run had checks that completed successfully
+    old_run_checks = [
+        {"name": "build", "status": "COMPLETED", "conclusion": None},
+        {"name": "test", "status": "COMPLETED", "conclusion": None},
+    ]
+    ci_status, _ = check_ci_status(old_run_checks)
+    if ci_status != "success":
+        print(f"FAIL: Old run checks should be success, got '{ci_status}'")
+        return False
+
+    # Second: transition window where old checks vanished and new run hasn't registered yet
+    # Empty rollup should return PENDING (fail-closed)
+    empty_window = []
+    ci_status, _ = check_ci_status(empty_window)
+    if ci_status != "pending":
+        print(f"FAIL: Transition window (empty rollup) should be PENDING (fail-closed), got '{ci_status}'")
+        return False
+
+    # Third: new run appears with pending checks
+    new_run_checks = [
+        {"name": "build", "status": "IN_PROGRESS", "conclusion": None},
+        {"name": "test", "status": "QUEUED", "conclusion": None},
+    ]
+    ci_status, _ = check_ci_status(new_run_checks)
+    if ci_status != "pending":
+        print(f"FAIL: New run pending checks should be PENDING, got '{ci_status}'")
+        return False
+
+    print("[OK] Superseded-run window simulation: transitions correctly")
 
     print("\nAll self-tests passed!")
     return True
@@ -394,6 +517,17 @@ def main():
         help="Skip actual merge, just verify CI status and report what would happen"
     )
     parser.add_argument(
+        "--allow-no-checks",
+        action="store_true",
+        help="Allow merge when no CI checks present (repos without CI)"
+    )
+    parser.add_argument(
+        "--expect-checks",
+        type=str,
+        default=None,
+        help="Comma-separated list of checks that MUST be present and successful"
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="Run offline self-test of polling/decision logic (no network)"
@@ -421,6 +555,11 @@ def main():
     if args.timeout <= 0 or args.poll <= 0:
         print("ERROR: timeout and poll must be positive")
         sys.exit(1)
+
+    # Parse expected checks
+    expected_checks = None
+    if args.expect_checks:
+        expected_checks = set(c.strip() for c in args.expect_checks.split(",") if c.strip())
 
     # Fetch initial PR status
     print(f"Checking PR #{args.pr_number} status...")
@@ -452,7 +591,11 @@ def main():
             sys.exit(1)
 
         status_rollup = status.get("statusCheckRollup", [])
-        ci_status, failed_check = check_ci_status(status_rollup)
+        ci_status, failed_check = check_ci_status(
+            status_rollup,
+            allow_no_checks=args.allow_no_checks,
+            expected_checks=expected_checks
+        )
 
         if ci_status == "failure":
             print(f"CI FAILED: {failed_check}")
@@ -466,7 +609,11 @@ def main():
                 sys.exit(1)
 
             final_rollup = final_check.get("statusCheckRollup", [])
-            final_ci_status, final_failed = check_ci_status(final_rollup)
+            final_ci_status, final_failed = check_ci_status(
+                final_rollup,
+                allow_no_checks=args.allow_no_checks,
+                expected_checks=expected_checks
+            )
 
             if final_ci_status != "success":
                 print(f"CI STATUS CHANGED: {final_failed}")

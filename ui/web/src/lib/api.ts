@@ -15,6 +15,7 @@ import type {
   TrackerItem,
   SubmitResponse,
   WavePRBoardData,
+  WaveFailureData,
 } from './types';
 
 let _csrfTokenCache: string | null = null;
@@ -169,6 +170,14 @@ export async function fetchCost(): Promise<CostSummary> {
  */
 export async function fetchWavePRs(): Promise<WavePRBoardData> {
   return typedFetch('/api/wave/prs', { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/failure?pr=N — CI job logs and failure details for a PR
+ */
+export async function fetchWaveFailure(prNumber: number): Promise<WaveFailureData> {
+  const url = `/api/wave/failure?pr=${encodeURIComponent(String(prNumber))}`;
+  return typedFetch(url, { method: 'GET', requireCSRF: false });
 }
 
 /**

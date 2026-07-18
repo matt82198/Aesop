@@ -142,6 +142,65 @@ All tools are **strictly read-only**: no state mutations, no file writes, no she
 - Reports **token counts only** — no invented dollar figures.
 - Gracefully handles missing or malformed lines (skips with no error).
 
+### fleet_cost_by_wave
+
+**Description**: Get per-wave token usage totals from the fleet outcomes ledger, grouped by the `wave` column.
+
+**Input**: No arguments.
+
+**Output** (JSON):
+```json
+{
+  "absent": <bool>,
+  "by_wave": {
+    "wave-1": {
+      "tokens_in": <int>,
+      "tokens_out": <int>,
+      "total_tokens": <int>,
+      "count": <int>
+    },
+    "wave-2": { ... },
+    ...
+  },
+  "total_tokens_in": <int>,
+  "total_tokens_out": <int>
+}
+```
+
+**Design notes**:
+- Parses markdown table rows from `state/ledger/OUTCOMES-LEDGER.md`.
+- Groups by the 9th column (wave).
+- Reports **token counts only** — no invented dollar figures.
+- Gracefully handles missing or malformed rows (skips with no error).
+- Returns `absent: true` if ledger file doesn't exist.
+
+### fleet_budget
+
+**Description**: Get cost budget status: configured ceiling from `aesop.config.json`, current token spend from ledger, remaining headroom, and halt status.
+
+**Input**: No arguments.
+
+**Output** (JSON):
+```json
+{
+  "period": "wave",
+  "ceiling": <int or null>,
+  "spent": <int>,
+  "remaining": <int or null>,
+  "halted": <bool>,
+  "halt_reason": <string or null>,
+  "halt_timestamp": <string or null>
+}
+```
+
+**Design notes**:
+- Reads `config.limits.max_wave_tokens` from `aesop.config.json` (null = unconfigured/disabled).
+- Sums all token rows from `state/ledger/OUTCOMES-LEDGER.md` to compute `spent`.
+- `remaining` = max(0, ceiling - spent) if ceiling is configured, null otherwise.
+- Checks for the `.HALT` sentinel at `state/.HALT`; if present, reports halt reason and timestamp.
+- Reports **token counts only** — no dollar figures.
+- Gracefully handles missing config or ledger file.
+
 ## MCP Integration
 
 ### Claude Code (claude.json)

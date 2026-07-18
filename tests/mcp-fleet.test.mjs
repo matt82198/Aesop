@@ -154,14 +154,23 @@ async function runTests() {
   // Create alerts log
   fs.writeFileSync(join(stateRoot, 'SECURITY-ALERTS.log'), 'ALERT: test alert 1\nNOTE: resolved false positive\nALERT: test alert 2\n');
 
-  // Create ledger with sample data
-  const ledgerContent = `| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict |
-|--------|------------|-------|--------------|-----------|------------|--------|
-| 2024-01-01T10:00:00 | Agent | claude-haiku-4 | 30 | 500 | 250 | OK |
-| 2024-01-01T10:05:00 | Agent | claude-opus | 60 | 1000 | 500 | OK |
-| 2024-01-01T10:10:00 | Agent | claude-haiku-4 | 25 | 400 | 200 | OK |
+  // Create ledger with sample data (with phase and wave columns)
+  const ledgerContent = `| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |
+|--------|------------|-------|--------------|-----------|------------|--------|-------|------|
+| 2024-01-01T10:00:00 | Agent | claude-haiku-4 | 30 | 500 | 250 | OK | main | wave-1 |
+| 2024-01-01T10:05:00 | Agent | claude-opus | 60 | 1000 | 500 | OK | main | wave-1 |
+| 2024-01-01T10:10:00 | Agent | claude-haiku-4 | 25 | 400 | 200 | OK | main | wave-2 |
+| 2024-01-02T10:15:00 | Agent | claude-opus | 45 | 800 | 400 | OK | main | wave-2 |
 `;
   fs.writeFileSync(join(ledgerDir, 'OUTCOMES-LEDGER.md'), ledgerContent);
+
+  // Create aesop.config.json with cost ceiling
+  const config = {
+    limits: {
+      max_wave_tokens: 5000
+    }
+  };
+  fs.writeFileSync(join(fixtureRoot, 'aesop.config.json'), JSON.stringify(config, null, 2));
 
   // Spawn server with fixture root
   console.log('Spawning server...');
@@ -209,11 +218,11 @@ async function runTests() {
     console.log('Test 2: tools/list...');
     const listResp = await client.request('tools/list', {});
 
-    if (listResp.result && Array.isArray(listResp.result.tools) && listResp.result.tools.length === 4) {
+    if (listResp.result && Array.isArray(listResp.result.tools) && listResp.result.tools.length === 6) {
       const toolNames = listResp.result.tools.map(t => t.name).sort();
-      const expected = ['fleet_agents', 'fleet_cost', 'fleet_status', 'fleet_tracker'];
+      const expected = ['fleet_agents', 'fleet_budget', 'fleet_cost', 'fleet_cost_by_wave', 'fleet_status', 'fleet_tracker'];
       if (JSON.stringify(toolNames) === JSON.stringify(expected)) {
-        console.log(`✓ tools/list succeeded, found 4 tools: ${toolNames.join(', ')}\n`);
+        console.log(`✓ tools/list succeeded, found 6 tools: ${toolNames.join(', ')}\n`);
         testsPassed++;
       } else {
         console.log(`✗ Unexpected tools: ${toolNames.join(', ')}\n`);
@@ -305,8 +314,95 @@ async function runTests() {
       testsFailed++;
     }
 
-    // Test 6: Read-only verification (verify no mutations after calls)
-    console.log('Test 6: Read-only verification...');
+    // Test 6: fleet_cost_by_wave call
+    console.log('Test 6: fleet_cost_by_wave tool call...');
+    const costByWaveResp = await client.request('tools/call', {
+      name: 'fleet_cost_by_wave',
+      arguments: {}
+    });
+
+    if (costByWaveResp.result && costByWaveResp.result.content) {
+      const content = costByWaveResp.result.content[0];
+      if (content.type === 'text') {
+        const costByWaveData = JSON.parse(content.text);
+        if (costByWaveData.by_wave && costByWaveData.by_wave['wave-1'] && costByWaveData.by_wave['wave-2']) {
+          console.log(`✓ fleet_cost_by_wave succeeded, found data for ${Object.keys(costByWaveData.by_wave).length} waves\n`);
+          testsPassed++;
+        } else {
+          console.log('✗ Wave cost data unexpected\n');
+          testsFailed++;
+        }
+      } else {
+        console.log('✗ Content type unexpected\n');
+        testsFailed++;
+      }
+    } else {
+      console.log('✗ fleet_cost_by_wave failed\n');
+      testsFailed++;
+    }
+
+    // Test 7: fleet_budget call
+    console.log('Test 7: fleet_budget tool call...');
+    const budgetResp = await client.request('tools/call', {
+      name: 'fleet_budget',
+      arguments: {}
+    });
+
+    if (budgetResp.result && budgetResp.result.content) {
+      const content = budgetResp.result.content[0];
+      if (content.type === 'text') {
+        const budgetData = JSON.parse(content.text);
+        if (budgetData.ceiling === 5000 && budgetData.spent === 4050 && budgetData.remaining === 950) {
+          console.log(`✓ fleet_budget succeeded, ceiling=${budgetData.ceiling}, spent=${budgetData.spent}, remaining=${budgetData.remaining}\n`);
+          testsPassed++;
+        } else {
+          console.log(`✗ Budget data unexpected: ceiling=${budgetData.ceiling}, spent=${budgetData.spent}, remaining=${budgetData.remaining}\n`);
+          testsFailed++;
+        }
+      } else {
+        console.log('✗ Content type unexpected\n');
+        testsFailed++;
+      }
+    } else {
+      console.log('✗ fleet_budget failed\n');
+      testsFailed++;
+    }
+
+    // Test 8: fleet_budget with HALT sentinel
+    console.log('Test 8: fleet_budget halt status...');
+    const haltSentinel = {
+      reason: 'cost ceiling exceeded',
+      timestamp: '2024-01-02T10:20:00Z'
+    };
+    fs.writeFileSync(join(stateRoot, '.HALT'), JSON.stringify(haltSentinel, null, 2));
+
+    const budgetHaltResp = await client.request('tools/call', {
+      name: 'fleet_budget',
+      arguments: {}
+    });
+
+    if (budgetHaltResp.result && budgetHaltResp.result.content) {
+      const content = budgetHaltResp.result.content[0];
+      if (content.type === 'text') {
+        const budgetHaltData = JSON.parse(content.text);
+        if (budgetHaltData.halted === true && budgetHaltData.halt_reason === 'cost ceiling exceeded') {
+          console.log(`✓ fleet_budget halt status succeeded, halted=${budgetHaltData.halted}\n`);
+          testsPassed++;
+        } else {
+          console.log(`✗ Halt status unexpected: halted=${budgetHaltData.halted}, reason=${budgetHaltData.halt_reason}\n`);
+          testsFailed++;
+        }
+      } else {
+        console.log('✗ Content type unexpected\n');
+        testsFailed++;
+      }
+    } else {
+      console.log('✗ fleet_budget halt check failed\n');
+      testsFailed++;
+    }
+
+    // Test 9: Read-only verification (verify no mutations after calls)
+    console.log('Test 9: Read-only verification...');
     const trackerMtime1 = fs.statSync(join(stateRoot, 'tracker.json')).mtimeMs;
     await client.request('tools/call', {
       name: 'fleet_tracker',

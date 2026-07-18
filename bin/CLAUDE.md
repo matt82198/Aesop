@@ -17,6 +17,7 @@ cli.js dispatches runtime management subcommands to `tools/{subcommand}.js`:
 - **`aesop watch`** (or `node bin/cli.js watch`) — Launch the watchdog daemon; spawns `daemons/run-watchdog.sh` for continuous fleet monitoring.
 - **`aesop dash`** (or `node bin/cli.js dash`) — Launch the web dashboard; spawns `python ui/serve.py` to serve realtime fleet status at localhost:8770 (default).
 - **`aesop status`** (or `node bin/cli.js status`) — One-shot fleet status snapshot; displays heartbeats, dashboard port, and git branch status.
+- **`aesop fleet`** (or `node bin/cli.js fleet`) — One-shot fleet snapshot in JSON; displays active agents, heartbeat ages, tracker lane counts, and orchestrator status. Node STDLIB only; gracefully degrades with `unavailable: <why>` for missing state files.
 
 ## What gets copied
 
