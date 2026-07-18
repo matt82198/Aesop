@@ -126,7 +126,7 @@ function checkPort8770() {
       if (!resolved) {
         resolved = true;
         cleanup();
-        resolve({ passed: false, hint: 'Port 8770 is in use' });
+        resolve({ passed: false, hint: 'Port 8770 in use — is another fleet running? Update dashboard.port in aesop.config.json' });
       }
     });
 
