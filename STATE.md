@@ -22,23 +22,25 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `wave-rc.3` (2026-07-17, current)
-**0.1.0 STABLE promoted to npm `@latest` 2026-07-17** (PR #187, main `ce8b21f`) — from
-`0.1.0-rc.1` (npm trusted publishing via OIDC). Waves 25–rc.1 shipped the **credibility, safety,
-and release-readiness** pillars; relicensed PolyForm Strict 1.0.0 (SOURCE-AVAILABLE).
-**Wave-rc.2 OPEN 2026-07-17**: delta audit (11 lenses, primer-aware, surface 53212d9..HEAD)
-running; scope = 5 honest residuals below + audit findings, PM-ranked before dispatch.
-Session arc (verified, measured, live):
-- Opus-VERIFIED audit (wave-25, PR #166): 18/18 findings confirmed, 0 hallucinations, 16 fixes, no P0/P1.
-- Kill-switch built + wired + PROVEN (wave-26–27, PRs #167–#168, claude-config): halt.py, cost_ceiling.py,
-  gate in dispatch template, tested aborting a real wave (0 workers spawned; clean recovery).
-- Benchmark MEASURED (judgment v2): **Haiku 39/39, Opus 38/39** across 39 judgment tasks (~1/3 cost for Haiku);
-  extraction suite (12/12 tie); proven-sufficient evidence.
-- State reconcile primitive (wave-28, PR #169): STATE.md↔state_store sync, git-authoritative, disjoint-confirmed.
-- CI gates hardened: repro-from-clean-clone proven; docs-only deadlock fixed (wave-29, PR #171: ci runs full suite).
-- Dashboard & UI verified live (browser-proven in ui/web): Wave PR Board + Agent Inspector, SSE heartbeat working.
-- P1 credential leak fixed; npm package slimmed to ~409 kB; autonomous-SWE milestone docs shipped.
-- License audited, relicensed to PolyForm Strict (noncommercial, no-modify, SOURCE-AVAILABLE).
+## Phase: `stable-0.1.1-on-main` (2026-07-18, current)
+**0.1.1 on main** (npm publish USER-GATED: `gh release create v0.1.1 --notes-file RELEASE-NOTES.md`);
+0.1.0 live on npm @latest. This session shipped rc.2->rc.8 + integration train, then the two pillars:
+- **Scope-minification** (PR #196, user #1): one CLAUDE.md per Haiku task, root = pure map, adversarially lossless-verified.
+- **Center-verification** (PR #202): the answer to the "over-engineered shell, hoped-for center" critique —
+  adversarialReview template phase (break-it-vs-spec per shipped item), mutation_test.py (flags tautological
+  tests), defect_escape.py (first-try-green as telemetry), hidden-case coding bench. MEASURED: first-try-green 43%,
+  0 logic bugs caught by authoring-Haiku's own tests, 6 P1 shipped green -> "green = assembles+passes-own-tests, NOT correct".
+Also this session: accumulated rc.4-rc.8 audit (adversarial-verified), first-hour adopter fixes, dispatch-visibility
+panel, claudemd_lint + portability CI gates, durable scheduled-task monitor (root-caused the always-dying loop),
+ci_merge_wait STALE-bug fix. Org waves: GitHub/portfolio/Medium all current.
+
+## NEXT STEPS
+- Flip `adversarialReview: true` as the standing dispatch default (dogfood it on the next wave).
+- Adversarial-found P2s queued (plans/audit-rc4-rc8-backlog.md): fleet_ledger timestamp-injection, wave_preflight/common.py
+  future-date fresh-forever, test-hygiene root cause (tests writing mangled cwd paths).
+- Multi-tool portability (spike, plans/spike-multitool-portability.md): 5-op AgentDriver; open-models REQUIRE the
+  verification layer first. 0.2.0 initiative.
+- npm publish 0.1.1 (USER-GATED).
 
 ## Phase history (collapsed)
 - `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/

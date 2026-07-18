@@ -163,3 +163,84 @@ test('FIX 2: timebox line only added when agentTimeboxNote is set (backward comp
   assert.ok(src.includes('if (!TIMEBOX_MINUTES) return'), 'conditional return for absent timebox missing');
   assert.ok(src.includes('return `\\n'), 'conditional newline prefix missing');
 });
+
+// ============================================================================
+// CENTER-VERIFICATION: Adversarial Review Phase
+// ============================================================================
+test('adversarialReview parameter documented in args', () => {
+  assert.ok(src.includes('adversarialReview: boolean | null'), 'adversarialReview parameter not documented');
+  assert.ok(src.includes('when truthy, after integration green'), 'trigger condition not documented');
+});
+
+test('adversarialReview block exists and is gated on args', () => {
+  assert.ok(src.includes('const ADVERSARIAL_REVIEW = !!A.adversarialReview'), 'ADVERSARIAL_REVIEW constant missing');
+  assert.ok(src.includes('if (ADVERSARIAL_REVIEW && v && v.green)'), 'gate condition missing');
+  assert.ok(src.includes("phase('AdversarialReview')"), 'AdversarialReview phase missing');
+});
+
+test('adversarialReview uses refute-oriented prompt', () => {
+  assert.ok(src.includes('CONTRACT REFUTATION review'), 'REFUTATION prompt missing');
+  assert.ok(src.includes('Try to construct a concrete input, scenario'), 'refutation strategy missing');
+  assert.ok(src.includes('VIOLATES its stated contract'), 'violation keyword missing');
+  assert.ok(src.includes('You are NOT running tests'), 'test-warning missing');
+  assert.ok(src.includes('reason about the specification and the code'), 'reasoning directive missing');
+});
+
+test('adversarialReview spawns reviewer agents in parallel per item', () => {
+  assert.ok(src.includes('await parallel('), 'parallel call missing in review phase');
+  const reviewSection = src.substring(src.indexOf('if (ADVERSARIAL_REVIEW'), src.indexOf("phase('Report')"));
+  assert.ok(reviewSection.includes('(built || []).filter(Boolean).map'), 'item iteration missing from review phase');
+  assert.ok(reviewSection.includes("model: 'haiku'"), 'haiku model not specified for reviewers');
+});
+
+test('adversarialReview collects contract findings for holds=false items', () => {
+  assert.ok(src.includes('contractFindings'), 'contractFindings tracking missing');
+  assert.ok(src.includes('if (!r.holds)'), 'holds check missing');
+  assert.ok(src.includes('contractFindings.push'), 'findings collection missing');
+  assert.ok(src.includes('breakingScenario'), 'breakingScenario field missing');
+});
+
+test('adversarialReview result schema has holds and breakingScenario fields', () => {
+  const reviewSection = src.substring(src.indexOf('if (ADVERSARIAL_REVIEW'), src.indexOf("phase('Report')"));
+  assert.ok(reviewSection.includes("holds: { type: 'boolean' }"), 'holds schema missing');
+  assert.ok(reviewSection.includes("breakingScenario: { type: 'string' }"), 'breakingScenario schema missing');
+  assert.ok(reviewSection.includes("required: ['slug', 'holds', 'breakingScenario']"), 'required fields not listed');
+});
+
+test('adversarialReview tokens tracked separately', () => {
+  assert.ok(src.includes('const reviewStart = budget.spent()'), 'review token tracking start missing');
+  assert.ok(src.includes('adversarialReviewOut = budget.spent() - reviewStart'), 'review token tracking end missing');
+  assert.ok(src.includes('adversarialReviewOut'), 'adversarialReviewOut variable missing');
+});
+
+test('contractFindings included in report result', () => {
+  const reportSection = src.substring(src.indexOf("const result = {"), src.indexOf('log(`DONE'));
+  assert.ok(reportSection.includes('contractFindings:'), 'contractFindings field missing from result');
+  assert.ok(reportSection.includes('contractFindings.length > 0 ? contractFindings : null'), 'null-when-empty logic missing');
+});
+
+test('contractFindings added to all early-return paths (ceiling/brake aborts)', () => {
+  // Check that ceiling-exceeded returns include contractFindings
+  const ceilingReturns = src.match(/contractFindings: (contractFindings\.length > 0 \? contractFindings : null|null)/g);
+  assert.ok(ceilingReturns && ceilingReturns.length >= 3, 'contractFindings not in all return paths (expected >=3 occurrences)');
+});
+
+test('adversarialReview gated: absent args.adversarialReview => no review phase', () => {
+  // Static check: when adversarialReview is absent/falsy, the phase should not run
+  assert.ok(src.includes('if (ADVERSARIAL_REVIEW && v && v.green)'), 'gating condition missing');
+  // Verify the gate uses the ADVERSARIAL_REVIEW constant, not directly checking args
+  assert.ok(src.includes('const ADVERSARIAL_REVIEW = !!A.adversarialReview'), 'ADVERSARIAL_REVIEW constant not used for gate');
+});
+
+test('adversarialReview backward-compatible: all existing assertions still pass', () => {
+  // Spot-check a few key existing assertions to ensure nothing was broken
+  assert.match(src, /export const meta = \{/);
+  assert.ok(src.includes('BUILD'), 'BUILD phase description missing');
+  assert.ok(src.includes('await parallel('), 'parallel utility missing');
+  assert.ok(!src.includes('Date.now('), 'Date.now() not allowed');
+  assert.ok(!src.includes('Math.random('), 'Math.random() not allowed');
+});
+
+test('adversarialReview log message includes contract violations count', () => {
+  assert.ok(src.includes('contractViolations=${contractFindings.length}'), 'contract violations count missing from log');
+});

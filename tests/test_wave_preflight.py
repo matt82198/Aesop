@@ -143,8 +143,14 @@ class PrefightTestBase(unittest.TestCase):
         else:
             tracker_json.write_text("{ invalid json", encoding="utf-8")
 
-    def _setup_heartbeats(self, fresh=True):
-        """Set up heartbeat files and orchestrator-status.json (fresh or stale)."""
+    def _setup_heartbeats(self, fresh=True, phase=None):
+        """Set up heartbeat files and orchestrator-status.json (fresh or stale).
+
+        Args:
+            fresh: If True, heartbeats are current; if False, they are 400s old
+            phase: Phase value for orchestrator-status.json (default "test").
+                   If orchestrator-status.json already exists, its phase is preserved.
+        """
         hb_dir = self.state_dir / "heartbeats"
         hb_dir.mkdir(parents=True, exist_ok=True)
 
@@ -161,14 +167,24 @@ class PrefightTestBase(unittest.TestCase):
         watchdog_hb.write_text(str(now_int) + "\n", encoding="utf-8")
 
         # Orchestrator-status.json (uses updated_at field for freshness check)
+        # Preserve existing phase if orchestrator-status.json already exists
         orch_status = self.state_dir / "orchestrator-status.json"
+        if orch_status.exists():
+            try:
+                existing = json.loads(orch_status.read_text(encoding="utf-8"))
+                phase = existing.get("phase", phase or "test")
+            except Exception:
+                phase = phase or "test"
+        else:
+            phase = phase or "test"
+
         now_iso = datetime.datetime.fromtimestamp(now_ts, tz=datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         orch_status.write_text(
             json.dumps({
                 "id": "main",
                 "role": "orchestrator",
                 "activity": "test",
-                "phase": "test",
+                "phase": phase,
                 "updated_at": now_iso,
             }) + "\n",
             encoding="utf-8"
@@ -336,6 +352,9 @@ class TestPhaseConsistency(PrefightTestBase):
         self.assertIn("STATE.md phase consistent", result.stdout)
         # Should show WARN for drift
         self.assertIn("[WARN: drift detected]", result.stdout)
+        # Should show both values in the detail
+        self.assertIn("STATE.md=wave-rc.2", result.stdout)
+        self.assertIn("status.json=wave-rc.3", result.stdout)
         # But should still pass (phase drift is warning-level)
         self.assertEqual(result.returncode, 0)
 
@@ -347,6 +366,67 @@ class TestPhaseConsistency(PrefightTestBase):
         lines = result.stdout.split("\n")
         phase_line = [l for l in lines if "STATE.md phase consistent" in l][0]
         self.assertIn("PASS", phase_line)
+
+    def test_phase_drift_detail_shows_both_values(self):
+        """Detail message should include both STATE.md and status.json phase values."""
+        self._setup_state_md("wave-001")
+        self._setup_orchestrator_status("wave-002")
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
+        result = self._run_preflight("--json")
+        data = json.loads(result.stdout)
+        phase_check = [c for c in data["checks"] if "phase consistent" in c["name"]][0]
+        self.assertTrue(phase_check["ok"])  # Warning doesn't fail the check
+        self.assertIn("STATE.md=wave-001", phase_check["detail"])
+        self.assertIn("status.json=wave-002", phase_check["detail"])
+        self.assertIn("WARN: drift detected", phase_check["detail"])
+
+    def test_phase_matching_no_warn(self):
+        """Matching phases should not show warning."""
+        self._setup_state_md("wave-001")
+        self._setup_orchestrator_status("wave-001")
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
+        result = self._run_preflight()
+        self.assertIn("STATE.md phase consistent", result.stdout)
+        self.assertNotIn("WARN: drift detected", result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+    def test_state_md_only_no_warn(self):
+        """Only STATE.md present (no phase in status.json) should not warn."""
+        self._setup_state_md("wave-001")
+        # Create orchestrator-status.json WITHOUT a phase field
+        self._setup_tracker_json(valid=True)
+        now_ts = time.time()
+        now_int = int(now_ts)
+        (self.state_dir / ".watchdog-heartbeat").write_text(str(now_int) + "\n", encoding="utf-8")
+        # orchestrator-status.json with no phase field (parse will return None)
+        import datetime
+        now_iso = datetime.datetime.fromtimestamp(now_ts, tz=datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        (self.state_dir / "orchestrator-status.json").write_text(
+            json.dumps({
+                "id": "main",
+                "role": "orchestrator",
+                "activity": "test",
+                "updated_at": now_iso,
+            }) + "\n",
+            encoding="utf-8"
+        )
+        result = self._run_preflight()
+        # Should not warn when status.json has no phase field
+        self.assertNotIn("WARN: drift detected", result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+    def test_status_json_only_no_warn(self):
+        """Only status.json present (no STATE.md) should not warn."""
+        # STATE.md missing
+        self._setup_orchestrator_status("wave-001")
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
+        result = self._run_preflight()
+        # Should not warn when one file is missing
+        self.assertNotIn("WARN: drift detected", result.stdout)
+        self.assertEqual(result.returncode, 0)
 
 
 class TestHeartbeatFreshness(PrefightTestBase):

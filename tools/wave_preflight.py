@@ -332,22 +332,27 @@ def run_checks(root_dir=None, state_dir=None, config=None):
     })
 
     # Check 5: STATE.md phase vs orchestrator-status.json phase (warn-level)
-    # This is a warning-level check: phase drift is reported but does not block the wave
+    # Genuine comparison: only warn if both phases exist and differ
     state_md_path = root_dir / "STATE.md"
     status_json_path = state_dir / "orchestrator-status.json"
 
     state_phase = parse_state_md_phase(state_md_path)
     status_phase = parse_orchestrator_status_phase(status_json_path)
 
-    phase_consistent = state_phase == status_phase or state_phase is None or status_phase is None
-
-    phase_detail = f"STATE.md={state_phase}, status.json={status_phase}"
-    if not phase_consistent:
-        phase_detail += " [WARN: drift detected]"
-        # Phase drift is a warning, not a blocker — ok=True to not fail the wave
-        phase_ok = True
+    # Determine phase drift: only if both are defined and differ
+    if state_phase is not None and status_phase is not None:
+        if state_phase != status_phase:
+            # Drift detected: both phases exist but differ
+            phase_detail = f"STATE.md={state_phase}, status.json={status_phase} [WARN: drift detected]"
+        else:
+            # Phases match
+            phase_detail = f"STATE.md={state_phase}, status.json={status_phase}"
     else:
-        phase_ok = True
+        # One or both phases missing (not yet ready or not applicable)
+        phase_detail = f"STATE.md={state_phase}, status.json={status_phase}"
+
+    # Phase drift is warning-level: never blocks the wave
+    phase_ok = True
 
     checks.append({
         "name": "STATE.md phase consistent with orchestrator-status.json (warning-level)",
