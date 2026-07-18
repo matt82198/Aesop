@@ -38,7 +38,7 @@
 
 **wave_telemetry.py** — Wave telemetry: `get_wave_telemetry()` extracts current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
 
-**wave_dispatch.py** — Wave dispatch (live per-agent visibility): `get_wave_dispatch()` reads agent transcripts from `~/.claude/projects/*/memory/agent-*.jsonl`, infers phase (dispatch/thinking/tool-use/stall/done) from transcript tail, estimates tokens from file size (~4.5 bytes per token), and computes activity age from mtime. Returns per-agent rows with phase badge, age, token count, and warnings (inactive >5min, stalled >10min). Degrades to `{available:false}` when no agents found. Polls every 2-3s in Activity view (poll-on-visible, not SSE).
+**wave_dispatch.py** — Wave dispatch (live per-agent visibility): `get_wave_dispatch()` reads agent transcripts from `~/.claude/projects/*/memory/agent-*.jsonl`, infers phase (dispatch/thinking/tool-use/stall/done) from transcript tail, estimates tokens from file size (~4.5 bytes per token), and computes activity age from mtime. Returns per-agent rows with phase badge, age, token count, and warnings (inactive >5min, stalled >10min). Degrades to `{available:false}` when no agents found. Polls every 2-3s in Activity view.
 
 **wave_failure.py** — Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
@@ -76,10 +76,11 @@
 - `GET /api/agent?id=<id>` — Agent detail: dispatch prompt + ~40-line secret-redacted transcript tail; id-safety gates reject path-traversal.
 - `GET /api/tracker` — List tracker items; query params: `status`, `priority` (optional filters).
 - `GET /agent?id=<id>` — Agent dispatch prompt (deprecated; use `/api/agent?` instead).
-- `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup/mergeable/age/top blocker. Cached ~5s; degrades `{available:false, error}`. NOT an SSE section (gh too slow for collector tick). Set `AESOP_GH_BIN` to override gh binary.
-- `GET /api/wave/telemetry` — Wave telemetry: current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics. Reads state at call time; degrades on missing files. NOT SSE.
-- `GET /api/wave/dispatch` — Wave dispatch (live per-agent phase visibility): per-agent id/phase/age/tokens from transcript analysis. Polled by React Activity view every 2-3s (poll-on-visible, not SSE). Degrades `{available:false}` when no active workflow. Reads at call time.
-- `GET /api/wave/failure?pr=N` — Wave PR failure drill-down: CI jobs for latest run on PR branch, with ~100-line log excerpts for failing jobs. Cached ~5s per PR; degrades `{available:false, error}`. NOT SSE. Set `AESOP_GH_BIN` to override gh binary.
+- `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup/mergeable/age/top blocker. Cached ~5s; degrades `{available:false, error}`.
+- `GET /api/wave/telemetry` — Wave telemetry: current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics. Reads state at call time; degrades on missing files.
+- `GET /api/wave/dispatch` — Wave dispatch (live per-agent phase visibility): per-agent id/phase/age/tokens from transcript analysis. Polled by React Activity view every 2-3s. Degrades `{available:false}` when no active workflow. Reads at call time.
+- `GET /api/wave/failure?pr=N` — Wave PR failure drill-down: CI jobs for latest run on PR branch, with ~100-line log excerpts for failing jobs. Cached ~5s per PR; degrades `{available:false, error}`.
+- *(All `/api/wave/*` routes are read-only, read state at call time, and are polled not SSE; gh-backed routes honor `AESOP_GH_BIN`.)*
 - `GET /events` — Server-Sent Events stream (6 sections: data, backlog, agents, tracker, status, cost). Keepalive every ~15s. Read-only; no CSRF.
 - `GET /favicon.ico` — Returns 204 No Content (no favicon asset shipped with dashboard).
 
