@@ -7,6 +7,12 @@ Subcommands:
     Manually append one ledger line (verdict = OK|FAILED|EMPTY|HUNG, default OK)
     phase = build|verify|repair|other (optional, default null)
     wave = wave number as integer (optional, default null)
+  append-wave --report-file <path> --wave <id> --phase <phase> --timestamp <iso>
+    Append one ledger row from a workflow report JSON for a specific phase.
+    Report shape: {tokens:{buildOut,verifyOut,repairOut,...}, integration:{green:bool,...}, ...}
+    Creates: model=haiku, verdict from integration.green, tokens_out from tokens.<phase>Out.
+    Skips if identical wave+phase+timestamp row already exists (idempotent).
+    Tolerates missing fields (defaults to 0).
   harvest
     Scan session tasks directories for agent outcomes and append missing entries.
     (Tracks state in ledger directory for resume capability)
@@ -260,6 +266,84 @@ def rotate():
     print(f'Live ledger now has {len(new_ledger) - len(header_lines)} data lines')
 
 
+def append_wave(report_file, wave, phase, timestamp):
+    """Append one row to the ledger from a workflow report JSON.
+
+    Args:
+        report_file: Path to JSON report file
+        wave: Wave number (string or int)
+        phase: Phase name (build|verify|repair)
+        timestamp: ISO 8601 timestamp (must be provided by caller)
+
+    Workflow report shape:
+        {
+            "tokens": {
+                "buildOut": int,
+                "verifyOut": int,
+                "repairOut": int,
+                "totalOut": int,
+                ...
+            },
+            "integration": {
+                "green": bool,
+                ...
+            },
+            ...
+        }
+
+    Returns:
+        Tuple: (success, message)
+    """
+    try:
+        report_path = Path(report_file)
+        if not report_path.exists():
+            return False, f"Report file not found: {report_file}"
+
+        report_text = report_path.read_text(encoding='utf-8')
+        report = json.loads(report_text)
+    except (json.JSONDecodeError, IOError) as e:
+        return False, f"Failed to read/parse report: {e}"
+
+    # Extract data from report with graceful defaults
+    tokens_section = report.get('tokens', {})
+    integration_section = report.get('integration', {})
+
+    # Determine verdict from integration.green
+    is_green = integration_section.get('green', False)
+    verdict = 'OK' if is_green else 'FAILED'
+
+    # Extract tokens_out based on phase
+    phase_key = f'{phase}Out'
+    tokens_out = tokens_section.get(phase_key, 0)
+    try:
+        tokens_out = int(tokens_out) if tokens_out else 0
+    except (ValueError, TypeError):
+        tokens_out = 0
+
+    # Model is always haiku for append-wave
+    model = 'haiku'
+    agent_type = 'waverun'
+
+    # Validate inputs
+    try:
+        wave_num = int(wave) if wave else None
+    except (ValueError, TypeError):
+        return False, f"Invalid wave number: {wave}"
+
+    # Idempotency check: see if this exact row already exists
+    existing_rows = parse_ledger_rows()
+    for row in existing_rows:
+        if (row['iso_ts'] == timestamp and
+            row['phase'] == phase and
+            row['wave'] == wave_num and
+            row['model'] == model):
+            return True, f"Row already exists (wave={wave_num}, phase={phase}, ts={timestamp}); skipping"
+
+    # Append the row
+    append_ledger_line(timestamp, agent_type, model, 0, 0, tokens_out, verdict, phase, wave_num)
+    return True, f"Appended: wave={wave_num} phase={phase} tokens_out={tokens_out} verdict={verdict}"
+
+
 def parse_ledger_rows():
     """Parse and return all ledger rows as structured data.
 
@@ -423,6 +507,24 @@ def main():
 
         append_ledger_line(ts, agent_type, model, dur, ti, to, verdict, phase, wave)
         print(f'Appended: {ts} {agent_type} {model} {dur}s {ti}->{to} [{verdict}] phase={phase} wave={wave}')
+
+    elif cmd == 'append-wave':
+        # append-wave --report-file <path> --wave <id> --phase <phase> --timestamp <iso>
+        import argparse
+        parser = argparse.ArgumentParser(description='Append wave outcome to ledger from report JSON')
+        parser.add_argument('--report-file', required=True, help='Path to workflow report JSON')
+        parser.add_argument('--wave', required=True, help='Wave number')
+        parser.add_argument('--phase', required=True, help='Phase name (build|verify|repair)')
+        parser.add_argument('--timestamp', required=True, help='ISO 8601 timestamp')
+
+        try:
+            args = parser.parse_args(sys.argv[2:])
+        except SystemExit:
+            sys.exit(1)
+
+        success, message = append_wave(args.report_file, args.wave, args.phase, args.timestamp)
+        print(message)
+        sys.exit(0 if success else 1)
 
     elif cmd == 'harvest':
         harvest()
