@@ -230,6 +230,20 @@ export interface CostEstimate {
   total_cost: number; // dollars
 }
 
+export interface CostWeeklyData {
+  tokens_in: number;
+  tokens_out: number;
+  model_tokens: Record<string, number>; // total tokens per model for the week
+  cost: number; // dollars if pricing available, 0 otherwise
+}
+
+export interface CostVerdictWeightedCost {
+  cost_per_ok: number;
+  cost_per_failed: number;
+  cost_per_empty: number;
+  cost_per_hung: number;
+}
+
 export interface CostSummary {
   models: Record<string, CostModelStats>; // keyed by model id
   daily_totals: Record<string, CostDailyTotal>; // keyed by "YYYY-MM-DD"
@@ -237,6 +251,9 @@ export interface CostSummary {
   skipped_lines: number;
   has_pricing: boolean;
   estimates_by_model: Record<string, CostEstimate>; // empty when has_pricing is false
+  per_week_costs: Record<string, CostWeeklyData>; // keyed by "YYYY-Www" (ISO week)
+  verdict_weighted_cost: CostVerdictWeightedCost;
+  model_mix_trend: Record<string, Record<string, number>>; // keyed by "YYYY-MM-DD", values are model -> percentage
 }
 
 /**

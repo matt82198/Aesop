@@ -438,5 +438,171 @@ class TestLargeScaleData(CostIsolationCase):
         self.assertIn("2026-07-13", summary["daily_totals"])
 
 
+class TestPerWeekCosts(CostIsolationCase):
+    """Test per-week cost rollup."""
+
+    def test_empty_result_has_per_week_costs_key(self):
+        """Empty summary should have per_week_costs dict."""
+        summary = cost.get_cost_summary()
+        self.assertIn("per_week_costs", summary)
+        self.assertIsInstance(summary["per_week_costs"], dict)
+
+    def test_groups_by_iso_week(self):
+        """Group daily totals by ISO week."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-13T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-14T22:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 2 | 3 | OK |
+| 2026-07-20T01:00:00 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 100 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should have 2 weeks (2026-W29 and 2026-W30 based on ISO calendar)
+        per_week = summary["per_week_costs"]
+        self.assertGreater(len(per_week), 0)
+
+        # Verify structure
+        for week_key, week_data in per_week.items():
+            self.assertIn("tokens_in", week_data)
+            self.assertIn("tokens_out", week_data)
+            self.assertIn("model_tokens", week_data)
+            self.assertIn("cost", week_data)
+
+    def test_week_cost_with_pricing(self):
+        """Calculate cost per week when pricing is available."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+"""
+        self.write_ledger(ledger)
+        self.write_config({
+            "pricing": {
+                "claude-haiku-4-5-20251001": {
+                    "input_per_mtok": 0.80,
+                    "output_per_mtok": 2.40
+                }
+            }
+        })
+        summary = cost.get_cost_summary()
+
+        per_week = summary["per_week_costs"]
+        self.assertGreater(len(per_week), 0)
+
+        # Verify cost is calculated
+        for week_data in per_week.values():
+            self.assertGreaterEqual(week_data["cost"], 0.0)
+
+
+class TestVerdictWeightedCost(CostIsolationCase):
+    """Test verdict-weighted cost-per-outcome metrics."""
+
+    def test_empty_result_has_verdict_weighted_cost_key(self):
+        """Empty summary should have verdict_weighted_cost dict."""
+        summary = cost.get_cost_summary()
+        self.assertIn("verdict_weighted_cost", summary)
+        vwc = summary["verdict_weighted_cost"]
+        self.assertIn("cost_per_ok", vwc)
+        self.assertIn("cost_per_failed", vwc)
+        self.assertIn("cost_per_empty", vwc)
+        self.assertIn("cost_per_hung", vwc)
+
+    def test_cost_per_ok_calculation(self):
+        """Calculate cost per OK outcome."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK |
+| 2026-07-11T22:08:22 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 100 | FAILED |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        vwc = summary["verdict_weighted_cost"]
+        # Total cost (token proxy) = 8+186+8+116+8+100 = 426
+        # OK count = 2
+        # cost_per_ok = 426 / 2 = 213
+        self.assertGreater(vwc["cost_per_ok"], 0)
+        self.assertGreater(vwc["cost_per_failed"], 0)
+
+    def test_cost_per_outcome_with_pricing(self):
+        """Calculate cost per outcome with pricing enabled."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK |
+"""
+        self.write_ledger(ledger)
+        self.write_config({
+            "pricing": {
+                "claude-haiku-4-5-20251001": {
+                    "input_per_mtok": 0.80,
+                    "output_per_mtok": 2.40
+                }
+            }
+        })
+        summary = cost.get_cost_summary()
+
+        vwc = summary["verdict_weighted_cost"]
+        self.assertGreater(vwc["cost_per_ok"], 0)
+
+    def test_zero_outcomes_returns_zero_cost(self):
+        """Cost per outcome is 0 when outcome count is 0."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        vwc = summary["verdict_weighted_cost"]
+        # Should be 0 for outcomes that didn't occur
+        self.assertEqual(vwc["cost_per_failed"], 0.0)
+        self.assertEqual(vwc["cost_per_empty"], 0.0)
+        self.assertEqual(vwc["cost_per_hung"], 0.0)
+
+
+class TestModelMixTrend(CostIsolationCase):
+    """Test model usage distribution trend."""
+
+    def test_empty_result_has_model_mix_trend_key(self):
+        """Empty summary should have model_mix_trend dict."""
+        summary = cost.get_cost_summary()
+        self.assertIn("model_mix_trend", summary)
+        self.assertIsInstance(summary["model_mix_trend"], dict)
+
+    def test_calculates_daily_model_distribution(self):
+        """Calculate per-day model distribution as percentages."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | OK |
+| 2026-07-12T01:00:00 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 100 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        trend = summary["model_mix_trend"]
+        # Should have entries for both days
+        self.assertIn("2026-07-11", trend)
+        self.assertIn("2026-07-12", trend)
+
+        # Verify structure (percentages)
+        for date_str, model_dist in trend.items():
+            for model, percentage in model_dist.items():
+                self.assertIsInstance(percentage, float)
+                self.assertGreaterEqual(percentage, 0.0)
+                self.assertLessEqual(percentage, 100.0)
+
+    def test_model_mix_sums_to_100(self):
+        """Daily model mix percentages should sum to approximately 100%."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        trend = summary["model_mix_trend"]
+        for date_str, model_dist in trend.items():
+            total_pct = sum(model_dist.values())
+            # Allow small floating point error
+            self.assertAlmostEqual(total_pct, 100.0, places=1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,6 +92,9 @@ export const TESTIDS = {
   costTable: 'cost-table',
   costChart: 'cost-chart',
   scorecard: 'scorecard',
+  weeklyCostSummary: 'weekly-cost-summary',
+  verdictCostMetrics: 'verdict-cost-metrics',
+  modelMixChart: 'model-mix-chart',
 
   // PR Board view
   viewPRBoard: 'view-prboard',
@@ -401,6 +404,46 @@ export const fixtureCost: CostSummary = {
   skipped_lines: 3,
   has_pricing: false,
   estimates_by_model: {},
+  per_week_costs: {
+    '2026-W28': {
+      tokens_in: 1204000,
+      tokens_out: 280100,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 1484100,
+        'claude-sonnet-4-5-20250929': 100560,
+      },
+      cost: 0,
+    },
+    '2026-W29': {
+      tokens_in: 1826170,
+      tokens_out: 442640,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 2268810,
+        'claude-sonnet-4-5-20250929': 999560,
+      },
+      cost: 0,
+    },
+  },
+  verdict_weighted_cost: {
+    cost_per_ok: 24.5,
+    cost_per_failed: 182.1,
+    cost_per_empty: 1365.8,
+    cost_per_hung: 2731.6,
+  },
+  model_mix_trend: {
+    '2026-07-11': {
+      'claude-haiku-4-5-20251001': 81.2,
+      'claude-sonnet-4-5-20250929': 18.8,
+    },
+    '2026-07-12': {
+      'claude-haiku-4-5-20251001': 78.9,
+      'claude-sonnet-4-5-20250929': 21.1,
+    },
+    '2026-07-13': {
+      'claude-haiku-4-5-20251001': 82.4,
+      'claude-sonnet-4-5-20250929': 17.6,
+    },
+  },
 };
 
 export const fixtureCostWithPricing: CostSummary = {
@@ -417,6 +460,32 @@ export const fixtureCostWithPricing: CostSummary = {
       output_cost: 3.16,
       total_cost: 5.83,
     },
+  },
+  per_week_costs: {
+    '2026-W28': {
+      tokens_in: 1204000,
+      tokens_out: 280100,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 1484100,
+        'claude-sonnet-4-5-20250929': 100560,
+      },
+      cost: 9.87,
+    },
+    '2026-W29': {
+      tokens_in: 1826170,
+      tokens_out: 442640,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 2268810,
+        'claude-sonnet-4-5-20250929': 999560,
+      },
+      cost: 15.21,
+    },
+  },
+  verdict_weighted_cost: {
+    cost_per_ok: 0.077,
+    cost_per_failed: 1.418,
+    cost_per_empty: 4.72,
+    cost_per_hung: 10.02,
   },
 };
 

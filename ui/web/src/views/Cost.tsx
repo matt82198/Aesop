@@ -1,6 +1,7 @@
 /**
- * Cost view — composition of cost table, chart, and scorecard.
- * Shows per-model breakdowns, per-day trends, and verdict quality metrics.
+ * Cost view — composition of cost table, chart, scorecard, and extended metrics.
+ * Shows per-model breakdowns, per-day trends, verdict quality metrics,
+ * weekly rollups, cost-per-outcome weighting, and model-mix trends.
  * When has_pricing=false, shows a "configure pricing" empty-state callout.
  * When has_pricing=true, displays dollar estimates alongside tokens.
  */
@@ -9,6 +10,9 @@ import type { CostSummary } from '../lib/types';
 import { CostTable } from '../components/CostTable';
 import { CostChart } from '../components/CostChart';
 import { Scorecard } from '../components/Scorecard';
+import { WeeklyCostSummary } from '../components/WeeklyCostSummary';
+import { VerdictCostMetrics } from '../components/VerdictCostMetrics';
+import { ModelMixTrendChart } from '../components/ModelMixTrendChart';
 import { TESTIDS } from '../test/fixtures';
 import './Cost.css';
 
@@ -47,6 +51,21 @@ export function Cost({ cost }: CostProps) {
         <div className="cost-section">
           <h3>Quality Scorecard</h3>
           <Scorecard cost={cost} />
+        </div>
+
+        <div className="cost-section">
+          <h3>Weekly Rollup</h3>
+          <WeeklyCostSummary cost={cost} />
+        </div>
+
+        <div className="cost-section">
+          <h3>Cost per Outcome</h3>
+          <VerdictCostMetrics cost={cost} />
+        </div>
+
+        <div className="cost-section">
+          <h3>Model Mix Trend</h3>
+          <ModelMixTrendChart cost={cost} />
         </div>
       </div>
     </section>
