@@ -8,6 +8,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `bench_runner.py` — Held-out benchmark runner + scorer with accuracy + cost axis (offline mock runner; pluggable Haiku/Sonnet/Opus runners return text or (text, usage))
 - `buildlog.py` — Uniform BUILDLOG.md appender
 - `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks gate)
+- `claudemd_lint.py` — CLAUDE.md integrity linter (doc-pointer existence, npm script validation, pytest vs unittest mismatch detection, line count checks)
 - `fleet.js` — one-shot fleet snapshot for `aesop fleet` (heartbeats, tracker lanes, orchestrator status; JSON)
 - `wave_preflight.py` — wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json)
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness checks)
@@ -38,6 +39,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
 - `stall_check.py` — Automated agent transcript stall detector
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (with lazy import error handling)
+- `transcript_digest.py` — Digest agent transcripts into compact briefs (compact ~200-byte per-agent summaries with files touched, tool-call count, outcome, token usage)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
 - `verify_activity_filter.py` — Browser proof for Activity view agent status filter (All/Running/Error-Suspicious filters)
