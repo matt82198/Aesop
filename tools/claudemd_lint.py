@@ -47,11 +47,17 @@ RUNTIME_PATTERNS = [
     r"^BUILDLOG\.md$",
     r"^MEMORY\.md$",
     r"^STATE\.md$",
+    r"^CLAUDE\.md$",
+    r"^SKILL\.md$",
     r"^OUTCOMES-LEDGER\.md$",
     r"^tracker\.json$",
     r"^ACTIONS\.log$",
     r"^\./state/",
     r"^state/",
+    # Allow these control files in compound refs like "CLAUDE.md/STATE.md"
+    r"CLAUDE\.md(?:/|$)",
+    r"STATE\.md(?:/|$)",
+    r"SKILL\.md(?:/|$)",
 ]
 
 
@@ -194,33 +200,56 @@ def lint_claudemd(
                        f"{len(lines)} lines exceeds max {max_lines}",
         })
 
-    # Check if content mentions pytest but repo uses unittest
+    # Check if content endorses pytest but repo uses unittest
+    # Exclude false positives where pytest is mentioned in passing or explicitly excluded
     is_unittest, _ = check_test_cmd_match(repo_root)
-    if is_unittest and "pytest" in content.lower():
-        findings.append({
-            "type": "pytest-vs-unittest",
-            "line": "?",
-            "message": f"{claudemd_path.relative_to(repo_root)}: "
-                       f"mentions 'pytest' but repo uses unittest (test:py)",
-        })
+    if is_unittest:
+        content_lower = content.lower()
+        # Check for pytest endorsement (not just mention)
+        pytest_mentioned = "pytest" in content_lower
+        # Check for exclusion phrases that indicate pytest is NOT used
+        pytest_excluded = any(phrase in content_lower for phrase in [
+            "not pytest",
+            "not use pytest",
+            "don't use pytest",
+            "do not use pytest",
+            "uses unittest",
+            "use unittest",
+            "unittest, not pytest",
+            "-m unittest",
+        ])
+        # Flag only if pytest is mentioned AND not explicitly excluded
+        if pytest_mentioned and not pytest_excluded:
+            findings.append({
+                "type": "pytest-vs-unittest",
+                "line": "?",
+                "message": f"{claudemd_path.relative_to(repo_root)}: "
+                           f"mentions 'pytest' but repo uses unittest (test:py)",
+            })
 
     # DOC-POINTER check: find file references
     path_refs = extract_path_references(content)
+
+    # Get the directory of the CLAUDE.md file for relative resolution
+    claudemd_dir = claudemd_path.parent
 
     for ref in path_refs:
         # Skip runtime artifacts
         if is_runtime_artifact(ref):
             continue
 
-        # Check if path exists (relative to repo root)
-        target = repo_root / ref
+        # Try to resolve relative to the CLAUDE.md file's directory first
+        target = claudemd_dir / ref
         if not target.exists():
-            findings.append({
-                "type": "phantom-path",
-                "line": "?",
-                "message": f"{claudemd_path.relative_to(repo_root)}: "
-                           f"references non-existent '{ref}'",
-            })
+            # Fall back to repo root resolution
+            target = repo_root / ref
+            if not target.exists():
+                findings.append({
+                    "type": "phantom-path",
+                    "line": "?",
+                    "message": f"{claudemd_path.relative_to(repo_root)}: "
+                               f"references non-existent '{ref}'",
+                })
 
     # TEST-CMD check: npm run scripts
     npm_scripts = extract_npm_scripts(content)

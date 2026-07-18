@@ -192,6 +192,52 @@ class TestPhantomPathDetection(unittest.TestCase):
             phantom_findings = [f for f in findings if f["type"] == "phantom-path"]
             self.assertEqual(len(phantom_findings), 0, "Should not flag control files")
 
+    def test_same_dir_relative_doc_pointer_resolves(self):
+        """MUST NOT flag same-directory-relative doc pointers as phantoms.
+
+        This is the exact bug fix: a reference in skills/CLAUDE.md to
+        'healthcheck/SKILL.md' should resolve to skills/healthcheck/SKILL.md
+        (relative to the referencing file's directory), not to the repo root.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            # Create skills/ subdirectory with CLAUDE.md
+            skills_dir = repo_root / "skills"
+            skills_dir.mkdir()
+            claudemd_path = skills_dir / "CLAUDE.md"
+
+            # Create the target file that skills/CLAUDE.md references
+            # This is the file that would be flagged as phantom by the old logic
+            healthcheck_dir = skills_dir / "healthcheck"
+            healthcheck_dir.mkdir()
+            (healthcheck_dir / "SKILL.md").write_text("# Healthcheck Skill")
+
+            # Another same-dir reference
+            power_dir = skills_dir / "power"
+            power_dir.mkdir()
+            (power_dir / "SKILL.md").write_text("# Power Skill")
+
+            pkg = repo_root / "package.json"
+            pkg.write_text(json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+            # Write skills/CLAUDE.md with same-directory-relative references
+            claudemd_path.write_text(
+                "# Skills Domain\n\n"
+                "- See healthcheck/SKILL.md for the healthcheck skill\n"
+                "- See power/SKILL.md for the power skill\n"
+            )
+
+            findings = lint_claudemd(claudemd_path, repo_root)
+
+            # Should NOT find any phantom-path findings for the relative references
+            phantom_findings = [f for f in findings if f["type"] == "phantom-path"]
+            self.assertEqual(
+                len(phantom_findings), 0,
+                f"Same-directory-relative references should resolve without false phantoms. "
+                f"Found: {[f['message'] for f in phantom_findings]}"
+            )
+
 
 class TestNpmScriptValidation(unittest.TestCase):
     """Test npm script existence checking."""
@@ -306,6 +352,40 @@ class TestPytestVsUnittestMismatch(unittest.TestCase):
             # Should NOT find pytest/unittest mismatch
             pytest_findings = [f for f in findings if f["type"] == "pytest-vs-unittest"]
             self.assertEqual(len(pytest_findings), 0, "Should allow pytest in pytest repo")
+
+    def test_no_flag_pytest_when_explicitly_excluded(self):
+        """Should NOT flag pytest when mentioned but explicitly excluded in unittest repo.
+
+        Regression test for issue where tools/CLAUDE.md says
+        'uses unittest, not pytest' but was still flagged.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            claudemd_dir = repo_root / "tools"
+            claudemd_dir.mkdir()
+            claudemd_path = claudemd_dir / "CLAUDE.md"
+
+            # Create package.json with unittest
+            pkg = repo_root / "package.json"
+            pkg.write_text(json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+            # Write CLAUDE.md that mentions pytest but explicitly excludes it
+            claudemd_path.write_text(
+                "# Tools Domain\n\n"
+                "- **Python**: `npm run test:py` (= `python -m unittest discover`); "
+                "tests live in tests/, not tools/; the repo uses unittest, not pytest"
+            )
+
+            findings = lint_claudemd(claudemd_path, repo_root)
+
+            # Should NOT find pytest/unittest mismatch (pytest is explicitly excluded)
+            pytest_findings = [f for f in findings if f["type"] == "pytest-vs-unittest"]
+            self.assertEqual(
+                len(pytest_findings), 0,
+                f"Should not flag pytest when explicitly excluded as 'not pytest'. "
+                f"Found: {[f['message'] for f in pytest_findings]}"
+            )
 
 
 class TestDomainMapAllowlist(unittest.TestCase):

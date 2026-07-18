@@ -140,8 +140,8 @@ test('generated config uses portable paths (not absolute machine paths)', () => 
     }
 
   } finally {
-    // Cleanup
-    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    // Cleanup - use cross-platform Node.js API
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
@@ -192,7 +192,8 @@ test('config loader expands ~ paths in Node.js', () => {
     assert.equal(loaded.scripts_root, '~/scripts', 'Config should preserve ~ paths');
 
   } finally {
-    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    // Cleanup - use cross-platform Node.js API
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
@@ -301,7 +302,8 @@ test('dashboard config generation guards against missing dashboard key (defect b
     assert.ok(typeof config === 'object', 'Generated config should be valid JSON object');
 
   } finally {
-    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    // Cleanup - use cross-platform Node.js API
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
@@ -486,8 +488,8 @@ test('pre-commit waveguard hook is installed in scaffolded fleet (wave-24 scaffo
     );
 
   } finally {
-    // Cleanup
-    execSync('rm -rf "' + tempDir + '"', { stdio: 'ignore' });
+    // Cleanup - use cross-platform Node.js API
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 

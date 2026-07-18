@@ -16,6 +16,7 @@ import type {
   SubmitResponse,
   WavePRBoardData,
   WaveFailureData,
+  WaveDispatchData,
 } from './types';
 
 let _csrfTokenCache: string | null = null;
@@ -178,6 +179,13 @@ export async function fetchWavePRs(): Promise<WavePRBoardData> {
 export async function fetchWaveFailure(prNumber: number): Promise<WaveFailureData> {
   const url = `/api/wave/failure?pr=${encodeURIComponent(String(prNumber))}`;
   return typedFetch(url, { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/dispatch — live per-agent phase and activity visibility
+ */
+export async function fetchWaveDispatch(): Promise<WaveDispatchData> {
+  return typedFetch('/api/wave/dispatch', { method: 'GET', requireCSRF: false });
 }
 
 /**

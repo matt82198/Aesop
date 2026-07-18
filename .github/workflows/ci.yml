@@ -109,6 +109,10 @@ jobs:
           python -m compileall -q tools/
           python -m unittest tests.test_tools_importable -v
 
+      - name: CLAUDE.md linter gate (scope invariant)
+        if: matrix.python-shard == 0
+        run: python tools/claudemd_lint.py --root .
+
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
         run: |
           python3 << 'EOF'

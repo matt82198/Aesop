@@ -30,6 +30,8 @@ import type {
   WaveFailureData,
   WaveFailureJob,
   WaveFailureRun,
+  WaveDispatchData,
+  WaveDispatchAgent,
 } from '../lib/types';
 
 /* ------------------------------------------------------------------ */
@@ -89,6 +91,12 @@ export const TESTIDS = {
   timelineBar: 'timeline-bar',
   messagesTail: 'messages-tail',
   messagesFollowToggle: 'messages-follow-toggle',
+  dispatchPanel: 'dispatch-panel',
+  dispatchPanelUnavailable: 'dispatch-panel-unavailable',
+  dispatchAgentRow: 'dispatch-agent-row',
+  dispatchAgentPhase: 'dispatch-agent-phase',
+  dispatchAgentAge: 'dispatch-agent-age',
+  dispatchAgentTokens: 'dispatch-agent-tokens',
 
   // Cost view
   viewCost: 'view-cost',
@@ -646,4 +654,47 @@ export const fixtureWaveFailureDataEmpty: WaveFailureData = {
   branch: 'feat/wave30-pr-board',
   latest_run: null,
   jobs: [],
+};
+
+export const fixtureWaveDispatchAgent: WaveDispatchAgent = {
+  id: 'fleet-fix-0',
+  phase: 'tool-use',
+  last_activity_age_sec: 3,
+  token_estimate: 145000,
+};
+
+export const fixtureWaveDispatchAgents: WaveDispatchAgent[] = [
+  {
+    id: 'fleet-fix-0',
+    phase: 'tool-use',
+    last_activity_age_sec: 3,
+    token_estimate: 145000,
+  },
+  {
+    id: 'fleet-fix-1',
+    phase: 'stall',
+    last_activity_age_sec: 420,
+    token_estimate: 89000,
+    warnings: ['inactive >5min'],
+  },
+  {
+    id: 'fleet-review-0',
+    phase: 'thinking',
+    last_activity_age_sec: 12,
+    token_estimate: 76500,
+  },
+];
+
+export const fixtureWaveDispatch: WaveDispatchData = {
+  available: true,
+  wave_phase: 'wave-rc.7: dispatch',
+  agents: fixtureWaveDispatchAgents,
+  at: '2026-07-17T20:24:50Z',
+};
+
+export const fixtureWaveDispatchUnavailable: WaveDispatchData = {
+  available: false,
+  wave_phase: null,
+  agents: [],
+  at: '2026-07-17T20:24:50Z',
 };
