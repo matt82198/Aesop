@@ -100,36 +100,78 @@ ground_truth = load_ground_truth()
 results, accuracy = run_bench(tasks, ground_truth, my_runner)
 ```
 
-## Wiring a real model runner (not implemented in this wave)
+## Running against real models (wave-32+)
 
-`run_bench()` takes any `Callable[[str], str]` — a function that accepts a task
-`prompt` and returns the model's raw text response. To score a real model,
+### Claude CLI runner
+
+The benchmark ships with built-in runners for the local `claude` CLI (Anthropic's
+official Claude Code command-line tool). If `claude` is installed and authenticated,
+you can run the benchmark against real models without writing any custom runner code:
+
+```bash
+# Install claude if not already installed
+npm install -g @anthropic-ai/claude-code
+
+# Run the benchmark against Haiku, Sonnet, and Opus
+python tools/bench_runner.py --runner haiku
+python tools/bench_runner.py --runner sonnet
+python tools/bench_runner.py --runner opus
+```
+
+The CLI runner:
+- Shells `claude -p "<prompt>" --model <alias> --output-format json`
+- Accepts model aliases: `haiku`, `sonnet`, `opus` (or full model ids)
+- Captures wall-time latency (in milliseconds) alongside accuracy and tokens
+- Gracefully fails with a clear error if `claude` is not on PATH
+
+Example output (with cost data):
+
+```
+Benchmark results -- runner: haiku
+------------------------------------------------------------------------
+id    category                    result   tokens     latency_ms
+t01   classify_file_change        PASS     42         125.3
+t02   classify_file_change        PASS     38         118.2
+...
+------------------------------------------------------------------------
+Accuracy: 11/12 = 91.7%
+Cost:     total_tokens=512 avg_tokens/task=42.7 total_latency_ms=1450.5 avg_latency_ms=120.9
+```
+
+### Custom model runners
+
+`run_bench()` takes any `Callable[[str], str]` or `Callable[[str], tuple]` — a
+function that accepts a task `prompt` and returns either the model's raw text
+response or a `(text, usage)` pair. To score a model beyond the built-in runners,
 write a runner that calls it and register it, e.g.:
 
 ```python
 # tools/bench_runner.py (or a separate script that imports it)
 import anthropic
+import time
 
 _client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
 
-def haiku_runner(prompt: str) -> str:
+def custom_runner(prompt: str) -> tuple:
+    start = time.time()
     resp = _client.messages.create(
-        model="claude-haiku-4-5",       # pick the actual model id at call time
+        model="claude-haiku-4-5-20251001",
         max_tokens=64,
         messages=[{"role": "user", "content": prompt}],
     )
-    return resp.content[0].text
+    elapsed_ms = (time.time() - start) * 1000
+    text = resp.content[0].text
+    usage = {
+        "tokens": resp.usage.output_tokens,
+        "latency_ms": elapsed_ms,
+    }
+    return (text, usage)
 
-RUNNERS["haiku"] = haiku_runner
-# repeat for a sonnet_runner / opus_runner pointed at the corresponding model ids
+RUNNERS["custom"] = custom_runner
 ```
 
-Then run `python tools/bench_runner.py --runner haiku` (after adding the
-`--runner` choice, or scripting `run_bench` directly) once per model and
-compare the printed accuracy tables side by side. Deliberately NOT done in
-this wave: it costs real tokens, needs a live API key, and its result is a
-dated empirical claim that deserves its own report rather than living inside
-a harness-scaffolding PR.
+Then run `python tools/bench_runner.py --runner custom` and compare the printed
+accuracy tables side by side.
 
 ## Honest limits
 

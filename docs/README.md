@@ -1,6 +1,6 @@
 # Aesop Documentation
 
-Aesop is a fable-fleet orchestration harness for Claude Code. It runs fast, cheap delivery waves: parallel Haiku agents, durable state, observable machinery, security gates.
+Aesop is an autonomous developer system that crawls into any repository and orchestrates intelligent work. It ranks tasks, dispatches parallel Haiku agents, verifies merges, audits the work, and feeds the next iteration. **State persists across multiple instances via a durable SQLite event log**, so your whole team uses one coordinated system.
 
 ---
 
@@ -56,6 +56,33 @@ If you're new to Aesop, follow this 4-stage path:
 
 ---
 
+## Core Concepts: /power and /buildsystem
+
+### /power — System Initialization
+The `/power` skill initializes Aesop into your repository. It:
+- Loads your orchestrator brain (cardinal rules, domain map, team memory, system state)
+- Verifies the system is healthy (filesystem, git, API keys, watchdog)
+- Outputs a health brief and next-step recommendations
+
+Run `/power` at the start of each Claude Code session. It's idempotent—safe to run multiple times. See [skills/power/SKILL.md](../skills/power/SKILL.md) for details.
+
+### /buildsystem — One Complete Wave Cycle
+The `/buildsystem` skill runs **one complete iteration of the autonomous delivery loop**. It:
+1. **Ranks** the backlog (priority, dependencies, team affinity)
+2. **Dispatches** parallel Haiku agents on file-disjoint domains (tests, build, docs, UI, review, etc.)
+3. **Verifies** each merge (CI, security scans, audit spot-checks)
+4. **Checkpoints** (STATE.md + BUILDLOG.md committed to git, survive wipes)
+5. **Audits** fleet health and feeds next backlog (monitor signals, signal collectors, findings)
+
+This is the repeatable loop that runs your delivery cycle indefinitely, with each wave learning from the prior audit. You can run `/buildsystem` once per wave (typically 30 min–2 hours depending on backlog size). See [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md) for a concrete walkthrough.
+
+### Team State & Multi-Instance Design
+**Current Status (0.1.0)**: Single-instance proven. A team uses Aesop by designating one operator who runs the wave loop. State is durably checkpointed in git (STATE.md, BUILDLOG.md, tracker.json exports).
+
+**In Design**: Multi-instance coordination via the state_store substrate. The event-sourced SQLite layer is production-ready but currently opt-in. A future release will enable multiple Aesop instances (e.g., per-team subgroups or geographic regions) to coordinate around a single source of truth—a Postgres-backed event log, with git as a diffable export. See [TEAM-STATE.md](TEAM-STATE.md) (design in progress) for the vision and current architecture decisions.
+
+---
+
 ## Deep-Dive Reference Docs
 
 Once you've completed the adopter journey, use these for operational reference:
@@ -108,11 +135,14 @@ Once you've completed the adopter journey, use these for operational reference:
 **I want to understand the cost model**
 → [DISPATCH-MODEL.md](DISPATCH-MODEL.md) or [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md#why-its-fast--cheap)
 
-**I want to know what's actually proven vs. claimed (the rc.1 milestone)**
+**I want to know what's actually proven vs. claimed (the 0.1.0 milestone)**
 → [autonomous-swe.md](autonomous-swe.md)
 
 **I need to understand how state survives a crash**
 → [CHECKPOINTING.md](CHECKPOINTING.md)
+
+**I want to understand multi-instance coordination**
+→ [TEAM-STATE.md](TEAM-STATE.md)
 
 **I'm reviewing a PR that changes orchestration behavior**
 → [BEHAVIORAL-PR-REVIEW.md](BEHAVIORAL-PR-REVIEW.md)

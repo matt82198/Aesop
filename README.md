@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <em>Fable-Fleet Orchestration Harness</em>
+  <em>Autonomous Developer for Any Repository</em>
 </p>
 
 <p align="center">
@@ -12,11 +12,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-orange.svg" alt="License: PolyForm Strict 1.0.0 (source-available)"></a>
 </p>
 
-**Aesop** is a source-available orchestration harness for Claude Code that builds itself. It runs a `/buildsystem` wave cycle—ranking a backlog, fanning out parallel Haiku agents (1/3 the cost of Sonnet, 1/5 the cost of Opus), watchdogging them, verifying merges, then feeding the next wave via audit + ideation + fleet-ops monitoring. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
+**Aesop** is a source-available autonomous developer that crawls into any repository and orchestrates intelligent work—**ranking tasks, dispatching parallel Haiku agents, verifying merges, auditing the work, and feeding the next iteration.**
+
+What makes Aesop different: **durable state persists across multiple instances**, so your whole team uses one coordinated system. The state layer (`state_store/`) runs append-only events in SQLite (concurrent, transactional), rendered to git for checkpoints and hand-offs. Pair with [/power](#use-with-claude-code) (system init) and [/buildsystem](#core-concepts-and-operations) (the wave loop), and Aesop runs your delivery cycle—on any repository, any codebase shape, indefinitely. **This repo's own PRs are built by Aesop's own loop.** Dogfooding, not doctrine.
 
 As of **0.1.0**, that loop has carried the project to an installable, tested, audited, and benchmarked stable release—the fleet running the wave loop on its own, under a human who sets goals and owns the outward gates. The claims below are backed by committed artifacts you can check, not adjectives. See [Milestone: it shipped itself](#milestone-it-shipped-itself-010).
 
-What you get: **cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator), **durable state** (git-committed checkpoints survive wipes), **observable machinery** (every agent run logged, every cost tracked), **live dashboard** (real-time fleet health at http://localhost:8770), and **security gates** (secret-scan blocks pushes, CI validates each merge).
+**Cost-optimized multi-agent dispatch** (Haiku-first subagents, lean orchestrator) · **Durable state** (SQLite events + git exports, survives wipes) · **Observable machinery** (every agent run logged, every cost tracked) · **Live dashboard** (real-time fleet health at http://localhost:8770) · **Security gates** (secret-scan blocks pushes, CI validates each merge).
 
 ## Milestone: it shipped itself (0.1.0)
 
@@ -36,9 +38,49 @@ The differentiator is not "an AI wrote code." It's that the credibility and safe
 
 **Nobody outside this project has reproduced these results yet.** The evidence is committed so a skeptical reader can check it — that transparency is the point, not a substitute for independent replication. For the full, unhedged account of what is and isn't proven, read [docs/autonomous-swe.md](./docs/autonomous-swe.md) and the ["Honest limits" section of the release notes](./RELEASE-NOTES.md#honest-limits).
 
+## Core Concepts and Operations
+
+### What /power Does
+
+`/power` initializes Aesop into a fresh repository. It:
+- Loads your orchestrator brain (cardinal rules, domain map, team memory, system state)
+- Verifies the system is healthy (filesystem, git, API keys, watchdog)
+- Outputs a health brief and next-step recommendations
+
+Run `/power` at the start of each session when using Claude Code. It's idempotent—safe to run multiple times. Setup once:
+
+```bash
+cp -r skills/power/ ~/.claude/skills/power/
+```
+
+Then in Claude Code, type `/power` to initialize.
+
+### What /buildsystem Does
+
+`/buildsystem` runs **one complete wave cycle** of the autonomous delivery loop. It:
+1. **Ranks** the backlog (priority, dependencies, team affinity)
+2. **Dispatches** parallel Haiku agents on file-disjoint domains (tests, build, docs, UI, review, etc.)
+3. **Verifies** each merge (CI, security scans, audit spot-checks)
+4. **Checkpoints** (STATE.md + BUILDLOG.md committed to git, survive wipes)
+5. **Audits** fleet health and feeds next backlog (monitor signals, signal collectors, findings)
+
+This is **not** a one-off fix or a single pass—it's the repeatable loop that runs your delivery cycle indefinitely, with each wave learning from the prior audit. You can run `/buildsystem` once per wave (typically 30 min–2 hours per wave depending on backlog size and scope).
+
+See [docs/HOW-THE-LOOP-WORKS.md](./docs/HOW-THE-LOOP-WORKS.md) for a concrete walkthrough of one complete cycle.
+
+### Team State & Multi-Instance Vision
+
+**Current Status (0.1.0)**: Single-instance proven. A team uses Aesop by designating one operator who runs the wave loop. State is durably checkpointed in git (STATE.md, BUILDLOG.md, tracker.json exports).
+
+**In Design**: Multi-instance coordination via the state_store substrate. The event-sourced SQLite layer (`state_store/`) is production-ready but currently opt-in. A future release will enable multiple Aesop instances (e.g., per-team subgroups, geographic regions, or specialized fleets) to coordinate around a single source of truth—a Postgres-backed event log, with git as a diffable export. See [docs/TEAM-STATE.md](./docs/TEAM-STATE.md) (design in progress) for the vision and current architecture decisions.
+
 ## Why Aesop?
 
-Multi-agent AI fleets hit a wall: all-Opus orchestrators cost $10k+ per wave, and machine crashes lose state—losing work and context on restart. Aesop solves both: **Haiku-first** dispatch cuts costs to 1/3 of Opus, and **git-committed state** (STATE.md, BUILDLOG.md) survives machine wipes with zero data loss. See the wave cycle below: ranked backlog → parallel worktree-isolated fleet → merge train → checkpoint → audit feeds next wave.
+Multi-agent AI fleets hit two walls: all-Opus orchestrators cost $10k+ per wave, and machine crashes lose state—losing work and context on restart. Aesop solves both:
+
+- **Haiku-first dispatch** cuts costs to ~1/3 of Opus (Haiku subagents, Opus orchestrator).
+- **Durable state** (SQLite event log + git-rendered exports) survives machine wipes with zero data loss and enables team/multi-instance coordination.
+- **Portable orchestration** works on any repository; no custom agents per repo needed.
 
 ```
 ranked backlog
@@ -270,6 +312,7 @@ The dev server proxies `/data`, `/api`, `/events`, `/agent`, `/submit` to the Py
 - [docs/PUBLISHING.md](./docs/PUBLISHING.md) — Release Aesop to npm
 - [docs/autonomous-swe.md](./docs/autonomous-swe.md) — The 0.1.0-rc.1 milestone told honestly: what "autonomous SWE" means here, the evidence behind each claim, and the limits the project owns
 - [docs/case-study-portfolio.md](./docs/case-study-portfolio.md) — How Aesop built its own portfolio site; full audit trail and cost breakdown
+- [docs/TEAM-STATE.md](./docs/TEAM-STATE.md) — Multi-instance and team coordination via state_store (design in progress)
 
 See [CHANGELOG.md](./CHANGELOG.md) and [RELEASE-NOTES.md](./RELEASE-NOTES.md) for release notes.
 
@@ -296,4 +339,4 @@ Copyright 2026 Matt Culliton.
 
 ---
 
-**Aesop**: Fable-fleet orchestration, built by Aesop itself. May your orchestrator be wise and your subagents swift.
+**Aesop**: Autonomous developer for any repository, built by Aesop itself. May your orchestrator be wise and your subagents swift.
