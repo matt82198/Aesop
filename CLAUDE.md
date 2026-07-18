@@ -1,47 +1,36 @@
 # Aesop — Project CLAUDE.md
 
-**What**: Open-source fable-fleet orchestration harness for Claude Code.
+**What**: Source-available fable-fleet orchestration harness for autonomous Claude Code development.
 
 ## Domain map
 
-- **skills/** — Orchestration skills (/power: priming skill) — see skills/CLAUDE.md
-- **daemons/** — Watchdog daemon (repo backup, secret-scan gate, heartbeat) — see daemons/CLAUDE.md
-- **dash/** — TUI dashboard (watchdog-gui.sh, real-time fleet status) — see dash/CLAUDE.md
-- **monitor/** — Orchestration monitor (collect-signals.mjs, CHARTER.md, AUTO/PROPOSE logic) — see monitor/CLAUDE.md
-- **mcp/** — Read-only MCP server (fleet status, agents, tracker, costs) — see mcp/CLAUDE.md
-- **scan/** — Example IOC/secret scanner template (fleet-scan.example.mjs, config-driven; copy to scan/fleet-scan.mjs to enable)
-- **tools/** — Build utilities (Python/shell scripts: secret scanning, cost tracking, verification gates, dashboards) — see tools/CLAUDE.md
-- **hooks/** — Git pre-push policy enforcement (branch protection, secret scanning) — see hooks/CLAUDE.md
-- **bin/** — CLI scaffolder (Node.js entry point for aesop template) — see bin/CLAUDE.md
-- **ui/** — Web dashboard (serve.py, realtime SSE, CSRF protection, collector thread) — see ui/CLAUDE.md
-- **state_store/** — Event-sourced state layer (SQLite WAL, projections, git-as-export) — see state_store/CLAUDE.md
-- **bench/** — Held-out model benchmark: externally-graded tasks + scorer for measuring Haiku/Sonnet/Opus quality — see bench/README.md
-- **tests/** — Test suites (shell, Node, Python) and fixtures — see tests/CLAUDE.md
-- **docs/** — Architecture guides, cardinal rules, tutorials
-- **assets/** — Logo, branding, media (repo-visible documentation assets)
-- **state/** — Runtime durable checkpoints (git-ignored, created by daemons)
+- **skills/** — Orchestration skills (/power: priming skill) — read skills/CLAUDE.md
+- **daemons/** — Watchdog daemon (repo backup, secret-scan gate, heartbeat) — read daemons/CLAUDE.md
+- **dash/** — TUI dashboard (watchdog-gui.sh, real-time fleet status) — read dash/CLAUDE.md
+- **monitor/** — Orchestration monitor (signals, AUTO/PROPOSE logic) — read monitor/CLAUDE.md
+- **mcp/** — Read-only MCP server (fleet status, agents, tracker, costs) — read mcp/CLAUDE.md
+- **scan/** — Example IOC/secret scanner template — read scan/CLAUDE.md
+- **tools/** — Build utilities (Python/shell, secret scanning, verification gates) — read tools/CLAUDE.md
+- **hooks/** — Git pre-push policy enforcement (branch protection, secrets) — read hooks/CLAUDE.md
+- **bin/** — CLI scaffolder (Node.js entry point) — read bin/CLAUDE.md
+- **ui/** — Web dashboard (SSE, CSRF protection, collector thread) — read ui/CLAUDE.md
+- **state_store/** — Event-sourced state layer (SQLite WAL, projections) — read state_store/CLAUDE.md
+- **bench/** — Held-out model benchmark (quality scorer) — read bench/README.md
+- **tests/** — Test suites (shell, Node, Python) and fixtures — read tests/CLAUDE.md
+- **docs/** — Architecture guides, tutorials, setup — read docs/
+- **assets/** — Logo, branding, media
+- **state/** — Runtime durable checkpoints (git-ignored)
 
-## Key principles
+## Dispatch rule
 
-1. **Subagents are always Haiku** (cost optimization at scale).
-2. **Orchestrator on main thread only** (durable, observable).
-3. **State committed to git** (STATE.md, BUILDLOG.md survive wipes).
-4. **Secret-scan gates every push** (no credentials leak).
-5. **Idempotent + append-only** (safe to restart mid-cycle).
-6. **Observable machinery** (every action logged, every cost tracked).
-
-## Branch + PR discipline
-
-- Feature/* branch only (never main/master).
-- All pushes gated by secret-scan.py (exit 1 blocks).
-- NOT a vault repo (credentials → your private remote).
+Workers read exactly ONE domain CLAUDE.md; this file is navigation only.
 
 ## Setup for development
 
-1. Clone the repo.
-2. Copy `aesop.config.example.json` → `aesop.config.json` and customize.
-3. Run `bash daemons/run-watchdog.sh --once` to test.
-4. Launch `bash dash/watchdog-gui.sh` to verify dashboard.
-5. Extend `monitor/collect-signals.mjs` with your custom signal collectors.
+See docs/ for full setup, architecture, and usage guides.
 
-See README.md for full context and usage examples.
+## Relocated
+
+- **Key principles** (Subagents always Haiku, Orchestrator on main thread only, State committed to git, Secret-scan gates, Idempotent + append-only, Observable machinery) → inlined into each domain's CLAUDE.md
+- **Branch + PR discipline** (feature/* only, secret-scan.py gate, not a vault repo) → tools/CLAUDE.md
+- **Setup for development** (install, config, watchdog test, dashboard, monitor extension) → docs/INSTALL.md

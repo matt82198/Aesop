@@ -68,6 +68,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Python test dependencies
+        # PyYAML is required by tools/ci_workflow_lint.py (fail-closed without it)
+        # and its test suite tests/test_ci_workflow_lint.py.
+        run: pip install pyyaml
+
       - name: Set shard-specific temporary directory
         run: |
           mkdir -p /tmp/shard-${{ matrix.python-shard }}

@@ -72,6 +72,66 @@ function validatePort(port) {
   return !isNaN(p) && p > 0 && p < 65536 ? p : null;
 }
 
+// Test if a port is available (returns Promise<boolean>)
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const sock = net.createConnection({ port, host: '127.0.0.1', timeout: 500 });
+    let resolved = false;
+
+    const cleanup = () => {
+      try {
+        sock.destroy();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    };
+
+    sock.on('connect', () => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        resolve(false);  // Port is in use
+      }
+    });
+
+    sock.on('error', () => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        resolve(true);  // Port is free
+      }
+    });
+
+    sock.on('timeout', () => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        resolve(true);  // Assume free on timeout
+      }
+    });
+
+    // Fallback timeout
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        resolve(true);
+      }
+    }, 2000);
+  });
+}
+
+// Find next available port starting from basePort
+async function findAvailablePort(basePort = 8770) {
+  for (let port = basePort; port < basePort + 100; port++) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+  return basePort;  // Fallback to basePort
+}
+
 // Parse named flags
 function getFlag(flagName) {
   const idx = args.findIndex(arg => arg === flagName);
@@ -318,7 +378,7 @@ function substituteTemplate(templateContent, projectName, domainsStr, reposStr) 
   return result;
 }
 
-function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repoUrlsStr) {
+function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repoUrlsStr, port = 8770) {
   // Read example config
   const exampleConfigPath = path.join(templateRoot, 'aesop.config.example.json');
   let exampleConfig;
@@ -352,7 +412,8 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repo
       dashboard: {
         refresh_seconds: 1,
         enable_jq_parsing: true,
-        theme: 'dark'
+        theme: 'dark',
+        port: 8770
       },
       cardinal_rules: {
         subagent_model: 'haiku',
@@ -370,6 +431,8 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repo
   exampleConfig.scripts_root = '~/scripts';
   exampleConfig.temp_root = '~/.aesop-temp';
   exampleConfig.fleet_root = os.homedir();
+  exampleConfig.dashboard = exampleConfig.dashboard || {};
+  exampleConfig.dashboard.port = port;
   exampleConfig._generated_note = 'This config uses portable ~ paths which expand at runtime on all platforms. Config loaders in ui/config.py (Python) and monitor/collect-signals.mjs (Node.js) automatically expand ~ paths to your home directory.';
 
   // Parse repos if provided
@@ -396,14 +459,14 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repo
 
 // Print next steps and optionally run watchdog (returns a Promise)
 async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
-  console.log('\n🎯 Next 3 commands to get started:\n');
+  console.log('\n🎯 Next 2 commands to get started:\n');
   console.log(`  1. cd ${targetDir}`);
   console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
   console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${port})`);
-  console.log('\n📖 After that, review:');
-  console.log('  • CLAUDE.md (pre-filled with your project info)');
-  console.log('  • aesop.config.json (pre-configured for your repos)');
-  console.log('  • docs/MEMORY-TEMPLATE.md (edit ~/.claude/MEMORY.md with your facts)\n');
+  console.log('\n📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
+  console.log('  mkdir -p ~/.claude/memory');
+  console.log(`  cp ${targetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+  console.log(`  cp ${targetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)\n`);
 
   return new Promise((resolve) => {
     rl.question('Run watchdog --once now? (y/N): ', (answer) => {
@@ -424,6 +487,37 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
       resolve();
     });
   });
+}
+
+// Initialize git repo if it doesn't exist
+function initializeGitRepo(targetDir, noGitFlag = false) {
+  if (noGitFlag) {
+    return false;  // User explicitly requested no git
+  }
+
+  const gitDir = path.join(targetDir, '.git');
+  if (fs.existsSync(gitDir)) {
+    return false;  // Git already initialized
+  }
+
+  try {
+    // Initialize git repo
+    execSync('git init -q', { cwd: targetDir, stdio: 'pipe' });
+    console.log('✓ Initialized git repository');
+
+    // Create initial commit
+    execSync('git config user.email "aesop-scaffold@local"', { cwd: targetDir, stdio: 'pipe' });
+    execSync('git config user.name "Aesop Scaffold"', { cwd: targetDir, stdio: 'pipe' });
+    execSync('git add -A', { cwd: targetDir, stdio: 'pipe' });
+    execSync('git commit -q -m "Initial aesop scaffold"', { cwd: targetDir, stdio: 'pipe' });
+    console.log('✓ Created initial git commit');
+    return true;
+  } catch (e) {
+    // Git operations failed, continue anyway
+    console.warn('⚠ Warning: Failed to initialize git repo automatically');
+    console.warn('  Run manually: cd ' + targetDir + ' && git init && git add -A && git commit -m "Initial commit"');
+    return false;
+  }
 }
 
 function installPreCommitWaveguard(targetDir, templateRoot) {
@@ -668,6 +762,7 @@ if (!isRuntimeCommand) {
     let finalTargetDir = targetDir;
     let configPath = path.join(targetDir, 'aesop.config.json');
     let dashboardPort = 8770;
+    const noGitFlag = args.includes('--no-git');
 
     let wizardRl = null;
 
@@ -708,7 +803,7 @@ if (!isRuntimeCommand) {
       }
       finalReposStr = selectedRepos;
 
-      // Q3: Dashboard port
+      // Q3: Dashboard port (with availability check)
       let port = '';
       while (!port) {
         port = await promptUser(wizardRl, 'Dashboard port', '8770');
@@ -717,7 +812,21 @@ if (!isRuntimeCommand) {
           console.log('  ✗ Invalid port. Must be a number between 1 and 65535.');
           port = '';
         } else {
-          dashboardPort = validPort;
+          // Check if port is available
+          const available = await isPortAvailable(validPort);
+          if (!available) {
+            console.log(`  ⚠ Port ${validPort} is in use. Trying next available port...`);
+            const nextPort = await findAvailablePort(validPort);
+            if (nextPort !== validPort) {
+              console.log(`  → Using port ${nextPort} instead`);
+              dashboardPort = nextPort;
+            } else {
+              dashboardPort = validPort;
+            }
+            port = validPort.toString();  // Exit loop
+          } else {
+            dashboardPort = validPort;
+          }
         }
       }
 
@@ -732,8 +841,15 @@ if (!isRuntimeCommand) {
       // Non-interactive defaults for wizard mode with --yes
       finalProjectName = 'my-fleet';
       finalReposStr = '';
-      dashboardPort = 8770;
+      // Find available port
+      dashboardPort = await findAvailablePort(8770);
       console.log('🪄 Running onboarding wizard with defaults (--yes)');
+    } else if (!wizardMode && finalProjectName) {
+      // Headless mode: check and find available port
+      dashboardPort = await findAvailablePort(8770);
+      if (dashboardPort !== 8770) {
+        console.log(`ℹ Port 8770 is in use, using port ${dashboardPort} instead`);
+      }
     }
 
     // Copy template files
@@ -771,8 +887,8 @@ if (!isRuntimeCommand) {
         // But if it does, warn and skip
         console.warn(`⚠ Warning: aesop.config.json already exists at ${configPath}`);
       } else {
-        // Generate aesop.config.json
-        const config = generateConfigJson(finalTargetDir, templateRoot, finalProjectName, finalReposStr, finalRepoUrlsStr);
+        // Generate aesop.config.json with the determined port
+        const config = generateConfigJson(finalTargetDir, templateRoot, finalProjectName, finalReposStr, finalRepoUrlsStr, dashboardPort);
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
         console.log('✓ Generated aesop.config.json (configured for your repos)');
       }
@@ -786,10 +902,13 @@ if (!isRuntimeCommand) {
       console.log('✓ Copied MEMORY-SEED.md (template for your facts)');
     }
 
-    // Install the pre-push hook
+    // Initialize git repo if needed (BEFORE installing hooks)
+    initializeGitRepo(finalTargetDir, noGitFlag);
+
+    // Install the pre-push hook (only works if .git exists)
     installPrePushHook(finalTargetDir, templateRoot);
 
-    // Install the pre-commit waveguard hook
+    // Install the pre-commit waveguard hook (only works if .git exists)
     installPreCommitWaveguard(finalTargetDir, templateRoot);
 
     console.log(`\n✅ Scaffolded aesop template into "${finalTargetDir}" (${copiedCount} files)`);
@@ -804,35 +923,34 @@ if (!isRuntimeCommand) {
       console.log(`  1. cd ${finalTargetDir}`);
       console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
       console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${dashboardPort})`);
-      console.log('\n📖 After that, review:');
-      console.log('  • CLAUDE.md (pre-filled with your project info)');
-      console.log('  • aesop.config.json (pre-configured for your repos)');
-      console.log('  • docs/MEMORY-TEMPLATE.md (edit ~/.claude/MEMORY.md with your facts)');
+      console.log('\n📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
+      console.log('  mkdir -p ~/.claude/memory');
+      console.log(`  cp ${finalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+      console.log(`  cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
       process.exit(0);
     } else if (finalProjectName) {
-      console.log('\nHeadless scaffolding complete! Next steps:');
+      console.log('\n✅ Headless scaffolding complete!\n');
+      console.log('🎯 Next 3 commands to get started:\n');
       console.log(`  1. cd ${finalTargetDir}`);
-      console.log('  2. Review CLAUDE.md (pre-filled with your project info)');
-      console.log('  3. Review aesop.config.json (pre-configured for your repos)');
-      console.log('\nInitialize your brain (Claude Code team memory):');
-      console.log('  4. mkdir -p ~/.claude/memory');
-      console.log(`  5. cp ${finalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (or review existing ~/.claude/CLAUDE.md)`);
-      console.log(`  6. cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
-      console.log('\nRun the daemon and dashboard:');
-      console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
-      console.log('  8. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:8770)');
+      console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
+      console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${dashboardPort})`);
+      console.log('\n📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
+      console.log('  mkdir -p ~/.claude/memory');
+      console.log(`  cp ${finalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+      console.log(`  cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
     } else {
-      console.log('\nConfiguration steps:');
+      console.log('\n✅ Scaffold complete!\n');
+      console.log('🎯 Next 3 commands to get started:\n');
       console.log(`  1. cd ${finalTargetDir}`);
-      console.log('  2. cp aesop.config.example.json aesop.config.json');
-      console.log('  3. Edit aesop.config.json with your configuration');
-      console.log('\nInitialize your brain (Claude Code team memory):');
-      console.log('  4. mkdir -p ~/.claude/memory');
-      console.log(`  5. cp ${finalTargetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
-      console.log(`  6. cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
-      console.log('\nRun the daemon and dashboard:');
-      console.log('  7. bash daemons/run-watchdog.sh --once  (test run)');
-      console.log('  8. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:8770)');
+      console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
+      console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${dashboardPort})`);
+      console.log('\n📖 Configuration steps (optional):\n');
+      console.log('  cp aesop.config.example.json aesop.config.json  (if not generated)');
+      console.log('  Edit aesop.config.json with your configuration');
+      console.log('\n📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
+      console.log('  mkdir -p ~/.claude/memory');
+      console.log(`  cp ${finalTargetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
+      console.log(`  cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
     }
     console.log('\nFor full documentation, see the README.md in the scaffolded directory.');
     process.exit(0);

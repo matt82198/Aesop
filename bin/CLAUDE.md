@@ -1,77 +1,79 @@
-# bin/ — CLI scaffolder
+# bin/ — CLI scaffolder + runtime commands
 
-**Purpose**: Node.js CLI entry point that clones the aesop orchestration template into a target directory with idempotent validation, plus an interactive onboarding wizard for new adopters.
+**Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet).
 
-## Invocation
+## Universal rules (every domain)
+- Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
+- Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
+- In worktrees use ABSOLUTE paths under the worktree for every write.
+- Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
-- **npm registry**: `npx @matt82198/aesop [target-dir]` (default: `aesop-fleet`)
-- **Local dev**: `node bin/cli.js [target-dir]`
-- **Help**: `npx @matt82198/aesop --help` or `-h`
-- **Interactive wizard**: `npx @matt82198/aesop wizard` (on a TTY, prompts; with `--yes`, uses defaults)
+## Invocation modes
 
-## Runtime subcommands
+**Scaffolder** (creates new fleet):
+- `npx @matt82198/aesop` → scaffolds to `./aesop-fleet` (default)
+- `npx @matt82198/aesop my-fleet` → scaffolds to `./my-fleet`
+- `npx @matt82198/aesop my-fleet --force` → re-scaffold and replace `.git/hooks/pre-push`
+- `npx @matt82198/aesop --name "api" --domains "server,worker" --repos "/path/repo"` → headless scaffold (no interactive prompts)
 
-cli.js dispatches runtime management subcommands to `tools/{subcommand}.js`:
+**Wizard** (guided setup, ~60 sec):
+- `npx @matt82198/aesop wizard` → prompts: project name (default: "my-fleet"), repos (auto-discover from `~`), port (default: 8770, validates 1–65535), brain root (default: `~/.claude`)
+- `npx @matt82198/aesop wizard --yes` → uses all defaults, no prompts (CI-safe)
+- Non-TTY input auto-skips prompts
 
-- **`aesop doctor`** (or `node bin/cli.js doctor`) — Preflight readiness check; validates Node.js, Python, git, config, directories, hooks, and dashboard port availability.
-- **`aesop watch`** (or `node bin/cli.js watch`) — Launch the watchdog daemon; spawns `daemons/run-watchdog.sh` for continuous fleet monitoring.
-- **`aesop dash`** (or `node bin/cli.js dash`) — Launch the web dashboard; spawns `python ui/serve.py` to serve realtime fleet status at localhost:8770 (default).
-- **`aesop status`** (or `node bin/cli.js status`) — One-shot fleet status snapshot; displays heartbeats, dashboard port, and git branch status.
-- **`aesop fleet`** (or `node bin/cli.js fleet`) — One-shot fleet snapshot in JSON; displays active agents, heartbeat ages, tracker lane counts, and orchestrator status. Node STDLIB only; gracefully degrades with `unavailable: <why>` for missing state files.
+**Runtime commands** (after scaffolding; dispatch pattern in cli.js lines 14–30):
+```javascript
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet'];
+const commandMap = {
+  'doctor': '../tools/doctor.js',   // Preflight check (Node, Python, git, config, dirs, hooks, port)
+  'watch': '../tools/watch.js',     // Launch daemon; spawns daemons/run-watchdog.sh
+  'dash': '../tools/dash.js',       // Launch web dashboard; spawns python3 ui/serve.py (default localhost:8770)
+  'status': '../tools/status.js',   // One-shot snapshot (heartbeats, port, git branch)
+  'fleet': '../tools/fleet.js'      // One-shot JSON snapshot (agents, heartbeats, tracker, orchestrator; Node STDLIB only, graceful degrade)
+};
+require(commandMap[args[0]]); // Load + run; returns immediately after
+```
 
-## What gets copied
+## Scaffold files (filesToCopy array in cli.js lines 243–260)
 
-Files in `filesToCopy` array (cli.js lines 239–256):
-- **Directories**: `daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`, `state_store/`, `skills/`, `mcp/`, `scan/`, `hooks/`
-- **Files**: `aesop.config.example.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `CLAUDE-TEMPLATE.md`
-- **Brain templates** (in docs/): `MEMORY-TEMPLATE.md` (via docs/ directory copy)
+**Directories copied** (recursive):
+`daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`, `state_store/`, `skills/`, `mcp/`, `scan/`, `hooks/`
 
-## What does NOT get copied
+**Files copied**:
+`aesop.config.example.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `CLAUDE-TEMPLATE.md`
 
-- `aesop.config.json` (users must `cp aesop.config.example.json` and edit)
-- `state/` (runtime durable state, git-ignored, created by daemons)
-- `.git/`, `node_modules/`, build artifacts
+**NOT copied**:
+`aesop.config.json` (user must `cp aesop.config.example.json` and edit), `state/` (runtime durable state, git-ignored), `.git/`, `node_modules/`, build artifacts
 
-## Post-scaffold guidance
+**npm package.json `files` array** (lines 9–36): If adding new dirs/files to `filesToCopy`, add to `files` array so npm publish includes them.
 
-Scaffolder prints steps for users:
-1. `cd target-dir && cp aesop.config.example.json aesop.config.json`
-2. Edit config with paths and repos
-3. Initialize brain: `cp CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md` (edit)
-4. Initialize memory: `cp docs/MEMORY-TEMPLATE.md ~/.claude/MEMORY.md` (edit)
-5. Test daemon: `bash daemons/run-watchdog.sh --once`
-6. Launch dashboard: `python ui/serve.py`
+## Invariants
 
-## Interactive wizard (`aesop wizard`)
+- **Idempotent on empty targets**: Fails if `targetDir` exists and is non-empty (except `.git`, aesop scaffolded dirs). Safe to retry.
+- **Symlink guard**: Rejects symlinks in target dir (lstat check, not stat); prevents escaping targetDir during copy.
+- **Portable paths**: No machine-specific paths; `path.join()` + `__dirname` handle cross-platform resolution. Config uses `~` form (`~/.claude`, `~/scripts`) expanded at load time.
+- **Async wizard**: Main execution is async IIFE to support readline prompts.
+- **Non-destructive**: Never overwrites existing `aesop.config.json` without user confirmation.
 
-The wizard mode provides an interactive onboarding flow for new adopters, guiding them through fleet setup in ~60 seconds:
+## Test commands
 
-1. **Trigger**: `npx @matt82198/aesop wizard` on a TTY (interactive terminal)
-2. **Questions** (all have sensible defaults, press Enter-Enter-Enter to skip):
-   - Project name (default: "my-fleet")
-   - Repos to watch (auto-discovers git repos under `~`, offers choices)
-   - Dashboard port (default: 8770, validates 1–65535)
-   - Brain root directory (default: `~/.claude`)
-3. **Output**:
-   - Scaffolds template files
-   - Generates CLAUDE.md (substituted with project name)
-   - Generates aesop.config.json (with discovered repos)
-   - Prints "next 3 commands" epilogue
-   - Offers to run `watchdog --once` smoke test immediately
-4. **Non-interactive mode** (`--yes` flag or non-TTY stdin): Uses defaults, zero prompts (CI-safe)
+**Node.js tests** (npm run test:node):
+- `npm run test:node` → `node --test --test-timeout=60000 tests/*.test.mjs`
+- Fleet CLI tests: `tests/fleet-cli.test.mjs` — spawns CLI in temp fixture, verifies JSON shape (heartbeats, agents, tracker, orchestrator), graceful degrade, exit 0, no cwd pollution
+- CLI config tests: `tests/cli-config.test.mjs` — scaffold flags (--name, --domains, --repos, --repo-urls), fleet_root auto-set to os.homedir(), config validation, repo URL generation
 
-### Wizard implementation details
+**First-hour test suite** (inline in both test files above):
+- Empty state directory graceful degrade (no state files)
+- Present heartbeat files parsed correctly
+- Invalid/malformed JSON degrades gracefully
+- Process timeouts handled (10s max per invocation)
 
-- **Repo discovery** (`discoverRepos`): Scans `~` for `.git` directories at first level (non-recursive)
-- **Port validation** (`validatePort`): Rejects invalid ports, accepts 1–65535
-- **Portable paths**: All config paths use `~` form (`~/.claude`, `~/scripts`, etc.) for cross-platform compatibility
-- **Defaults**: Every prompt has a default so users can skip it (press Enter)
-- **Non-destructive**: Never overwrites existing `aesop.config.json` without user confirmation
+**Shell integration** (npm run test:sh): Pre-push hook tests + watchdog tests (separate domains, see hooks/ and daemons/)
 
-## Invariants & gotchas
+## Dropped (reason)
+- Post-scaffold user guidance steps (belongs in README/CLAUDE-TEMPLATE.md output, not scaffolder contract)
+- Repo discovery implementation details (discoverRepos function is simple, documented inline in code)
+- Port validation logic (validatePort function documented inline; accepts 1–65535)
+- Flag parsing implementation (getFlag function is simple; documented inline)
 
-- **Idempotent on empty targets**: Fails if `targetDir` exists and is non-empty (non-destructive). Safe to retry.
-- **Adding shipped files**: Any new file/dir added to `filesToCopy` array must also be added to `package.json` `files` array (lines 9–27 in package.json) so npm publish includes it.
-- **No machine-specific paths**: Use relative paths only; `__dirname` and `path.join()` handle cross-platform resolution.
-- **Wizard prompts are async**: Main execution is wrapped in async IIFE to support readline prompts
-- **Help text accuracy**: If invocation steps or output paths change, update help text
+Map of all domains: /CLAUDE.md
