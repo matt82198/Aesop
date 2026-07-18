@@ -243,7 +243,7 @@ def get_config_path():
             '''
 path1 = "C:/Users/alice"
 path2 = "/home/bob"
-token = "conductor3"
+machine_tag = "conductor3"
             '''
         )
 
