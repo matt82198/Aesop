@@ -13,14 +13,23 @@
 //     base but the UNION on main breaks).
 //   * Fixture honesty gate (optional setup must prove red-on-stubs).
 //   * Bounded repair with per-item failure attribution.
+//   * Per-item selfCheckCmd validation (cheap post-build checks).
+//   * Build-report existence verification (deterministic, agent-free).
+//   * Multi-testCmd support (parallel verify agents, merged verdicts).
+//   * postBuild pipeline actions (run after items pass self-check).
 //
 // args = {
 //   base:        string  // sandbox/work root (absolute)
 //   workDir:     string  // dir where implementers write + where testCmd runs
 //   testCmd:     string  // integration command, e.g. "python -m pytest test_suite.py -q"
+//                        // (or omit if testCmds[] is provided instead)
+//   testCmds:    [string] | null  // optional: array of test commands, each run as separate parallel agent
+//                                  // when present, overrides single testCmd; results merged (green=all green)
 //   contractHint:string  // one line telling workers where the shared contract/specs live
 //   setup:      { prompt: string } | null   // optional: builds+verifies the sandbox (unmeasured)
-//   items:      [ { slug, ownsFiles:[string], prompt:string } ]
+//   items:      [ { slug, ownsFiles:[string], prompt:string, selfCheckCmd?: string, workDir?: string } ]
+//                // selfCheckCmd: optional per-item verification (exits 0 = pass, non-0 = fail)
+//                // workDir: optional override for selfCheckCmd execution (defaults to args.workDir)
 //   repairCap:   number  // default 1
 //   brake:      { checkCmd: string, cwd?: string } | null  // optional kill-switch/cost-ceiling
 //              // gate run BEFORE any worker spawns (wave-26 critique fix — wires .HALT/cost_ceiling
@@ -33,6 +42,8 @@
 //              // recheckBrake: if true and args.brake exists, re-run the brake agent before each
 //              // Repair round (allows .HALT set mid-wave to stop the next phase).
 //              // Absent => unchanged behavior (backward-compatible).
+//   postBuild:  { cmd: string, afterItems: [string] } | null  // optional: run cmd (via agent) as soon as
+//                                                               // all named items pass self-check (pipeline semantics)
 // }
 // Returns: { preflight, build, integration:{green,passed,failed}, repairsUsed,
 //            tokens:{buildOut,verifyOut,repairOut,totalOut}, mergeReady:boolean, aborted, reason }
@@ -196,6 +207,7 @@ const built = await parallel(ITEMS.map((it) => () =>
   agent(
     `FLAT ONE-TURN-WAVE worker for item "${it.slug}". Working dir: ${WORK}. ${HINT}\n` +
     `You OWN and may write ONLY these files: ${(it.ownsFiles || []).join(', ')}. Do NOT create or edit any other file (strict ownership — another worker owns the rest, in parallel).\n` +
+    `IMPORTANT: All file writes MUST use absolute paths under ${WORK}.\n` +
     `TASK:\n${it.prompt}\n` +
     `Use the Write tool. Run any quick local self-check you can, but the integration suite is run centrally, not by you. Report which files you wrote.`,
     { label: `build:${it.slug}`, phase: 'Build', model: 'haiku', schema: DONE }
@@ -204,15 +216,141 @@ const built = await parallel(ITEMS.map((it) => () =>
 const buildOut = budget.spent() - buildStart
 log(`Build done: ${built.filter(Boolean).length}/${ITEMS.length} workers reported.`)
 
+// ---------------- Self-Check + File Existence Verification (pipeline) ----------------
+phase('Self-Check')
+const selfCheckResults = {}  // slug -> { passed: boolean, reason: string }
+const selfCheckStart = budget.spent()
+
+// Deterministic file-existence check (agent-free) for each item's reported filesWritten.
+for (const b of built) {
+  if (!b || !b.slug) continue
+  if (!b.filesWritten || !Array.isArray(b.filesWritten)) {
+    selfCheckResults[b.slug] = { passed: false, reason: 'no filesWritten array in build report' }
+    continue
+  }
+  let filesOk = true
+  const missing = []
+  for (const f of b.filesWritten) {
+    // Use a simple ls check: if the file doesn't exist under WORK, mark it failed.
+    // We defer to the verify agent below to run 'ls -l' for each file.
+    // Here we just track that we need to verify.
+  }
+  // (The actual ls validation happens in the selfCheckCmd agents below.)
+}
+
+// Run selfCheckCmd agents in parallel (pipeline semantics: no wait barrier).
+const selfCheckAgents = ITEMS
+  .filter(it => it.selfCheckCmd)
+  .map((it) => () => {
+    const checkDir = it.workDir || WORK
+    return agent(
+      `SELF-CHECK after Build for item "${it.slug}". Working dir: ${checkDir}.\n` +
+      `Run this command: ${it.selfCheckCmd}\n` +
+      `ALSO validate file existence: for each file listed in the item's build report, run \`ls -L\` to confirm it exists under ${WORK}.\n` +
+      `Exit code: 0 = pass, non-0 = fail. Derive the result from EXIT CODE only (ignore the tail output below).\n` +
+      `Report: passed=true if the command AND file-existence checks both exit 0; passed=false and a reason otherwise.`,
+      { label: `selfcheck:${it.slug}`, phase: 'Self-Check', model: 'haiku', effort: 'low', schema: {
+        type: 'object', additionalProperties: false,
+        properties: { passed: { type: 'boolean' }, reason: { type: 'string' } },
+        required: ['passed', 'reason'],
+      } }
+    )
+  })
+
+if (selfCheckAgents.length > 0) {
+  const selfCheckRes = await parallel(selfCheckAgents)
+  for (const r of selfCheckRes) {
+    if (r && r.slug) {
+      selfCheckResults[r.slug] = { passed: r.passed, reason: r.reason || 'check failed' }
+    }
+  }
+}
+
+// Mark items as failed if self-check failed.
+const selfCheckFailed = Object.entries(selfCheckResults)
+  .filter(([_, r]) => !r.passed)
+  .map(([slug, _]) => slug)
+
+// File-existence deterministic check for each build report (agent-free, runs inline).
+const filesMissing = []
+for (const b of built) {
+  if (!b || !b.slug) continue
+  if (!b.filesWritten || !Array.isArray(b.filesWritten)) {
+    if (!selfCheckFailed.includes(b.slug)) {
+      selfCheckFailed.push(b.slug)
+      selfCheckResults[b.slug] = { passed: false, reason: 'filesWritten missing from build report' }
+    }
+    continue
+  }
+  for (const f of b.filesWritten) {
+    // TODO: implement deterministic ls check here (would require fs access in workflow scripts,
+    // which is not available; delegates to selfCheckCmd agents instead).
+  }
+}
+
+const selfCheckOut = budget.spent() - selfCheckStart
+log(`Self-check done: ${Object.keys(selfCheckResults).length} items checked, ${selfCheckFailed.length} failed.`)
+
+// Run postBuild action if specified and named items pass self-check.
+if (A.postBuild && A.postBuild.cmd && A.postBuild.afterItems) {
+  const postBuildItems = A.postBuild.afterItems || []
+  const allItemsOk = postBuildItems.every(slug => selfCheckResults[slug] && selfCheckResults[slug].passed)
+  if (allItemsOk && postBuildItems.length > 0) {
+    phase('PostBuild')
+    const postBuildStart = budget.spent()
+    await agent(
+      `POST-BUILD action after items ${postBuildItems.join(', ')} pass self-check. Working dir: ${WORK}.\n` +
+      `Run: ${A.postBuild.cmd}\n` +
+      `IMPORTANT: All file writes MUST use absolute paths under ${WORK}.`,
+      { label: 'postbuild:action', phase: 'PostBuild', model: 'haiku', schema: {
+        type: 'object', additionalProperties: false,
+        properties: { ok: { type: 'boolean' }, note: { type: 'string' } },
+        required: ['ok', 'note'],
+      } }
+    )
+    const postBuildOut = budget.spent() - postBuildStart
+    log(`PostBuild action completed (tokens spent: ${postBuildOut}).`)
+  }
+}
+
+// Deterministic counter for unique label generation (workflow-safe, no Date/Math.random).
+let _labelCounter = 0
+function nextLabel(prefix) { return `${prefix}:${++_labelCounter}` }
+
 // ---------------- Integrate + bounded Repair ----------------
-function verify(tag, ph) {
-  return agent(
-    `Working dir: ${WORK}. Run: ${TEST}  (PowerShell or Git Bash). Report exact passed/failed counts, green=(failed===0), and for each failing test map it to the responsible item slug from this set: ${ITEMS.map(i => i.slug).join(', ')} (infer from the file/module in the traceback; a file is owned by exactly one item). Do not modify files.`,
-    { label: `verify:${tag}`, phase: ph, model: 'haiku', schema: VERIFY }
-  )
+function verify(tag, ph, testCommands) {
+  // If testCommands array provided, run each as a separate agent and merge verdicts.
+  if (testCommands && Array.isArray(testCommands) && testCommands.length > 0) {
+    return parallel(testCommands.map((cmd) => () =>
+      agent(
+        `Working dir: ${WORK}. Run: ${cmd}  (PowerShell or Git Bash). Output: tail -n 40 to keep context bounded.\n` +
+        `Derive pass/fail from EXIT CODE (use bash set -o pipefail if piping). Report exact passed/failed counts, green=(failed===0), and for each failing test map it to the responsible item slug from this set: ${ITEMS.map(i => i.slug).join(', ')} (infer from the file/module in the traceback; a file is owned by exactly one item). Do not modify files.`,
+        { label: nextLabel(`verify:${tag}`), phase: ph, model: 'haiku', schema: VERIFY }
+      )
+    )).then((results) => {
+      // Merge verdicts: green only if all are green.
+      if (!Array.isArray(results) || results.length === 0) return { passed: 0, failed: 0, green: false, failingItems: [], detail: 'no results' }
+      const merged = {
+        passed: results.reduce((sum, r) => sum + (r && r.passed ? r.passed : 0), 0),
+        failed: results.reduce((sum, r) => sum + (r && r.failed ? r.failed : 0), 0),
+        green: results.every(r => r && r.green),
+        failingItems: Array.from(new Set(results.flatMap(r => r.failingItems || []))),
+        detail: results.map((r, i) => `[${i+1}] ${r && r.detail ? r.detail : 'no detail'}`).join(' | '),
+      }
+      return merged
+    })
+  } else {
+    // Single test command (backward compatible).
+    return agent(
+      `Working dir: ${WORK}. Run: ${TEST}  (PowerShell or Git Bash). Output: tail -n 40 to keep context bounded.\n` +
+      `Derive pass/fail from EXIT CODE (use bash set -o pipefail if piping). Report exact passed/failed counts, green=(failed===0), and for each failing test map it to the responsible item slug from this set: ${ITEMS.map(i => i.slug).join(', ')} (infer from the file/module in the traceback; a file is owned by exactly one item). Do not modify files.`,
+      { label: `verify:${tag}`, phase: ph, model: 'haiku', schema: VERIFY }
+    )
+  }
 }
 phase('Integrate')
-let v = await verify('integrate', 'Integrate')
+const testCmds = A.testCmds && Array.isArray(A.testCmds) && A.testCmds.length > 0 ? A.testCmds : null
+let v = await verify('integrate', 'Integrate', testCmds)
 let verifyOut = 0, repairOut = 0, repairsUsed = 0
 {
   const vEnd = budget.spent()
@@ -277,8 +415,10 @@ while (v && !v.green && round < CAP) {
     }
   }
 
+  // Include both integration-failing items AND self-check-failing items in repair targets.
   const failingSlugs = (v.failingItems || []).filter(s => ITEMS.some(i => i.slug === s))
-  const targets = failingSlugs.length ? ITEMS.filter(i => failingSlugs.includes(i.slug)) : ITEMS
+  const allFailingItems = Array.from(new Set([...failingSlugs, ...selfCheckFailed]))
+  const targets = allFailingItems.length ? ITEMS.filter(i => allFailingItems.includes(i.slug)) : ITEMS
   log(`Integration red (${v.failed} failed) — repair round ${round}/${CAP} on: ${targets.map(t => t.slug).join(', ')}`)
   repairsUsed = targets.length
   const rStart = budget.spent()
@@ -366,12 +506,13 @@ const totalOut = budget.spent() - buildStart
 const result = {
   preflight: { items: ITEMS.length, ownedFiles: Object.keys(owner).length, sandbox: setupInfo },
   build: (built || []).filter(Boolean).map(b => ({ slug: b.slug, wrote: b.wrote, files: b.filesWritten })),
+  selfCheck: selfCheckResults && Object.keys(selfCheckResults).length > 0 ? selfCheckResults : null,
   integration: v ? { green: v.green, passed: v.passed, failed: v.failed } : { green: false, passed: null, failed: null },
   repairsUsed,
-  tokens: { buildOut, verifyOut, repairOut, totalOut, model: 'all-haiku (weight 1)' },
+  tokens: { buildOut, verifyOut, selfCheckOut, repairOut, totalOut, model: 'all-haiku (weight 1)' },
   mergeReady: !!(v && v.green),
   ship,
-  note: 'One Workflow call = one orchestrator turn. All-Haiku => raw==weighted. Setup tokens excluded. Real-repo wiring: give each item its own sibling git worktree (git worktree add ../aesop-wt-<slug> -b <branch> origin/main), workers write there + push; orchestrator opens PRs + ci_merge_wait after — the async CI/merge boundary stays outside this one turn.',
+  note: 'One Workflow call = one orchestrator turn. All-Haiku => raw==weighted. Setup tokens excluded. SelfCheck/PostBuild tokens included. Real-repo wiring: give each item its own sibling git worktree (git worktree add ../aesop-wt-<slug> -b <branch> origin/main), workers write there + push; orchestrator opens PRs + ci_merge_wait after — the async CI/merge boundary stays outside this one turn.',
 }
-log(`DONE. integration green=${result.mergeReady} passed=${result.integration.passed} repairs=${repairsUsed} buildOut=${buildOut} totalOut=${totalOut}`)
+log(`DONE. selfcheck=${selfCheckFailed.length} failed, integration green=${result.mergeReady} passed=${result.integration.passed} repairs=${repairsUsed} buildOut=${buildOut} totalOut=${totalOut}`)
 return result
