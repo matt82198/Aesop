@@ -25,9 +25,9 @@ from pathlib import Path
 
 try:
     from playwright.sync_api import sync_playwright, expect
-except ImportError:
-    print("Error: playwright not installed. Run: pip install playwright", file=sys.stderr)
-    sys.exit(1)
+except ImportError:  # import-clean without playwright; main() reports the miss
+    sync_playwright = None
+    expect = None
 
 
 # Paths
@@ -89,6 +89,11 @@ def stub_gh(fixture_root):
 
 
 def main():
+    if sync_playwright is None:
+        allow_skip = "--allow-skip" in sys.argv
+        msg = "playwright missing — run `python -m playwright install chromium`, or pass --allow-skip"
+        print(f"SKIP: {msg}" if allow_skip else f"FAIL: {msg}")
+        sys.exit(0 if allow_skip else 1)
     parser = argparse.ArgumentParser(description="Verify wave failure drill-down feature")
     parser.add_argument("--port", type=int, default=0, help="Dashboard port (default: auto)")
     args = parser.parse_args()
