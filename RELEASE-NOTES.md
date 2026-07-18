@@ -1,31 +1,48 @@
-# Aesop 0.1.0
+# Aesop 0.1.1
 
-**First stable release.** Aesop is a source-available, self-building orchestration harness for
-Claude Code: a plain-file "brain", git as the only durable state layer, cheap Haiku-first
-subagent fleets, and guardrails enforced in code. 0.1.0 graduates the `0.1.0-rc.1` candidate
-to a stable version with the same feature set — the first build where the core claims are
-backed by measurement rather than illustration, now published under the npm `latest` tag.
+**Patch release for production adopters.** Aesop 0.1.1 addresses first-hour blockers discovered
+during 0.1.0 adoption and adds critical production observability: port-conflict detection,
+doctor preflight validation, wave-dispatch performance fixes, OUTCOMES-LEDGER for fleet
+analytics, gitignore-aware secret scanning, CI workflow linting, and the full aesop fleet CLI.
+A source-available, self-building orchestration harness for Claude Code with a plain-file
+"brain", git as the durable state layer, cheap Haiku-first subagent fleets, and guardrails
+enforced in code.
 
 ## What's in this release
 
-- **Verified audit, no hallucinations.** A full release audit was run with adversarial
-  verification of every finding — 0 hallucinated issues, closing out the prior risk of
-  all-Haiku audits inflating severity.
-- **Kill-switch, wired and proven.** Fleet-wide halt is now wired into the live dispatch path
-  and exercised end-to-end: one signal stops every agent.
-- **Cost-ceiling guardrail.** Dispatch halts when a per-wave spend budget is exceeded.
-- **Held-out benchmark, measured.** A real offline scorer (`tools/bench_runner.py`) over a
-  held-out set of **39 judgment tasks** shows Haiku scoring on par with Opus at roughly
-  **1/3 the cost** — the numbers are receipts, not marketing.
-- **State-reconcile primitive.** Wave startup reconciles tracker state against shipped work so
-  finished items are never re-dispatched.
-- **Reproduce-from-clean-clone CI.** CI builds and validates the package from a fresh clone,
-  proving the tarball is self-contained and reproducible.
-- **CI docs-only deadlock fixed.** A docs-gate deadlock that could mask HEAD failures is gone.
-- **Wave PR Board + Agent Inspector.** Two new browser-proven dashboard views: per-wave merge
-  status at a glance, and per-agent transcript/cost/lifecycle drill-down.
-- **Slimmer npm package (~400 kB).** Only built artifacts, Python, tools, and docs ship — UI
-  source and `node_modules` are excluded.
+**First-hour fixes for early adopters:**
+- **Port-conflict detection.** CLI and doctor preflight now detect port-binding conflicts before
+  dashboard startup; helpful error messages point adopters to resolution steps.
+- **Doctor preflight validation.** New `aesop doctor` subcommand validates configuration, hooks,
+  state store health, and port availability before wave startup — a safety harness for first runs.
+- **Git init + --no-git option.** Scaffolder now supports `--no-git` flag for adopters integrating
+  into existing repos without re-initializing version control; `git init` in new repos works out of the box.
+
+**Production orchestration improvements:**
+- **Wave-dispatch latency fixes.** Template self-check parallelization, postBuild hooks, and
+  multi-testCmd batching provide faster feedback cycles on active waves.
+- **OUTCOMES-LEDGER producer.** Append-only ledger tracks per-wave execution outcomes (dispatch
+  time, duration, merge timing) for fleet analytics and historical trend analysis.
+- **CI workflow linter.** New `tools/lint_workflow.py` validates GitHub Actions YAML contract
+  (phase structure, job naming, cost-log artifacts); CI gate catches schema drift at merge time.
+- **CI merge-wait fail-closed.** `ci_merge_wait` timeout now blocks dispatch instead of silently
+  passing — prevents merging while CI is still running.
+
+**Observability and production readiness:**
+- **Gitignore-respecting secret scan.** `secret_scan.py` now respects `.gitignore` patterns;
+  skips ephemeral runtime files to reduce false positives and scan time on large repos.
+- **Failure drilldown + cost analytics.** Enhanced dashboard drill-down shows failure reasons,
+  cost metrics per model, per-day spend bar chart (pure SVG), and verdict scorecard.
+- **Aesop fleet CLI.** New `aesop fleet` subcommand suite for production fleet inspection: list
+  agents, query costs, export telemetry for monitoring and troubleshooting.
+- **Transcript digest + domain-map linting.** New tools for post-wave transcript summarization
+  and CLAUDE.md scope enforcement (3-line max per section).
+
+**Documentation and portability:**
+- **ANY-REPO scaffolding.** Aesop now deploys into any existing Node/Python repo; includes
+  setup guides, CONTRIBUTING.md, and GitHub community files (SECURITY.md, issue templates).
+- **MCP cost tools.** Read-only MCP server exposes cost-ledger and cost-ceiling for external
+  Claude integrations in monitoring dashboards.
 
 ## Install
 
@@ -33,11 +50,19 @@ backed by measurement rather than illustration, now published under the npm `lat
 npx @matt82198/aesop my-fleet --name "my-api" --repos "/path/to/repo"
 ```
 
+## What's fixed since 0.1.0
+
+- First-hour blockers: git-init, port conflicts, doctor preflight, scaffolder git-option
+- Wave-dispatch latency: template self-check parallelization, postBuild, multi-testCmd
+- CI merge-wait fail-closed (prevents silent merge during CI runs)
+- Gitignore-respecting secret scan (fewer false positives on large repos)
+- Full aesop fleet CLI for production operations
+- OUTCOMES-LEDGER instrumentation for fleet analytics
+
 ## Honest limits
 
-- **Small-N benchmark.** The Haiku≈Opus result is measured over 39 judgment tasks — a real,
-  held-out set, but small. Treat it as directional evidence for this workload, not a universal
-  law. Your task mix may differ.
+- **Small-N benchmark.** The Haiku≈Opus result in 0.1.0 is measured over 39 judgment tasks —
+  directional evidence for this workload, not a universal law. Remains the reference point.
 - **Out-of-repo dispatch core.** The orchestration loop is driven by Claude Code and your own
   operator workflow; this package ships the harness, guardrails, dashboard, and tooling, not a
   turnkey autonomous agent runtime.
@@ -47,4 +72,4 @@ npx @matt82198/aesop my-fleet --name "my-api" --repos "/path/to/repo"
 - **Local-first.** State lives in git and local files; there is no hosted control plane. Team
   scale beyond a single machine is on the roadmap, not shipped here.
 
-See [CHANGELOG.md](./CHANGELOG.md) for the full entry.
+See [CHANGELOG.md](./CHANGELOG.md) for the full itemized list.

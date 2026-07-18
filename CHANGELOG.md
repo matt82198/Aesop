@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-17
+
+Patch release with first-hour adopter fixes, orchestration performance improvements, and observability enhancements. Targets users deploying 0.1.0 to production and the fleet during active wave execution.
+
+### Adopter / First-hour Fixes
+- **Git init + --no-git scaffold flag** (wave-rc6): New `--no-git` scaffolder option for adopters integrating into existing repos without re-initializing version control.
+- **Port conflict detection** (wave-rc6): CLI and doctor now detect and report port-binding conflicts before dashboard startup; helpful error messages with conflict resolution steps.
+- **Next-steps ordering** (wave-rc5): Orchestration template ordering fixed so next-steps appear after state blocks, improving readability for first runs.
+- **Aesop doctor subcommand** (wave-rc4): New preflight check validates configuration, hooks, state store health, and port availability before wave startup.
+- **Executable bits in tarball** (wave-rc4): Vendored dispatch template + scripts now ship with correct execution bits set (CLI was inventing a standalone validator; real one now included).
+
+### Orchestration / Performance
+- **Wave-dispatch template latency** (wave-rc5): Targeted performance repairs — self-check parallelization, postBuild hooks, multi-testCmd batching for faster feedback cycles.
+- **Wave preflight validator** (wave-rc5): New structural validation before dispatch prevents malformed config from blocking the build.
+- **CI merge-wait fail-closed** (wave-rc3): `ci_merge_wait` timeout now blocks dispatch (fail-closed) instead of silently passing; prevents merging while CI is still running.
+
+### Observability / Instrumentation
+- **OUTCOMES-LEDGER producer** (wave-rc5): Append-wave ledger tracks per-wave execution outcomes (dispatch time, wave duration, merge timing) for fleet analytics.
+- **CI workflow linter** (wave-rc5): New `tools/lint_workflow.py` validates GitHub Actions YAML contract (phase structure, job naming, cost-log artifact); CI gate catches schema drift.
+- **Failure drilldown** (wave-rc3): Enhanced error reporting in dashboard drill-down view — inspect failure reasons, cost metrics, and agent transcript timestamps per-incident.
+- **Cost-economics dashboard** (wave-rc4): Wave-level cost analytics with model breakdown, per-day bar chart (pure SVG), verdict scorecard (success/failure/hung rates), pricing estimates from config.
+- **MCP cost tools** (wave-rc3): New read-only MCP cost-ledger and cost-ceiling tools expose spend tracking for external Claude integrations.
+- **Transcript digest + claudemd_lint** (wave-rc6-obs): New tools/artifact for post-wave transcript summarization and CLAUDE.md scope linting (3-line max per section, enforcement on drift).
+
+### Security & Reliability
+- **Gitignore-respecting secret scan** (wave-rc5): `secret_scan.py` now respects `.gitignore` patterns; skips ephemeral runtime files (state/, .env files, node_modules traces) to reduce false positives and scan time.
+- **Aesop fleet CLI** (wave-rc3): New `aesop fleet` subcommand suite for production fleet inspection (list agents, query costs, export telemetry).
+
+### Documentation & Portability
+- **ANY-REPO portability** (wave-rc4): Aesop now scaffolds into any existing Node/Python repo; setup guides, CONTRIBUTING.md, GitHub issue templates (SECURITY.md, CODE_OF_CONDUCT) included.
+- **Domain CLAUDE.md minification** (wave-rc6): All domain-specific documentation scoped to one file per Haiku task; root CLAUDE.md now a pure map for faster load and maintenance.
+- **CONTRIBUTING guide** (wave-rc6): Contributor workflow, test running, release process, branching discipline documented with examples.
+
+### Tests
+- **Full gate green** (all waves): npm run test:py && test:node + all shell suites + secret-scan pass without signature warnings.
+
 ## [0.1.0] - 2026-07-17
 
 First stable release. This is the graduation of `0.1.0-rc.1` to a stable version with the
