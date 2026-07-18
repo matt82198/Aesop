@@ -36,13 +36,13 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 - **Round-trip fidelity**: ingest → project → export reproduces the same items (tested against the real `state/tracker.json`).
 
 ## CI Isolation & Concurrency Gotcha
-**SQLite tests deadlock under parallel CI shards** (false positive; no code defect). When running pytest with `--maxfail` or `-n` parallel shards, multiple test files may contend on filesystem-level WAL locks. **Solution:** Use `_retry_on_db_lock(func, max_retries=3, delay=0.1)` wrapper for DB initialization and appends; apply exponential backoff. Real fix = per-shard DB isolation (future work). On CI re-run, the shard passes.
+**SQLite tests deadlock under parallel CI shards** (false positive; no code defect). When running the unittest suite under parallel CI shards, multiple test files may contend on filesystem-level WAL locks. **Solution:** Use `_retry_on_db_lock(func, max_retries=3, delay=0.1)` wrapper for DB initialization and appends; apply exponential backoff. Real fix = per-shard DB isolation (future work). On CI re-run, the shard passes.
 
 ## Test Commands
 Run from repo root:
-- `python -m pytest tests/test_state_store.py -v` — Core API, concurrency, round-trip tests.
-- `python -m pytest tests/test_state_store_hardening.py -v` — Corrupt event handling, input validation.
-- `python -m pytest tests/test_state_store_snapshots.py -v` — Snapshot read/write and tail-replay.
+- `python -m unittest tests.test_state_store` — Core API, concurrency, round-trip tests.
+- `python -m unittest tests.test_state_store_hardening` — Corrupt event handling, input validation.
+- `python -m unittest tests.test_state_store_snapshots` — Snapshot read/write and tail-replay.
 - `npm run test:py` — All Python test suites (includes state_store).
 
 ## Next (cutover, follow-up — NOT this increment)
