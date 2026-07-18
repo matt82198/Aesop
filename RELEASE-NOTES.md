@@ -23,7 +23,7 @@ enforced in code.
   multi-testCmd batching provide faster feedback cycles on active waves.
 - **OUTCOMES-LEDGER producer.** Append-only ledger tracks per-wave execution outcomes (dispatch
   time, duration, merge timing) for fleet analytics and historical trend analysis.
-- **CI workflow linter.** New `tools/lint_workflow.py` validates GitHub Actions YAML contract
+- **CI workflow linter.** New `tools/ci_workflow_lint.py` statically validates GitHub Actions YAML (lockfile + suite-coverage checks)
   (phase structure, job naming, cost-log artifacts); CI gate catches schema drift at merge time.
 - **CI merge-wait fail-closed.** `ci_merge_wait` timeout now blocks dispatch instead of silently
   passing — prevents merging while CI is still running.

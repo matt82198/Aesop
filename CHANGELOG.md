@@ -25,7 +25,7 @@ Patch release with first-hour adopter fixes, orchestration performance improveme
 
 ### Observability / Instrumentation
 - **OUTCOMES-LEDGER producer** (wave-rc5): Append-wave ledger tracks per-wave execution outcomes (dispatch time, wave duration, merge timing) for fleet analytics.
-- **CI workflow linter** (wave-rc5): New `tools/lint_workflow.py` validates GitHub Actions YAML contract (phase structure, job naming, cost-log artifact); CI gate catches schema drift.
+- **CI workflow linter** (wave-rc5): New `tools/ci_workflow_lint.py` statically validates GitHub Actions YAML (npm-ci lockfile presence, every package.json test script is invoked, file references resolve) — catches the green-means-never-ran class.
 - **Failure drilldown** (wave-rc3): Enhanced error reporting in dashboard drill-down view — inspect failure reasons, cost metrics, and agent transcript timestamps per-incident.
 - **Cost-economics dashboard** (wave-rc4): Wave-level cost analytics with model breakdown, per-day bar chart (pure SVG), verdict scorecard (success/failure/hung rates), pricing estimates from config.
 - **MCP cost tools** (wave-rc3): New read-only MCP cost-ledger and cost-ceiling tools expose spend tracking for external Claude integrations.
