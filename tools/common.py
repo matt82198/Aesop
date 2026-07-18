@@ -54,7 +54,14 @@ def check_heartbeat_staleness(hb_file, threshold_s):
         return True, 0, "Heartbeat file unreadable"
 
     age_seconds = int(time.time()) - timestamp
-    age_seconds = max(0, age_seconds)  # Never negative
+
+    # Check for future-dated timestamp (clock skew beyond tolerance)
+    # More than 120s in the future is treated as stale, not clamped-to-fresh
+    if age_seconds < -120:
+        return True, 0, "Heartbeat timestamp in future (clock skew)"
+
+    # Clamp small negative ages to 0 (normal clock skew recovery)
+    age_seconds = max(0, age_seconds)
 
     if age_seconds >= threshold_s:
         return True, age_seconds, f"Heartbeat stale ({age_seconds}s >= {threshold_s}s)"

@@ -79,6 +79,9 @@ def append_ledger_line(iso_ts, agent_type, model, duration_sec, tokens_in, token
     ensure_ledger_header()
     ledger_file, _, _ = get_ledger_paths()
 
+    # Sanitize iso_ts: remove pipes, newlines, carriage returns (injection prevention)
+    iso_ts = str(iso_ts or '-').replace('|', '').replace('\n', '').replace('\r', '').strip()
+
     # Sanitize fields: no pipes, truncate to reasonable length
     agent_type = str(agent_type or '-').replace('|', '').strip()[:30]
     model = str(model or '-').replace('|', '').strip()[:30]
@@ -338,14 +341,19 @@ def append_wave(report_file, wave, phase, timestamp):
     except (ValueError, TypeError):
         return False, f"Invalid wave number: {wave}"
 
+    # Sanitize inputs for idempotency check to match append_ledger_line sanitization
+    # This prevents a malformed timestamp or long phase from bypassing dedup
+    iso_ts_sanitized = str(timestamp or '-').replace('|', '').replace('\n', '').replace('\r', '').strip()
+    phase_sanitized = str(phase or '-').replace('|', '').strip()[:15] if phase else ''
+
     # Idempotency check: see if this exact row already exists
     existing_rows = parse_ledger_rows()
     for row in existing_rows:
-        if (row['iso_ts'] == timestamp and
-            row['phase'] == phase and
+        if (row['iso_ts'] == iso_ts_sanitized and
+            row['phase'] == phase_sanitized and
             row['wave'] == wave_num and
             row['model'] == model):
-            return True, f"Row already exists (wave={wave_num}, phase={phase}, ts={timestamp}); skipping"
+            return True, f"Row already exists (wave={wave_num}, phase={phase_sanitized}, ts={iso_ts_sanitized}); skipping"
 
     # Append the row
     append_ledger_line(timestamp, agent_type, model, 0, 0, tokens_out, verdict, phase, wave_num)
