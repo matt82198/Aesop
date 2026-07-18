@@ -3,13 +3,16 @@
  * Polls /api/wave/dispatch every 2-3s to show real-time worker status.
  * Displays per-agent row with phase badge, activity age, and token burn.
  * Embedded in the Activity view.
+ *
+ * Takes an optional `fetcher` prop for dependency injection in tests.
+ * If not provided, uses the real fetchWaveDispatch from ../lib/api.
  */
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { fetchWaveDispatch } from '../lib/api';
+import { fetchWaveDispatch as defaultFetcher } from '../lib/api';
 import type { WaveDispatchData } from '../lib/types';
 import { TESTIDS } from '../test/fixtures';
-import styles from './DispatchPanel.css';
+import styles from './DispatchPanel.module.css';
 
 const POLL_INTERVAL_MS = 2500; // 2.5 seconds
 const VISIBLE_CHECK_INTERVAL_MS = 500; // Check visibility every 500ms
@@ -17,20 +20,22 @@ const VISIBLE_CHECK_INTERVAL_MS = 500; // Check visibility every 500ms
 interface DispatchPanelProps {
   // Optional container ref for visibility detection
   containerRef?: React.RefObject<HTMLDivElement>;
+  // Optional fetcher for dependency injection in tests
+  fetcher?: () => Promise<WaveDispatchData>;
 }
 
-export default function DispatchPanel({ containerRef }: DispatchPanelProps) {
+export default function DispatchPanel({ containerRef, fetcher = defaultFetcher }: DispatchPanelProps) {
   const [dispatch, setDispatch] = useState<WaveDispatchData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(true);
-  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const visibilityCheckTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const visibilityCheckTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Fetch dispatch data
   const fetchDispatch = useCallback(async () => {
     try {
-      const data = await fetchWaveDispatch();
+      const data = await fetcher();
       setDispatch(data);
       setError(null);
     } catch (err) {
@@ -40,7 +45,7 @@ export default function DispatchPanel({ containerRef }: DispatchPanelProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetcher]);
 
   // Check if component is visible in viewport
   const checkVisibility = useCallback(() => {
