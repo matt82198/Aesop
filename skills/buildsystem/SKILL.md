@@ -170,7 +170,7 @@ Before dispatch, the preflight verifies:
 - No two items touch the same file or directory (checked via domain map)
 - If overlap is detected, the wave aborts with a remediation plan (reorder/resplit items)
 
-This guard lives in `~/.claude/skills/buildsystem/wave-flat-dispatch.template.mjs` (user-local setup, not repo code). It reads your domain map (`CLAUDE.md` sections) and validates assignments before agents launch.
+This guard is the Preflight phase of `skills/buildsystem/wave-flat-dispatch.template.mjs` (ships with aesop): it refuses to dispatch when two manifest items own the same file, returning `{aborted: true, reason: 'ownership_overlap'}` before any worker spawns.
 
 ### Worktree Isolation
 
