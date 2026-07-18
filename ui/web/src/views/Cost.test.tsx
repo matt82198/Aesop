@@ -139,4 +139,53 @@ describe('Cost view', () => {
     expect(screen.getByTestId(TESTIDS.costTable)).toBeInTheDocument();
     expect(screen.getByTestId(TESTIDS.costChart)).toBeInTheDocument();
   });
+
+  describe('extended cost metrics (wave RC3 additions)', () => {
+    it('renders weekly cost summary component', () => {
+      render(<Cost cost={fixtureCost} />);
+      expect(screen.getByTestId(TESTIDS.weeklyCostSummary)).toBeInTheDocument();
+    });
+
+    it('renders verdict cost metrics component', () => {
+      render(<Cost cost={fixtureCost} />);
+      expect(screen.getByTestId(TESTIDS.verdictCostMetrics)).toBeInTheDocument();
+    });
+
+    it('renders model mix trend chart component', () => {
+      render(<Cost cost={fixtureCost} />);
+      expect(screen.getByTestId(TESTIDS.modelMixChart)).toBeInTheDocument();
+    });
+
+    it('all six cost sections render together', () => {
+      render(<Cost cost={fixtureCostWithPricing} />);
+      // Original three + three new
+      expect(screen.getByTestId(TESTIDS.costTable)).toBeInTheDocument();
+      expect(screen.getByTestId(TESTIDS.costChart)).toBeInTheDocument();
+      expect(screen.getByTestId(TESTIDS.scorecard)).toBeInTheDocument();
+      expect(screen.getByTestId(TESTIDS.weeklyCostSummary)).toBeInTheDocument();
+      expect(screen.getByTestId(TESTIDS.verdictCostMetrics)).toBeInTheDocument();
+      expect(screen.getByTestId(TESTIDS.modelMixChart)).toBeInTheDocument();
+    });
+
+    it('weekly rollup shows data when per_week_costs is populated', () => {
+      render(<Cost cost={fixtureCost} />);
+      const weeklySummary = screen.getByTestId(TESTIDS.weeklyCostSummary);
+      // Should show week labels
+      expect(weeklySummary.textContent).toContain('2026-W');
+    });
+
+    it('verdict metrics show all four outcome types', () => {
+      render(<Cost cost={fixtureCost} />);
+      const verdictMetrics = screen.getByTestId(TESTIDS.verdictCostMetrics);
+      expect(verdictMetrics.textContent).toContain('OK');
+      expect(verdictMetrics.textContent).toContain('Failed');
+    });
+
+    it('model mix chart displays svg visualization', () => {
+      render(<Cost cost={fixtureCost} />);
+      const chartContainer = screen.getByTestId(TESTIDS.modelMixChart);
+      const svg = chartContainer.querySelector('svg');
+      expect(svg).toBeInTheDocument();
+    });
+  });
 });

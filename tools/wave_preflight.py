@@ -5,25 +5,31 @@ Wave preflight validator — check repo readiness before starting a wave.
 Validates:
   1. Current repo is on a feature branch (never main/master)
   2. Working tree clean
-  3. STATE.md phase heading consistent with state/orchestrator-status.json phase (warn-level if drifted)
+  3. STATE.md phase heading consistent with state/orchestrator-status.json phase
+     (warning-level: drift is reported but does not block the wave)
   4. No .HALT sentinel
-  5. Heartbeats fresh (configurable max-age; default 200s for watchdog, 300s for orchestrator)
+  5. Heartbeats fresh (watchdog 200s) and orchestrator-status.json fresh (300s)
   6. state/tracker.json parses as JSON
   7. secret_scan importable
 
 Exit codes:
-  0 = ready (all checks pass or only warnings)
-  1 = blocked (one or more checks failed)
+  0 = ready (all checks pass, or only warnings like phase drift)
+  1 = blocked (one or more critical checks failed)
 
 Output:
   --text (default): numbered list of checks with status and detail
   --json: {ready: bool, checks: [{name, ok, detail}]}
 
 Usage:
-  python tools/wave_preflight.py [--root REPO_ROOT] [--json]
+  python tools/wave_preflight.py [--root REPO_ROOT] [--state-root STATE_ROOT] [--json]
+
+Arguments:
+  --root REPO_ROOT: repository root directory (default: cwd)
+  --state-root STATE_ROOT: state directory (default: REPO_ROOT/state or ./state)
+  --json: output in JSON format (default: text)
 
 Environment:
-  AESOP_STATE_ROOT: state dir (default: REPO_ROOT/state or ./state)
+  AESOP_STATE_ROOT: state dir (takes precedence over --state-root argument)
   AESOP_ROOT: repo root (default: cwd or inferred from .git)
 """
 
@@ -123,6 +129,45 @@ def parse_orchestrator_status_phase(status_json_path):
         pass
 
     return None
+
+
+def check_orchestrator_status_freshness(status_json_path, threshold_s):
+    """Check if orchestrator-status.json is fresh based on updated_at timestamp.
+
+    Args:
+        status_json_path: Path to orchestrator-status.json
+        threshold_s: Staleness threshold in seconds
+
+    Returns:
+        Tuple of (is_stale, age_s, info):
+          is_stale (bool): True if file missing, unreadable, or age >= threshold_s
+          age_s (int): Age in seconds (0 if file missing/unreadable)
+          info (str or None): Descriptive message if stale/missing, None if fresh
+    """
+    if not status_json_path.exists():
+        return True, 0, "orchestrator-status.json file missing"
+
+    try:
+        data = json.loads(status_json_path.read_text(encoding="utf-8"))
+        updated_at = data.get("updated_at")
+        if not updated_at:
+            return True, 0, "orchestrator-status.json missing updated_at field"
+
+        # Parse ISO 8601 timestamp
+        import datetime
+        # Handle both formats: "2026-07-17T00:00:00Z" and with fractional seconds
+        updated_dt = datetime.datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        timestamp = updated_dt.timestamp()
+
+        age_seconds = int(time.time()) - int(timestamp)
+        age_seconds = max(0, age_seconds)  # Never negative
+
+        if age_seconds >= threshold_s:
+            return True, age_seconds, f"orchestrator-status stale ({age_seconds}s >= {threshold_s}s)"
+
+        return False, age_seconds, None
+    except Exception as e:
+        return True, 0, f"orchestrator-status.json unreadable: {e}"
 
 
 def is_git_repo(root_dir):
@@ -287,6 +332,7 @@ def run_checks(root_dir=None, state_dir=None, config=None):
     })
 
     # Check 5: STATE.md phase vs orchestrator-status.json phase (warn-level)
+    # This is a warning-level check: phase drift is reported but does not block the wave
     state_md_path = root_dir / "STATE.md"
     status_json_path = state_dir / "orchestrator-status.json"
 
@@ -297,16 +343,20 @@ def run_checks(root_dir=None, state_dir=None, config=None):
 
     phase_detail = f"STATE.md={state_phase}, status.json={status_phase}"
     if not phase_consistent:
-        phase_detail += " [DRIFT]"
+        phase_detail += " [WARN: drift detected]"
+        # Phase drift is a warning, not a blocker — ok=True to not fail the wave
+        phase_ok = True
+    else:
+        phase_ok = True
 
     checks.append({
         "name": "STATE.md phase consistent with orchestrator-status.json (warning-level)",
-        "ok": phase_consistent,
+        "ok": phase_ok,
         "detail": phase_detail,
     })
 
-    # Check 6: Heartbeats fresh
-    # Check watchdog heartbeat (200s threshold) and orchestrator heartbeat (300s)
+    # Check 6: Heartbeats and status freshness
+    # Check watchdog heartbeat (200s threshold) and orchestrator-status.json (300s)
     heartbeat_details = []
     all_heartbeats_ok = True
 
@@ -319,17 +369,18 @@ def run_checks(root_dir=None, state_dir=None, config=None):
     else:
         heartbeat_details.append(f"{hb_name}: fresh (age={age}s)")
 
-    orchestrator_hb = state_dir / "heartbeats" / "orchestrator"
-    is_stale, age, info = check_heartbeat_staleness(orchestrator_hb, 300)
-    hb_name = "orchestrator"
+    # Check orchestrator-status.json updated_at field (300s threshold)
+    status_json_path = state_dir / "orchestrator-status.json"
+    is_stale, age, info = check_orchestrator_status_freshness(status_json_path, 300)
+    status_name = "orchestrator-status"
     if is_stale:
         all_heartbeats_ok = False
-        heartbeat_details.append(f"{hb_name}: {info} (age={age}s)")
+        heartbeat_details.append(f"{status_name}: {info} (age={age}s)")
     else:
-        heartbeat_details.append(f"{hb_name}: fresh (age={age}s)")
+        heartbeat_details.append(f"{status_name}: fresh (age={age}s)")
 
     checks.append({
-        "name": "Heartbeats fresh",
+        "name": "Heartbeats and orchestrator status fresh",
         "ok": all_heartbeats_ok,
         "detail": "; ".join(heartbeat_details),
     })
@@ -378,6 +429,7 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
 
     root_dir = None
+    state_dir = None
     output_format = "text"
 
     # Parse arguments
@@ -392,6 +444,14 @@ def main(argv=None):
         elif arg.startswith("--root="):
             root_dir = arg[len("--root="):]
             i += 1
+        elif arg == "--state-root":
+            i += 1
+            if i < len(argv):
+                state_dir = argv[i]
+            i += 1
+        elif arg.startswith("--state-root="):
+            state_dir = arg[len("--state-root="):]
+            i += 1
         elif arg == "--json":
             output_format = "json"
             i += 1
@@ -405,7 +465,10 @@ def main(argv=None):
         root_dir = Path(root_dir)
 
     config = load_config(root_dir)
-    state_dir = resolve_state_dir(root_dir, config)
+    if state_dir is None:
+        state_dir = resolve_state_dir(root_dir, config)
+    else:
+        state_dir = Path(state_dir)
 
     result = run_checks(root_dir, state_dir, config)
 

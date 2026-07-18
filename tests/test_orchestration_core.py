@@ -266,21 +266,23 @@ class TestOrchestrationCoreGaps(unittest.TestCase):
     """Names what remains genuinely untestable in-repo, per the wave-26 mandate
     to surface the gap rather than hide or fake it."""
 
-    def test_gap_disjoint_file_ownership_guard_not_in_repo(self):
-        # The flat-dispatch pattern's "preflight disjoint-file-ownership guard"
-        # (see ~/.claude/skills/buildsystem/SKILL.md, Phase 1) lives in
-        # ~/.claude/skills/buildsystem/wave-flat-dispatch.template.mjs — a file
-        # in the operator's personal harness config, NOT checked into this repo.
-        # aesop/skills/ ships only CLAUDE.md, healthcheck/SKILL.md and
-        # power/SKILL.md; there is no buildsystem skill or dispatch template in
-        # this repository for us to import and unit test.
-        skills_dir = REPO_ROOT / "skills"
-        entries = sorted(p.name for p in skills_dir.iterdir()) if skills_dir.exists() else []
-        self.assertNotIn(
-            "buildsystem", entries,
-            "if a 'buildsystem' skill is ever vendored into this repo, replace this "
-            "gap note with a real test of its disjoint-file-ownership preflight guard"
-        )
+    def test_disjoint_file_ownership_guard_present_in_vendored_template(self):
+        # Wave-rc.4 vendored the buildsystem skill + dispatch template into this
+        # repo (closing the wave-26 gap this test used to document). Workflow
+        # scripts cannot be executed under unittest (they run inside the harness
+        # runtime), so this asserts the guard's load-bearing structure statically.
+        tpl = REPO_ROOT / "skills" / "buildsystem" / "wave-flat-dispatch.template.mjs"
+        self.assertTrue(tpl.exists(), "vendored dispatch template missing")
+        src = tpl.read_text(encoding="utf-8")
+        # Preflight refuses overlapping ownership before any worker spawns.
+        self.assertIn("ownership_overlap", src,
+                      "preflight must abort with reason 'ownership_overlap'")
+        for marker in ("owner[", "conflicts"):
+            self.assertIn(marker, src,
+                          f"ownership-guard structure marker {marker!r} missing")
+        # The abort must precede the Build fan-out in source order.
+        self.assertLess(src.index("ownership_overlap"), src.index("phase('Build')"),
+                        "ownership guard must run before the Build phase")
 
     def test_gap_model_dispatch_selection_is_harness_behavior(self):
         # Whether a given subagent actually RUNS on Haiku vs. Sonnet vs. Opus is

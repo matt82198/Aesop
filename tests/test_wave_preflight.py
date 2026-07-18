@@ -12,6 +12,7 @@ HERMETIC: every test below creates a throwaway git repo INSIDE a temp directory.
 No test ever touches cwd, global git config, or the real aesop repo.
 """
 
+import datetime
 import json
 import os
 import shutil
@@ -143,23 +144,35 @@ class PrefightTestBase(unittest.TestCase):
             tracker_json.write_text("{ invalid json", encoding="utf-8")
 
     def _setup_heartbeats(self, fresh=True):
-        """Set up heartbeat files (fresh or stale)."""
+        """Set up heartbeat files and orchestrator-status.json (fresh or stale)."""
         hb_dir = self.state_dir / "heartbeats"
         hb_dir.mkdir(parents=True, exist_ok=True)
 
         if fresh:
-            now = int(time.time())
+            now_ts = time.time()
+            now_int = int(now_ts)
         else:
             # 400 seconds old
-            now = int(time.time()) - 400
+            now_ts = time.time() - 400
+            now_int = int(now_ts)
 
         # Watchdog heartbeat
         watchdog_hb = self.state_dir / ".watchdog-heartbeat"
-        watchdog_hb.write_text(str(now) + "\n", encoding="utf-8")
+        watchdog_hb.write_text(str(now_int) + "\n", encoding="utf-8")
 
-        # Orchestrator heartbeat
-        orch_hb = hb_dir / "orchestrator"
-        orch_hb.write_text(str(now) + "\n", encoding="utf-8")
+        # Orchestrator-status.json (uses updated_at field for freshness check)
+        orch_status = self.state_dir / "orchestrator-status.json"
+        now_iso = datetime.datetime.fromtimestamp(now_ts, tz=datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        orch_status.write_text(
+            json.dumps({
+                "id": "main",
+                "role": "orchestrator",
+                "activity": "test",
+                "phase": "test",
+                "updated_at": now_iso,
+            }) + "\n",
+            encoding="utf-8"
+        )
 
 
 class TestGitRepoDetection(PrefightTestBase):
@@ -317,11 +330,14 @@ class TestPhaseConsistency(PrefightTestBase):
         """Should warn (but not fail) when phases differ."""
         self._setup_state_md("wave-rc.2")
         self._setup_orchestrator_status("wave-rc.3")
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
         result = self._run_preflight()
         self.assertIn("STATE.md phase consistent", result.stdout)
-        # Should show FAIL for this check
-        self.assertIn("[DRIFT]", result.stdout)
-        self.assertNotEqual(result.returncode, 0)
+        # Should show WARN for drift
+        self.assertIn("[WARN: drift detected]", result.stdout)
+        # But should still pass (phase drift is warning-level)
+        self.assertEqual(result.returncode, 0)
 
     def test_missing_files_ok(self):
         """Should pass if files don't exist yet."""
@@ -334,25 +350,29 @@ class TestPhaseConsistency(PrefightTestBase):
 
 
 class TestHeartbeatFreshness(PrefightTestBase):
-    """Test heartbeat freshness detection."""
+    """Test heartbeat and orchestrator status freshness detection."""
 
     def test_fresh_heartbeats_pass(self):
-        """Should pass with fresh heartbeats."""
+        """Should pass with fresh heartbeats and orchestrator status."""
         self._setup_heartbeats(fresh=True)
+        self._setup_tracker_json(valid=True)
         result = self._run_preflight()
-        self.assertIn("Heartbeats fresh: PASS", result.stdout)
+        self.assertIn("Heartbeats and orchestrator status fresh: PASS", result.stdout)
+        self.assertEqual(result.returncode, 0)
 
     def test_stale_heartbeats_fail(self):
         """Should fail with stale heartbeats."""
         self._setup_heartbeats(fresh=False)
+        self._setup_tracker_json(valid=True)
         result = self._run_preflight()
-        self.assertIn("Heartbeats fresh: FAIL", result.stdout)
+        self.assertIn("Heartbeats and orchestrator status fresh: FAIL", result.stdout)
         self.assertNotEqual(result.returncode, 0)
 
     def test_missing_heartbeats_fail(self):
         """Should fail if heartbeat files missing."""
+        self._setup_tracker_json(valid=True)
         result = self._run_preflight()
-        self.assertIn("Heartbeats fresh: FAIL", result.stdout)
+        self.assertIn("Heartbeats and orchestrator status fresh: FAIL", result.stdout)
         self.assertNotEqual(result.returncode, 0)
 
 
@@ -519,6 +539,192 @@ class TestWindowsPathHandling(PrefightTestBase):
 
         result = self._run_preflight()
         self.assertIn("state/tracker.json parses as JSON: PASS", result.stdout)
+
+
+class TestStateRootSeparation(PrefightTestBase):
+    """Test that --state-root is separate from --root (wave-rc4 fix a)."""
+
+    def test_state_root_argument_separate_from_root(self):
+        """Should accept --state-root separate from --root."""
+        # Create an alternate state directory
+        alt_state = self.fixture_root / "alt-state"
+        alt_state.mkdir()
+
+        # Set up tracker.json and heartbeats in the alternate state dir
+        tracker_json = alt_state / "tracker.json"
+        tracker_json.write_text(json.dumps({"version": 1, "items": []}) + "\n")
+
+        hb_dir = alt_state / "heartbeats"
+        hb_dir.mkdir()
+        now = int(time.time())
+        (alt_state / ".watchdog-heartbeat").write_text(str(now) + "\n")
+        (hb_dir / "orchestrator").write_text(str(now) + "\n")
+
+        # Create orchestrator-status.json in alt state dir
+        orch_status = alt_state / "orchestrator-status.json"
+        orch_status.write_text(
+            json.dumps({"updated_at": "2026-07-17T00:00:00Z", "phase": "test"}) + "\n"
+        )
+
+        # Run preflight with both --root and --state-root pointing to different dirs
+        cmd = [
+            sys.executable,
+            str(PREFLIGHT_PY),
+            f"--root={self.repo_dir}",
+            f"--state-root={alt_state}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        # Should find tracker.json in alt state dir
+        self.assertIn("state/tracker.json parses as JSON: PASS", result.stdout)
+
+    def test_state_root_env_var_overrides_argument(self):
+        """AESOP_STATE_ROOT env var should take precedence over --state-root argument."""
+        alt_state = self.fixture_root / "alt-state-env"
+        alt_state.mkdir()
+
+        tracker_json = alt_state / "tracker.json"
+        tracker_json.write_text(json.dumps({"version": 1, "items": []}) + "\n")
+
+        hb_dir = alt_state / "heartbeats"
+        hb_dir.mkdir()
+        now = int(time.time())
+        (alt_state / ".watchdog-heartbeat").write_text(str(now) + "\n")
+        (hb_dir / "orchestrator").write_text(str(now) + "\n")
+
+        orch_status = alt_state / "orchestrator-status.json"
+        orch_status.write_text(
+            json.dumps({"updated_at": "2026-07-17T00:00:00Z"}) + "\n"
+        )
+
+        # AESOP_STATE_ROOT env var should override any --state-root
+        env = os.environ.copy()
+        env["AESOP_STATE_ROOT"] = str(alt_state)
+
+        cmd = [
+            sys.executable,
+            str(PREFLIGHT_PY),
+            f"--root={self.repo_dir}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+        # Should use env var state dir
+        self.assertIn("state/tracker.json parses as JSON: PASS", result.stdout)
+
+
+class TestPhaseDriftWarning(PrefightTestBase):
+    """Test that STATE.md phase drift is warning-level, not a blocker (wave-rc4 fix b)."""
+
+    def test_phase_drift_is_warning_not_blocker(self):
+        """Phase drift should warn but not block the wave (exit 0)."""
+        self._setup_state_md("wave-rc.2")
+        self._setup_orchestrator_status("wave-rc.3")  # Drifted
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
+
+        result = self._run_preflight()
+
+        # Should show the drift
+        self.assertIn("[WARN: drift detected]", result.stdout)
+
+        # But should still pass the wave (exit 0)
+        self.assertEqual(result.returncode, 0)
+
+    def test_phase_consistent_passes_cleanly(self):
+        """Consistent phases should pass cleanly."""
+        self._setup_state_md("wave-rc.2")
+        self._setup_orchestrator_status("wave-rc.2")
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
+
+        result = self._run_preflight()
+        self.assertIn("STATE.md phase consistent", result.stdout)
+        self.assertIn("PASS", result.stdout.split("STATE.md phase")[1].split("\n")[0])
+        self.assertEqual(result.returncode, 0)
+
+    def test_multiple_failures_and_phase_drift_returns_one(self):
+        """Multiple failures + phase drift should return exit 1 (from failures, not drift)."""
+        # Don't set up heartbeats or tracker (failures)
+        self._setup_state_md("wave-rc.2")
+        self._setup_orchestrator_status("wave-rc.3")  # Drifted
+
+        result = self._run_preflight()
+
+        # Phase drift is warning, but heartbeat/tracker failures should cause exit 1
+        self.assertNotEqual(result.returncode, 0)
+
+
+class TestOrchestratorStatusFreshness(PrefightTestBase):
+    """Test orchestrator-status.json freshness check (wave-rc4 fix c)."""
+
+    def test_orchestrator_status_updated_at_fresh(self):
+        """Should pass when orchestrator-status.json has recent updated_at."""
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
+
+        # Create orchestrator-status.json with recent updated_at
+        orch_status = self.state_dir / "orchestrator-status.json"
+        now_ts = time.time()
+        import datetime
+        now_iso = datetime.datetime.fromtimestamp(now_ts, tz=datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        orch_status.write_text(
+            json.dumps({
+                "id": "main",
+                "role": "orchestrator",
+                "activity": "running",
+                "phase": "wave-rc.2",
+                "updated_at": now_iso,
+            }) + "\n"
+        )
+
+        result = self._run_preflight()
+        self.assertIn("Heartbeats and orchestrator status fresh: PASS", result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+    def test_orchestrator_status_updated_at_stale(self):
+        """Should fail when orchestrator-status.json has stale updated_at."""
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
+
+        # Create orchestrator-status.json with stale updated_at (>300s old)
+        orch_status = self.state_dir / "orchestrator-status.json"
+        old_ts = int(time.time()) - 400  # 400s old
+        import datetime
+        old_dt = datetime.datetime.fromtimestamp(old_ts, tz=datetime.timezone.utc)
+        old_iso = old_dt.isoformat().replace("+00:00", "Z")
+        orch_status.write_text(
+            json.dumps({
+                "id": "main",
+                "role": "orchestrator",
+                "activity": "running",
+                "phase": "wave-rc.2",
+                "updated_at": old_iso,
+            }) + "\n"
+        )
+
+        result = self._run_preflight()
+        self.assertIn("Heartbeats and orchestrator status fresh: FAIL", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_orchestrator_status_missing_updated_at_field(self):
+        """Should fail when orchestrator-status.json lacks updated_at field."""
+        self._setup_tracker_json(valid=True)
+        self._setup_heartbeats(fresh=True)
+
+        # Create orchestrator-status.json without updated_at
+        orch_status = self.state_dir / "orchestrator-status.json"
+        orch_status.write_text(
+            json.dumps({
+                "id": "main",
+                "role": "orchestrator",
+                "activity": "running",
+                "phase": "wave-rc.2",
+            }) + "\n"
+        )
+
+        result = self._run_preflight()
+        self.assertIn("Heartbeats and orchestrator status fresh: FAIL", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

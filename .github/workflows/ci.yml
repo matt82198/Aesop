@@ -80,7 +80,10 @@ jobs:
 
       - name: Node syntax check
         run: |
-          git ls-files '*.mjs' | while read file; do
+          # *.template.mjs are Claude Code WORKFLOW scripts (top-level return is valid
+          # in the harness runtime, illegal to plain node) — structurally tested in
+          # tests/buildsystem-template.test.mjs instead.
+          git ls-files '*.mjs' | grep -v '\.template\.mjs$' | while read file; do
             node --check "$file" || exit 1
           done
 

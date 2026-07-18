@@ -39,7 +39,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -346,9 +349,100 @@ def mock_runner(prompt: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Claude CLI runner — shell the local `claude` command for real model calls.
+# Gracefully unavailable if `claude` is not on PATH.
+# ---------------------------------------------------------------------------
+
+def _make_claude_runner(model_alias: str) -> ModelRunner:
+    """Create a runner that shells the local `claude` CLI.
+
+    Args:
+        model_alias: A model alias (e.g., "haiku", "sonnet", "opus") or full
+                     model id (e.g., "claude-haiku-4-5-20251001"). Passed to
+                     claude --model <alias>.
+
+    Returns:
+        A ModelRunner that shells `claude -p <prompt> --model <alias>
+        --output-format json` and returns (text, usage) with latency_ms.
+        Raises RuntimeError if claude is not available.
+    """
+    def runner(prompt: str) -> tuple:
+        if not shutil.which("claude"):
+            raise RuntimeError(
+                "claude CLI not found on PATH: install it or check your PATH. "
+                "See https://github.com/anthropic-ai/claude-code for setup."
+            )
+        try:
+            start = time.time()
+            result = subprocess.run(
+                ["claude", "-p", prompt, "--model", model_alias, "--output-format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minutes per task
+            )
+            elapsed_ms = (time.time() - start) * 1000
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"claude CLI exited {result.returncode}: {result.stderr}"
+                )
+            # Parse JSON output
+            output_json = json.loads(result.stdout)
+            # Extract text and tokens from the JSON response
+            # The claude CLI returns a structure like:
+            # {"type": "result", "subtype": "success", "result": "...", "usage": {...}}
+            text = None
+            tokens = None
+            if isinstance(output_json, dict):
+                # Try new format first (--output-format json with --print)
+                if "result" in output_json:
+                    text = output_json.get("result")
+                # Fallback to old message format if needed
+                elif "content" in output_json:
+                    content = output_json.get("content")
+                    if isinstance(content, list) and content:
+                        first = content[0]
+                        if isinstance(first, dict):
+                            text = first.get("text")
+                # Extract token count if available
+                usage_obj = output_json.get("usage", {})
+                if isinstance(usage_obj, dict):
+                    tokens = usage_obj.get("output_tokens")
+            if not text:
+                raise RuntimeError(
+                    f"unable to extract text from claude CLI JSON response: {output_json}"
+                )
+            usage = {
+                "tokens": tokens,
+                "latency_ms": elapsed_ms,
+            }
+            return (text, usage)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"claude CLI timed out after 300s")
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"claude CLI output is not valid JSON: {e}")
+        except Exception as e:
+            raise RuntimeError(f"claude CLI error: {e}")
+
+    return runner
+
+
 RUNNERS: Dict[str, ModelRunner] = {
     "mock": mock_runner,
 }
+
+# Register claude runners if claude CLI is available
+_CLAUDE_AVAILABLE = bool(shutil.which("claude"))
+if _CLAUDE_AVAILABLE:
+    for alias in ("haiku", "sonnet", "opus"):
+        try:
+            # Pre-flight check: make sure the runner can be created
+            # (we don't call it until later, but we want to register it)
+            runner = _make_claude_runner(alias)
+            RUNNERS[alias] = runner
+        except Exception:
+            # If something fails during registration, skip this model
+            pass
 
 
 def _fmt(value, suffix: str = "") -> str:
@@ -415,11 +509,14 @@ def print_comparison(summaries: List[dict], stream=None) -> None:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    available_runners = sorted(RUNNERS.keys())
+    default_runner = "mock"
     parser.add_argument(
         "--runner",
-        default="mock",
-        choices=sorted(RUNNERS.keys()),
-        help="Which registered model runner to score (default: mock, offline/zero-cost).",
+        default=default_runner,
+        choices=available_runners,
+        help=f"Which registered model runner to score (default: {default_runner}, offline/zero-cost). "
+             f"Available: {', '.join(available_runners)}",
     )
     parser.add_argument("--tasks", default=None, help="Override path to tasks.jsonl")
     parser.add_argument("--ground-truth", default=None, help="Override path to ground_truth.jsonl")
