@@ -51,6 +51,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
 - `stall_check.py` — Automated agent transcript stall detector
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
+- `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
+- `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged; --json (guards one-file-per-domain)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
 - `verify_activity_filter.py` — Browser proof for Activity view agent status filter
