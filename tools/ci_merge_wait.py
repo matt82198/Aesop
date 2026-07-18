@@ -196,7 +196,18 @@ def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
                 # Expected check still pending
                 return ("pending", None)
 
-    # Determine overall status
+        # All expected checks passed - now verify no non-expected check is failing
+        # Pending non-expected checks are OK, but any failure blocks merge
+        for check_name, check_status in found_checks.items():
+            if check_name not in expected_checks and check_status == "failure":
+                # Non-expected check failed - still blocks merge even though expected checks passed
+                return ("failure", check_name)
+
+        # All expected checks passed AND no non-expected checks are failing
+        # (pending non-expected checks are acceptable)
+        return ("success", None)
+
+    # Determine overall status (when expected_checks is not specified)
     if failed_checks:
         return ("failure", failed_checks[0])
     elif pending_checks:
@@ -445,6 +456,39 @@ def run_self_test():
         print(f"FAIL: Expected 'failure' with expected check failed, got '{ci_status}' / '{failed_check}'")
         return False
     print("[OK] Expected check failed: returns FAILURE")
+
+    # Test 20b: Expected checks all pass, but non-expected check FAILED (P2 audit bug fix)
+    # BUG: When --expect-checks is given, SUCCESS should NOT be returned if a non-expected
+    # check is FAILING. You don't want to merge with a red check just because it wasn't
+    # in the expected list.
+    rollup_expected_pass_noncxpected_fail = [
+        {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
+        {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},
+        {"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"},
+    ]
+    ci_status, failed_check = check_ci_status(
+        rollup_expected_pass_noncxpected_fail,
+        expected_checks={"unit-tests", "integration-tests"}
+    )
+    if ci_status != "failure" or failed_check != "lint":
+        print(f"FAIL: Expected 'failure' with non-expected check failed (audit P2), got '{ci_status}' / '{failed_check}'")
+        return False
+    print("[OK] Non-expected check failed while expected pass: returns FAILURE (P2 audit fix)")
+
+    # Test 20c: Expected checks all pass, non-expected pending is OK (does not block)
+    rollup_expected_pass_noncexpected_pending = [
+        {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},
+        {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},
+        {"name": "optional-scan", "status": "IN_PROGRESS", "conclusion": None},
+    ]
+    ci_status, _ = check_ci_status(
+        rollup_expected_pass_noncexpected_pending,
+        expected_checks={"unit-tests", "integration-tests"}
+    )
+    if ci_status != "success":
+        print(f"FAIL: Expected 'success' when all expected pass + non-expected pending, got '{ci_status}'")
+        return False
+    print("[OK] Expected all pass, non-expected pending: returns SUCCESS (pending non-expected is OK)")
 
     # Test 21: Superseded-run window simulation (old checks vanish, new pending appear)
     # First: old run had checks that completed successfully
