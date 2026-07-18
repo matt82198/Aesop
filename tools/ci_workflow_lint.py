@@ -9,6 +9,9 @@ Checks:
   4. Best-effort check for file references in workflow steps
 
 Exit: 0 if all checks pass, 1 if any findings. Support --json for structured output.
+
+Requires PyYAML. If it is missing the linter FAILS CLOSED (exit 1) rather than
+silently passing — a lint gate that cannot parse workflows must not report green.
 """
 
 import argparse
@@ -22,34 +25,34 @@ from pathlib import Path
 try:
     import yaml
 except ImportError:
-    # Fallback for minimal YAML parsing if PyYAML unavailable
+    # Import stays soft so the tools-importable smoke gate can load this module;
+    # lint_workflows() fails closed when yaml is None.
     yaml = None
-    print("WARNING: PyYAML not available, using fallback YAML parser", file=sys.stderr)
+
+
+class WorkflowLintError(Exception):
+    """Raised when a workflow file cannot be read or parsed."""
 
 
 def load_yaml_file(path):
     """Load and parse a YAML file.
 
     Returns:
-        dict or None: Parsed YAML, or None if parse fails
+        dict or None: Parsed YAML
 
     Raises:
-        str: Error message if parse fails
+        WorkflowLintError: If the file cannot be read or parsed
     """
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
+    except OSError as e:
+        raise WorkflowLintError(f"Failed to load {path}: {e}")
 
-        if yaml:
-            return yaml.safe_load(content)
-        else:
-            # Minimal fallback: just check if it looks like valid YAML
-            # This is a degraded mode — report the limitation
-            return {"_fallback": True, "_content": content}
+    try:
+        return yaml.safe_load(content)
     except yaml.YAMLError as e:
-        raise f"YAML parse error: {e}"
-    except Exception as e:
-        raise f"Failed to load {path}: {e}"
+        raise WorkflowLintError(f"YAML parse error: {e}")
 
 
 def find_workflow_files(root):
@@ -161,7 +164,7 @@ def check_npm_ci_lockfile(workflow_path, workflow_data, root):
     """
     findings = []
 
-    if not workflow_data or "_fallback" in workflow_data:
+    if not workflow_data:
         return findings
 
     jobs = workflow_data.get("jobs", {})
@@ -215,7 +218,7 @@ def check_test_coverage(workflow_files, workflow_data_list, packages, root):
 
     # Scan all workflows for test invocations
     for workflow_data in workflow_data_list:
-        if not workflow_data or "_fallback" in workflow_data:
+        if not workflow_data:
             continue
 
         jobs = workflow_data.get("jobs", {})
@@ -289,7 +292,7 @@ def check_file_references(workflow_data, root):
     """
     findings = []
 
-    if not workflow_data or "_fallback" in workflow_data:
+    if not workflow_data:
         return findings
 
     jobs = workflow_data.get("jobs", {})
@@ -337,6 +340,14 @@ def lint_workflows(root, json_output=False):
     findings = []
     root_path = Path(root)
 
+    # Fail closed: without a real YAML parser this linter cannot verify anything,
+    # and a lint gate that silently passes is worse than one that fails loudly.
+    if yaml is None:
+        return 1, [
+            "[1] PyYAML is not installed; refusing to lint workflows without a "
+            "real YAML parser (fail-closed). Install it with: pip install pyyaml"
+        ]
+
     # Find workflow files
     workflow_files = find_workflow_files(root)
     if not workflow_files:
@@ -362,7 +373,7 @@ def lint_workflows(root, json_output=False):
 
     # Check npm ci lockfiles
     for workflow_path, workflow_data in zip(workflow_files, workflow_data_list):
-        if workflow_data and "_fallback" not in workflow_data:
+        if workflow_data:
             findings.extend(check_npm_ci_lockfile(workflow_path, workflow_data, root))
 
     # Check test coverage
@@ -370,7 +381,7 @@ def lint_workflows(root, json_output=False):
 
     # Check file references
     for workflow_data in workflow_data_list:
-        if workflow_data and "_fallback" not in workflow_data:
+        if workflow_data:
             findings.extend(check_file_references(workflow_data, root))
 
     # Format findings with numbers
