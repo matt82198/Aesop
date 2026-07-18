@@ -562,15 +562,67 @@ def get_history_files(repo_path):
     return files_content
 
 
+def _git_committable_set(dir_path):
+    """Return the set of resolved absolute paths that git tracks or would
+    consider committable (tracked + untracked-but-not-ignored) for the repo
+    containing `dir_path`, or None if dir_path is not inside a git work tree
+    or git is unavailable/errors.
+
+    Built from `git ls-files --cached --others --exclude-standard`, which lists
+    exactly the tracked files plus untracked files that are NOT git-ignored.
+    A tracked file is ALWAYS included (even a force-added one that matches an
+    ignore rule), so filtering by this set never skips a committable file --
+    only ephemeral, git-ignored runtime files (which can never be pushed and
+    therefore can't leak a secret through git) are excluded.
+    """
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(dir_path), capture_output=True, text=True, timeout=10,
+        )
+        if top.returncode != 0:
+            return None
+        toplevel = Path(top.stdout.strip())
+        listing = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=str(toplevel), capture_output=True, text=True, timeout=60,
+        )
+        if listing.returncode != 0:
+            return None
+    except Exception:
+        return None
+
+    committable = set()
+    for rel in listing.stdout.split("\0"):
+        if rel:
+            committable.add((toplevel / rel).resolve())
+    return committable
+
+
 def scan_paths(paths):
-    """Recursively scan paths (files and directories)."""
+    """Recursively scan paths (files and directories).
+
+    For a DIRECTORY argument inside a git work tree, git-ignored files are
+    skipped: a full-tree scan (e.g. CI's `secret_scan.py .`) must not flag
+    ephemeral, git-ignored runtime files -- such as state/.ui-session-token --
+    that can never be committed or pushed and therefore cannot leak a secret
+    through git. Filtering uses the tracked+untracked-not-ignored set from
+    `git ls-files`, so a committable file is never skipped. When a directory is
+    not inside a git repo (or git errors), NO filtering is applied and every
+    file is walked (fail OPEN toward more scanning, never less). Explicitly
+    named FILE arguments are always scanned, even if git-ignored.
+    """
     files_to_scan = []
     for path_str in paths:
         path = Path(path_str).resolve()
         if path.is_file():
             files_to_scan.append(path)
         elif path.is_dir():
-            files_to_scan.extend(path.rglob("*"))
+            candidates = [p for p in path.rglob("*") if p.is_file()]
+            committable = _git_committable_set(path)
+            if committable is not None:
+                candidates = [p for p in candidates if p.resolve() in committable]
+            files_to_scan.extend(candidates)
     return [p for p in files_to_scan if p.is_file()]
 
 
