@@ -64,19 +64,26 @@
 
 **Read-only (no CSRF required)**:
 - `GET /` — Renders `ui/web/dist/index.html` with CSRF token substituted (hard 500 if dist missing).
+- `GET /data` — Dashboard data snapshot: heartbeat, daemon state, repos, events, alerts, messages.
 - `GET /assets/*` — Static files from `ui/web/dist/assets/` (content-hashed, immutable cache headers, path-traversal-safe).
 - `GET /api/state` — Consolidated first-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip (reuses latest SSE snapshots).
 - `GET /api/session` — Returns `{token}` for Vite dev server; Origin-checked fail-closed (local origins only).
 - `GET /api/cost` — Cost/scorecard summary from `state/ledger/OUTCOMES-LEDGER.md` (per-model, per-day, verdicts, optional pricing).
+- `GET /api/backlog` — Audit backlog parsed into tiers (P0/P1/P2/Needs decision).
+- `GET /api/agents` — Rich fleet agent list with metadata (from Claude transcripts directory).
+- `GET /api/agent?id=<id>` — Agent detail: dispatch prompt + ~40-line secret-redacted transcript tail; id-safety gates reject path-traversal.
+- `GET /api/tracker` — List tracker items; query params: `status`, `priority` (optional filters).
+- `GET /agent?id=<id>` — Agent dispatch prompt (deprecated; use `/api/agent?` instead).
 - `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup/mergeable/age/top blocker. Cached ~5s; degrades `{available:false, error}`. NOT an SSE section (gh too slow for collector tick). Set `AESOP_GH_BIN` to override gh binary.
 - `GET /api/wave/telemetry` — Wave telemetry: current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics. Reads state at call time; degrades on missing files. NOT SSE.
 - `GET /api/wave/failure?pr=N` — Wave PR failure drill-down: CI jobs for latest run on PR branch, with ~100-line log excerpts for failing jobs. Cached ~5s per PR; degrades `{available:false, error}`. NOT SSE. Set `AESOP_GH_BIN` to override gh binary.
 - `GET /events` — Server-Sent Events stream (6 sections: data, backlog, agents, tracker, status, cost). Keepalive every ~15s. Read-only; no CSRF.
+- `GET /favicon.ico` — Returns 204 No Content (no favicon asset shipped with dashboard).
 
 **Mutations (CSRF-gated)**:
 - `POST /submit` — Append to inbox (X-Aesop-Token + Origin/Referer validation, fail-closed).
 - `POST /api/tracker` — Create tracker item.
-- `POST /api/tracker/<id>` — Update/delete tracker item.
+- `POST /api/tracker/<id>` — Update/delete tracker item (query param: `action=update` or `action=delete`).
 
 ## CSRF & Session Protection (Invariants)
 

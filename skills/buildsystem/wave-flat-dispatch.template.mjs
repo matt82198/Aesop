@@ -44,13 +44,20 @@
 //              // Absent => unchanged behavior (backward-compatible).
 //   postBuild:  { cmd: string, afterItems: [string] } | null  // optional: run cmd (via agent) as soon as
 //                                                               // all named items pass self-check (pipeline semantics)
+//   adversarialReview: boolean | null  // optional: when truthy, after integration green, spawn one Haiku
+//                                       // reviewer per item to refute that it meets its CONTRACT
+//                                       // (reads actual code, constructs breaking scenarios).
+//                                       // Returns {holds:boolean, breakingScenario:string} per item;
+//                                       // items where holds=false are collected as contractFindings.
+//                                       // Absent => unchanged behavior (backward-compatible).
 //   agentTimeboxNote: number | null  // optional: per-agent wall-clock budget in minutes (latency fix #2)
 //                                     // when set: adds hard timebox line to Build/SelfCheck/Repair prompts,
 //                                     // caps repair rounds to top 3 worst failing items (rest deferred).
 //                                     // when absent: no timebox line, no cap (backward-compatible).
 // }
 // Returns: { preflight, build, integration:{green,passed,failed}, repairsUsed,
-//            tokens:{buildOut,verifyOut,repairOut,totalOut}, mergeReady:boolean, aborted, reason }
+//            tokens:{buildOut,verifyOut,repairOut,adversarialReviewOut,totalOut}, mergeReady:boolean, aborted, reason,
+//            contractFindings: [{slug, breakingScenario}] }
 //          (may include aborted:true, reason:'cost_ceiling', spent, ceiling when ceiling exceeded)
 // ============================================================================
 
@@ -62,6 +69,7 @@ export const meta = {
     { title: 'Build', detail: 'parallel Haiku, one per file-disjoint item' },
     { title: 'Integrate', detail: 'run the integration test command on the union' },
     { title: 'Repair', detail: 'bounded repair round(s) for failing items' },
+    { title: 'AdversarialReview', detail: '(optional) refute-oriented contract verification per item' },
     { title: 'Report', detail: 'per-item status + merge-readiness + token cost' },
   ],
 }
@@ -74,6 +82,7 @@ const ITEMS = Array.isArray(A.items) ? A.items : []
 const CAP = typeof A.repairCap === 'number' ? A.repairCap : 1
 const HINT = A.contractHint || `Read the shared contract/spec files in ${WORK} before implementing.`
 const CEILING = A.ceiling ? { tokens: A.ceiling.tokens, recheckBrake: A.ceiling.recheckBrake } : null
+const ADVERSARIAL_REVIEW = !!A.adversarialReview
 const TIMEBOX_MINUTES = typeof A.agentTimeboxNote === 'number' ? A.agentTimeboxNote : null
 // Helper to build timebox line for agent prompts (latency fix #2).
 function timeboxLine() {
@@ -379,7 +388,8 @@ while (v && !v.green && round < CAP) {
         build: (built || []).filter(Boolean).map(b => ({ slug: b.slug, wrote: b.wrote, files: b.filesWritten })),
         integration: v ? { green: v.green, passed: v.passed, failed: v.failed } : { green: false, passed: null, failed: null },
         repairsUsed,
-        tokens: { buildOut, verifyOut, repairOut, totalOut, model: 'all-haiku (weight 1)' },
+        contractFindings: null,
+        tokens: { buildOut, verifyOut, repairOut, adversarialReviewOut, totalOut, model: 'all-haiku (weight 1)' },
         mergeReady: false,
         ship: null,
         aborted: true,
@@ -411,7 +421,8 @@ while (v && !v.green && round < CAP) {
         build: (built || []).filter(Boolean).map(b => ({ slug: b.slug, wrote: b.wrote, files: b.filesWritten })),
         integration: v ? { green: v.green, passed: v.passed, failed: v.failed } : { green: false, passed: null, failed: null },
         repairsUsed,
-        tokens: { buildOut, verifyOut, repairOut, totalOut, model: 'all-haiku (weight 1)' },
+        contractFindings: null,
+        tokens: { buildOut, verifyOut, repairOut, adversarialReviewOut, totalOut, model: 'all-haiku (weight 1)' },
         mergeReady: false,
         ship: null,
         aborted: true,
@@ -465,6 +476,59 @@ while (v && !v.green && round < CAP) {
   verifyOut += budget.spent() - rEnd
 }
 
+// -------- Adversarial Review (optional, gated on args.adversarialReview) --------
+let contractFindings = []
+let adversarialReviewOut = 0
+if (ADVERSARIAL_REVIEW && v && v.green) {
+  phase('AdversarialReview')
+  const reviewStart = budget.spent()
+  const REVIEW = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      slug: { type: 'string' }, holds: { type: 'boolean' }, breakingScenario: { type: 'string' },
+    },
+    required: ['slug', 'holds', 'breakingScenario'],
+  }
+
+  // Spawn one reviewer agent per built item; each tries to refute the item's contract.
+  const reviewResults = await parallel(
+    (built || []).filter(Boolean).map((b) => () => {
+      if (!b.slug) return null
+      const item = ITEMS.find(i => i.slug === b.slug)
+      if (!item) return null
+
+      const ownedFilesStr = (item.ownsFiles || []).length > 0
+        ? `Owned files:\n${(item.ownsFiles || []).map(f => `  ${f}`).join('\n')}\n`
+        : 'No owned files specified.\n'
+
+      const reviewPrompt = `CONTRACT REFUTATION review for item "${b.slug}". Working dir: ${WORK}.\n` +
+        `\nITEM CONTRACT (stated purpose):\n${item.prompt}\n` +
+        `\n${ownedFilesStr}` +
+        `Your job: READ the actual code the implementer wrote (in the ownsFiles above). ` +
+        `Try to construct a concrete input, scenario, or edge case where the implementation VIOLATES its stated contract — ` +
+        `does NOT do what the prompt says it should do. You are NOT running tests (tests may be tautological); ` +
+        `reason about the specification and the code.\n` +
+        `\nIf you can construct a breaking scenario, set holds=false and describe it in breakingScenario (be specific: inputs, expected vs actual behavior).\n` +
+        `If the code appears to genuinely meet its contract, set holds=true and breakingScenario="" (empty string).\n` +
+        `\nReport schema: {slug, holds, breakingScenario}.`
+
+      return agent(reviewPrompt, { label: nextLabel(`review:${b.slug}`), phase: 'AdversarialReview', model: 'haiku', schema: REVIEW })
+    })
+  )
+
+  // Collect findings where holds=false into contractFindings.
+  for (const r of (reviewResults || [])) {
+    if (r && r.slug) {
+      if (!r.holds) {
+        contractFindings.push({ slug: r.slug, breakingScenario: r.breakingScenario })
+      }
+    }
+  }
+
+  adversarialReviewOut = budget.spent() - reviewStart
+  log(`AdversarialReview done: ${contractFindings.length} contract violation(s) found.`)
+}
+
 // Check ceiling before Ship.
 {
   const spent = budget.spent()
@@ -476,7 +540,8 @@ while (v && !v.green && round < CAP) {
       build: (built || []).filter(Boolean).map(b => ({ slug: b.slug, wrote: b.wrote, files: b.filesWritten })),
       integration: v ? { green: v.green, passed: v.passed, failed: v.failed } : { green: false, passed: null, failed: null },
       repairsUsed,
-      tokens: { buildOut, verifyOut, repairOut, totalOut, model: 'all-haiku (weight 1)' },
+      contractFindings: contractFindings.length > 0 ? contractFindings : null,
+      tokens: { buildOut, verifyOut, repairOut, adversarialReviewOut, totalOut, model: 'all-haiku (weight 1)' },
       mergeReady: v && v.green,
       ship: null,
       aborted: true,
@@ -539,10 +604,11 @@ const result = {
   selfCheck: selfCheckResults && Object.keys(selfCheckResults).length > 0 ? selfCheckResults : null,
   integration: v ? { green: v.green, passed: v.passed, failed: v.failed } : { green: false, passed: null, failed: null },
   repairsUsed,
-  tokens: { buildOut, verifyOut, selfCheckOut, repairOut, totalOut, model: 'all-haiku (weight 1)' },
+  contractFindings: contractFindings.length > 0 ? contractFindings : null,
+  tokens: { buildOut, verifyOut, selfCheckOut, repairOut, adversarialReviewOut, totalOut, model: 'all-haiku (weight 1)' },
   mergeReady: !!(v && v.green),
   ship,
-  note: 'One Workflow call = one orchestrator turn. All-Haiku => raw==weighted. Setup tokens excluded. SelfCheck/PostBuild tokens included. Real-repo wiring: give each item its own sibling git worktree (git worktree add ../aesop-wt-<slug> -b <branch> origin/main), workers write there + push; orchestrator opens PRs + ci_merge_wait after — the async CI/merge boundary stays outside this one turn.',
+  note: 'One Workflow call = one orchestrator turn. All-Haiku => raw==weighted. Setup tokens excluded. SelfCheck/PostBuild tokens included. AdversarialReview tokens only when args.adversarialReview is truthy. Real-repo wiring: give each item its own sibling git worktree (git worktree add ../aesop-wt-<slug> -b <branch> origin/main), workers write there + push; orchestrator opens PRs + ci_merge_wait after — the async CI/merge boundary stays outside this one turn.',
 }
-log(`DONE. selfcheck=${selfCheckFailed.length} failed, integration green=${result.mergeReady} passed=${result.integration.passed} repairs=${repairsUsed} buildOut=${buildOut} totalOut=${totalOut}`)
+log(`DONE. selfcheck=${selfCheckFailed.length} failed, integration green=${result.mergeReady} passed=${result.integration.passed} repairs=${repairsUsed} contractViolations=${contractFindings.length} buildOut=${buildOut} totalOut=${totalOut}`)
 return result

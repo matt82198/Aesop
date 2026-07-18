@@ -25,6 +25,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `ci_workflow_lint.py` — CI workflow linter (YAML parsing, npm ci lockfile checks, test coverage)
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness)
 - `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
+- `defect_escape.py` — Haiku code quality telemetry (fix-forward rate, first-try estimate); CLI: `--repo <path> --since <ISO date> [--json]`
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits)
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
@@ -38,6 +39,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
+- `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 always (advisory)
 - `orchestrator_status.py` — Atomic orchestrator status updates
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
