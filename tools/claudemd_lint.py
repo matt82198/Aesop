@@ -47,11 +47,17 @@ RUNTIME_PATTERNS = [
     r"^BUILDLOG\.md$",
     r"^MEMORY\.md$",
     r"^STATE\.md$",
+    r"^CLAUDE\.md$",
+    r"^SKILL\.md$",
     r"^OUTCOMES-LEDGER\.md$",
     r"^tracker\.json$",
     r"^ACTIONS\.log$",
     r"^\./state/",
     r"^state/",
+    # Allow these control files in compound refs like "CLAUDE.md/STATE.md"
+    r"CLAUDE\.md(?:/|$)",
+    r"STATE\.md(?:/|$)",
+    r"SKILL\.md(?:/|$)",
 ]
 
 
@@ -140,16 +146,24 @@ def extract_npm_scripts(text: str) -> List[str]:
 
 
 def get_package_scripts(repo_root: Path) -> Dict[str, str]:
-    """Load scripts from package.json."""
-    pkg_path = repo_root / "package.json"
-    if not pkg_path.exists():
-        return {}
-    try:
-        with open(pkg_path) as f:
-            pkg = json.load(f)
-        return pkg.get("scripts", {})
-    except (json.JSONDecodeError, IOError):
-        return {}
+    """Load scripts from every package.json in the repo (root + nested, e.g. ui/web).
+
+    A multi-package repo (aesop has ui/web/package.json for the frontend) means a
+    domain doc may legitimately cite a script that lives in a nested package — union
+    them so the linter doesn't false-positive on ui/CLAUDE.md's `npm run build`/`dev`.
+    """
+    scripts: Dict[str, str] = {}
+    for pkg_path in repo_root.rglob("package.json"):
+        # skip dependencies' package.json
+        if "node_modules" in pkg_path.parts:
+            continue
+        try:
+            with open(pkg_path) as f:
+                pkg = json.load(f)
+            scripts.update(pkg.get("scripts", {}))
+        except (json.JSONDecodeError, IOError):
+            continue
+    return scripts
 
 
 def check_test_cmd_match(repo_root: Path) -> Tuple[bool, str]:
@@ -185,42 +199,72 @@ def lint_claudemd(
 
     lines = content.split("\n")
 
+    # Per-file oversize allowance: ui/CLAUDE.md is the documented dense-domain
+    # exception (lossless-verified, probe-passed at ~197 lines). Mirrors the same
+    # allowance in ~/scripts/compliance_check.py so the two gates agree.
+    ALLOWED_OVERSIZE = {"ui/CLAUDE.md": 200}
+    rel = str(claudemd_path.relative_to(repo_root)).replace("\\", "/")
+    effective_max = ALLOWED_OVERSIZE.get(rel, max_lines)
+
     # Check line count
-    if len(lines) > max_lines:
+    if len(lines) > effective_max:
         findings.append({
             "type": "line-count",
             "line": str(len(lines)),
             "message": f"{claudemd_path.relative_to(repo_root)}: "
-                       f"{len(lines)} lines exceeds max {max_lines}",
+                       f"{len(lines)} lines exceeds max {effective_max}",
         })
 
-    # Check if content mentions pytest but repo uses unittest
+    # Check if content endorses pytest but repo uses unittest
+    # Exclude false positives where pytest is mentioned in passing or explicitly excluded
     is_unittest, _ = check_test_cmd_match(repo_root)
-    if is_unittest and "pytest" in content.lower():
-        findings.append({
-            "type": "pytest-vs-unittest",
-            "line": "?",
-            "message": f"{claudemd_path.relative_to(repo_root)}: "
-                       f"mentions 'pytest' but repo uses unittest (test:py)",
-        })
+    if is_unittest:
+        content_lower = content.lower()
+        # Check for pytest endorsement (not just mention)
+        pytest_mentioned = "pytest" in content_lower
+        # Check for exclusion phrases that indicate pytest is NOT used
+        pytest_excluded = any(phrase in content_lower for phrase in [
+            "not pytest",
+            "not use pytest",
+            "don't use pytest",
+            "do not use pytest",
+            "uses unittest",
+            "use unittest",
+            "unittest, not pytest",
+            "-m unittest",
+        ])
+        # Flag only if pytest is mentioned AND not explicitly excluded
+        if pytest_mentioned and not pytest_excluded:
+            findings.append({
+                "type": "pytest-vs-unittest",
+                "line": "?",
+                "message": f"{claudemd_path.relative_to(repo_root)}: "
+                           f"mentions 'pytest' but repo uses unittest (test:py)",
+            })
 
     # DOC-POINTER check: find file references
     path_refs = extract_path_references(content)
+
+    # Get the directory of the CLAUDE.md file for relative resolution
+    claudemd_dir = claudemd_path.parent
 
     for ref in path_refs:
         # Skip runtime artifacts
         if is_runtime_artifact(ref):
             continue
 
-        # Check if path exists (relative to repo root)
-        target = repo_root / ref
+        # Try to resolve relative to the CLAUDE.md file's directory first
+        target = claudemd_dir / ref
         if not target.exists():
-            findings.append({
-                "type": "phantom-path",
-                "line": "?",
-                "message": f"{claudemd_path.relative_to(repo_root)}: "
-                           f"references non-existent '{ref}'",
-            })
+            # Fall back to repo root resolution
+            target = repo_root / ref
+            if not target.exists():
+                findings.append({
+                    "type": "phantom-path",
+                    "line": "?",
+                    "message": f"{claudemd_path.relative_to(repo_root)}: "
+                               f"references non-existent '{ref}'",
+                })
 
     # TEST-CMD check: npm run scripts
     npm_scripts = extract_npm_scripts(content)

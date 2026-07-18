@@ -65,7 +65,8 @@ class TestEodSweep(unittest.TestCase):
             capture_output=True
         )
 
-    def _run_eod_sweep(self, repos=None, readonly_repos=None, fix_push=False):
+    def _run_eod_sweep(self, repos=None, readonly_repos=None, fix_push=False,
+                       buildlog=None, timestamp=None, env_overrides=None):
         """Run eod_sweep.py with specified repos."""
         cmd = [sys.executable, str(self.eod_script)]
 
@@ -80,7 +81,17 @@ class TestEodSweep(unittest.TestCase):
         if fix_push:
             cmd.append("--fix-push")
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if buildlog:
+            cmd.extend(["--buildlog", str(buildlog)])
+
+        if timestamp:
+            cmd.extend(["--timestamp", timestamp])
+
+        env = os.environ.copy()
+        if env_overrides:
+            env.update(env_overrides)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
         return result
 
     def test_no_repos_provided(self):
@@ -249,6 +260,181 @@ class TestEodSweep(unittest.TestCase):
         # Should report SAFE (non-git repos are skipped)
         self.assertEqual(result.returncode, 0)
         self.assertIn("EOD-SWEEP: SAFE", result.stdout)
+
+    # BUILDLOG tests
+    def test_buildlog_append_on_safe(self):
+        """Test that BUILDLOG is appended when verdict is SAFE."""
+        test_repo = Path(self.temp_dir) / "clean_repo"
+        self._init_git_repo(test_repo)
+        buildlog_path = Path(self.temp_dir) / "BUILDLOG.md"
+
+        result = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
+        self.assertEqual(result.returncode, 0)
+
+        # Verify BUILDLOG was created and contains the verdict
+        self.assertTrue(buildlog_path.exists())
+        content = buildlog_path.read_text()
+        self.assertIn("EOD-SWEEP: SAFE", content)
+        self.assertIn("Build Log", content)  # header
+
+    def test_buildlog_append_on_at_risk(self):
+        """Test that BUILDLOG is appended when verdict is AT-RISK."""
+        test_repo = Path(self.temp_dir) / "risky_repo"
+        self._init_git_repo(test_repo)
+        buildlog_path = Path(self.temp_dir) / "BUILDLOG.md"
+
+        # Make repo dirty
+        (test_repo / "README.md").write_text("# Modified\n")
+
+        result = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
+        self.assertEqual(result.returncode, 1)
+
+        # Verify BUILDLOG was created and contains the AT-RISK verdict
+        self.assertTrue(buildlog_path.exists())
+        content = buildlog_path.read_text()
+        self.assertIn("EOD-SWEEP: AT-RISK", content)
+        self.assertIn("findings", content)
+
+    def test_buildlog_with_timestamp(self):
+        """Test that BUILDLOG includes timestamp when provided."""
+        test_repo = Path(self.temp_dir) / "clean_repo"
+        self._init_git_repo(test_repo)
+        buildlog_path = Path(self.temp_dir) / "BUILDLOG.md"
+        timestamp = "2026-07-17 14:30"
+
+        result = self._run_eod_sweep(
+            [test_repo],
+            buildlog=buildlog_path,
+            timestamp=timestamp
+        )
+        self.assertEqual(result.returncode, 0)
+
+        # Verify BUILDLOG contains timestamp
+        content = buildlog_path.read_text()
+        self.assertIn(f"[{timestamp}]", content)
+        self.assertIn("EOD-SWEEP: SAFE", content)
+
+    def test_buildlog_without_timestamp(self):
+        """Test that BUILDLOG omits timestamp when not provided."""
+        test_repo = Path(self.temp_dir) / "clean_repo"
+        self._init_git_repo(test_repo)
+        buildlog_path = Path(self.temp_dir) / "BUILDLOG.md"
+
+        result = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
+        self.assertEqual(result.returncode, 0)
+
+        # Verify BUILDLOG does NOT have brackets (timestamp format)
+        content = buildlog_path.read_text()
+        lines = content.strip().split('\n')
+        # Find the verdict line (should not have [])
+        verdict_lines = [l for l in lines if "EOD-SWEEP" in l]
+        self.assertTrue(len(verdict_lines) > 0)
+        # The verdict line should NOT have timestamp brackets
+        self.assertNotIn("[", verdict_lines[0])
+
+    def test_buildlog_append_idempotent(self):
+        """Test that BUILDLOG appends multiple verdicts correctly."""
+        test_repo = Path(self.temp_dir) / "clean_repo"
+        self._init_git_repo(test_repo)
+        buildlog_path = Path(self.temp_dir) / "BUILDLOG.md"
+
+        # Run twice
+        result1 = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
+        self.assertEqual(result1.returncode, 0)
+
+        result2 = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
+        self.assertEqual(result2.returncode, 0)
+
+        # Verify both verdicts are in BUILDLOG
+        content = buildlog_path.read_text()
+        # Should have exactly 2 verdict lines
+        verdict_count = content.count("EOD-SWEEP: SAFE")
+        self.assertEqual(verdict_count, 2)
+
+    def test_buildlog_aesop_state_root(self):
+        """Test that BUILDLOG respects AESOP_STATE_ROOT environment variable."""
+        test_repo = Path(self.temp_dir) / "clean_repo"
+        self._init_git_repo(test_repo)
+        state_dir = Path(self.temp_dir) / "custom_state"
+        state_dir.mkdir()
+
+        env_overrides = {"AESOP_STATE_ROOT": str(state_dir)}
+
+        # Run without explicit --buildlog (should use AESOP_STATE_ROOT)
+        result = self._run_eod_sweep(
+            [test_repo],
+            env_overrides=env_overrides
+        )
+        self.assertEqual(result.returncode, 0)
+
+        # Verify BUILDLOG was created at AESOP_STATE_ROOT/BUILDLOG.md
+        buildlog_path = state_dir / "BUILDLOG.md"
+        self.assertTrue(buildlog_path.exists())
+        content = buildlog_path.read_text()
+        self.assertIn("EOD-SWEEP: SAFE", content)
+
+    def test_buildlog_default_state_dir(self):
+        """Test that BUILDLOG defaults to ./state/BUILDLOG.md when AESOP_STATE_ROOT not set."""
+        test_repo = Path(self.temp_dir) / "clean_repo"
+        self._init_git_repo(test_repo)
+
+        # Change to temp_dir and run script (AESOP_STATE_ROOT not set)
+        env = os.environ.copy()
+        # Ensure AESOP_STATE_ROOT is not set
+        env.pop("AESOP_STATE_ROOT", None)
+
+        cmd = [sys.executable, str(self.eod_script), "--repos", str(test_repo)]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(self.temp_dir),
+            env=env,
+            timeout=30
+        )
+        self.assertEqual(result.returncode, 0)
+
+        # Verify BUILDLOG was created at ./state/BUILDLOG.md
+        buildlog_path = Path(self.temp_dir) / "state" / "BUILDLOG.md"
+        self.assertTrue(buildlog_path.exists())
+        content = buildlog_path.read_text()
+        self.assertIn("EOD-SWEEP: SAFE", content)
+
+    def test_buildlog_creates_parent_dirs(self):
+        """Test that BUILDLOG creation handles missing parent directories."""
+        test_repo = Path(self.temp_dir) / "clean_repo"
+        self._init_git_repo(test_repo)
+        buildlog_path = Path(self.temp_dir) / "nested" / "deep" / "state" / "BUILDLOG.md"
+
+        # Ensure parent dirs don't exist
+        self.assertFalse(buildlog_path.parent.exists())
+
+        result = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
+        self.assertEqual(result.returncode, 0)
+
+        # Verify BUILDLOG was created with parent directories
+        self.assertTrue(buildlog_path.exists())
+        content = buildlog_path.read_text()
+        self.assertIn("EOD-SWEEP: SAFE", content)
+
+    def test_buildlog_format_consistency(self):
+        """Test that BUILDLOG entries follow consistent format."""
+        test_repo = Path(self.temp_dir) / "clean_repo"
+        self._init_git_repo(test_repo)
+        buildlog_path = Path(self.temp_dir) / "BUILDLOG.md"
+
+        result = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
+        self.assertEqual(result.returncode, 0)
+
+        content = buildlog_path.read_text()
+        lines = content.strip().split('\n')
+
+        # First line should be header
+        self.assertIn("Build Log", lines[0])
+
+        # Second line should be verdict with ### prefix
+        self.assertIn("###", lines[1])
+        self.assertIn("EOD-SWEEP", lines[1])
 
 
 if __name__ == "__main__":

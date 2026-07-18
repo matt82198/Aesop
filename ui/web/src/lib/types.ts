@@ -328,6 +328,30 @@ export interface WaveFailureData {
 }
 
 /**
+ * One agent entry in the wave dispatch snapshot (GET /api/wave/dispatch).
+ * Shows phase, activity age, and token burn estimate in real-time.
+ */
+export interface WaveDispatchAgent {
+  id: string; // agent id
+  phase: string; // 'dispatch' | 'thinking' | 'tool-use' | 'stall' | 'done' | 'unknown'
+  last_activity_age_sec: number; // seconds since last transcript update
+  token_estimate: number; // estimated tokens consumed
+  warnings?: string[]; // e.g., ["inactive >5min", "stalled >10min"]
+}
+
+/**
+ * GET /api/wave/dispatch response — live per-agent phase and activity.
+ * When `available` is false (no active workflow), agents array is empty.
+ */
+export interface WaveDispatchData {
+  available: boolean;
+  wave_phase: string | null; // e.g., "wave-rc.7: dispatch" or null
+  agents: WaveDispatchAgent[];
+  at: string; // ISO 8601 UTC
+  error?: string; // optional error message if available=false
+}
+
+/**
  * SSE event sections emitted by GET /events.
  * Initial sections: data, backlog, agents, tracker, status
  * Added in U3: cost
