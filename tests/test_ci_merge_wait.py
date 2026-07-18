@@ -536,6 +536,52 @@ class TestCiMergeWait(unittest.TestCase):
         )
         self.assertEqual(ci_status, "pending", "Pending expected check should return PENDING")
 
+    def test_check_ci_status_function_expected_checks_all_green_but_non_expected_failed(self):
+        """Test check_ci_status with expected_checks all passing but a non-expected check FAILED.
+
+        This is the P2 audit bug: when --expect-checks is given, SUCCESS should NOT be returned
+        if a non-expected check is FAILING. You don't want to merge with a red check just because
+        it wasn't in the expected list.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Expected checks all pass, but a non-expected check failed
+        rollup = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},  # expected, success
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},  # expected, success
+            {"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"},  # non-expected, FAILURE
+        ]
+        ci_status, failed_check = module.check_ci_status(
+            rollup,
+            expected_checks={"unit-tests", "integration-tests"}
+        )
+        # BUG FIX: Must NOT return success when a non-expected check is FAILING
+        self.assertEqual(ci_status, "failure", "Non-expected failed check should block merge even when expected checks pass")
+        self.assertEqual(failed_check, "lint", "Should report which non-expected check failed")
+
+    def test_check_ci_status_function_expected_checks_all_green_non_expected_pending_ok(self):
+        """Test check_ci_status: expected all pass, non-expected pending is OK (does not block)."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Expected checks all pass, non-expected check is still pending (should be OK)
+        rollup = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": None},  # expected, success
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": None},  # expected, success
+            {"name": "optional-scan", "status": "IN_PROGRESS", "conclusion": None},  # non-expected, pending
+        ]
+        ci_status, _ = module.check_ci_status(
+            rollup,
+            expected_checks={"unit-tests", "integration-tests"}
+        )
+        # Pending non-expected checks are acceptable when expected checks all pass
+        self.assertEqual(ci_status, "success", "Pending non-expected check should not block when expected checks pass")
+
     def test_check_ci_status_function_superseded_run_window(self):
         """Test check_ci_status with superseded-run window simulation (old checks vanish → empty → new pending)."""
         import importlib.util

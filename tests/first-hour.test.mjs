@@ -163,7 +163,11 @@ async function runTests() {
       }
 
       // Cleanup
-      await execAsync(`rm -rf "${testDir}"`, { stdio: 'pipe' });
+      try {
+        await fs.rm(testDir, { recursive: true, force: true });
+      } catch (e) {
+        // Ignore cleanup errors
+      }
     });
 
     // Test 4: Port fallback when 8770 is occupied
@@ -243,14 +247,14 @@ async function runTests() {
     }
     if (tempDir) {
       try {
-        await execAsync(`rm -rf "${tempDir}"`, { stdio: 'pipe' });
+        await fs.rm(tempDir, { recursive: true, force: true });
       } catch (e) {
         // Ignore cleanup errors
       }
     }
     if (tempDirForPortTest) {
       try {
-        await execAsync(`rm -rf "${tempDirForPortTest}"`, { stdio: 'pipe' });
+        await fs.rm(tempDirForPortTest, { recursive: true, force: true });
       } catch (e) {
         // Ignore cleanup errors
       }
