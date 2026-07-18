@@ -8,6 +8,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Neve
 - `bench_runner.py` — Held-out benchmark runner + scorer with accuracy + cost axis (offline mock runner; pluggable Haiku/Sonnet/Opus runners return text or (text, usage))
 - `buildlog.py` — Uniform BUILDLOG.md appender
 - `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks gate)
+- `ci_workflow_lint.py` — CI workflow linter: static analysis of .github/workflows/*.yml (YAML parsing, npm ci lockfile checks, test coverage, file references)
 - `fleet.js` — one-shot fleet snapshot for `aesop fleet` (heartbeats, tracker lanes, orchestrator status; JSON)
 - `wave_preflight.py` — wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json)
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness checks)
