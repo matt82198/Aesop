@@ -33,7 +33,9 @@ CLI:
 import argparse
 import ast
 import copy
+import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -174,35 +176,56 @@ def apply_mutation(source: str, mutation_idx: int) -> Optional[str]:
         return None
 
 
+def _pytest_available() -> bool:
+    """Return True if pytest is importable by the current interpreter.
+
+    We must decide the runner up-front rather than relying on a subprocess
+    exception: ``python -m pytest`` with pytest absent exits with code 1
+    ("No module named pytest") and does NOT raise FileNotFoundError, so an
+    ``except FileNotFoundError`` fallback would never fire — every test run
+    would look like a failure (exit 1) and every mutation would be counted
+    as 'killed', reporting 0 survivors regardless of test quality.
+    """
+    try:
+        return importlib.util.find_spec("pytest") is not None
+    except Exception:
+        return False
+
+
 def run_tests(test_module_path: str, work_dir: str, timeout: int = 30) -> Tuple[int, str]:
-    """Run tests in a subprocess.
+    """Run a test module in a subprocess against the code in ``work_dir``.
+
+    The (mutated) target copy lives in ``work_dir``; we force that directory
+    onto PYTHONPATH and run with cwd=work_dir so the test genuinely imports
+    the MUTATED copy on every platform, regardless of any sys.path juggling
+    the test module itself does. Prefers pytest when available, else falls
+    back to the always-present stdlib unittest.
 
     Returns (exit_code, stdout+stderr).
     """
+    # Deterministically make the mutated copy importable (Linux + Windows).
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = work_dir + (os.pathsep + existing if existing else "")
+
+    if _pytest_available():
+        cmd = [sys.executable, "-m", "pytest", "-xvs", test_module_path]
+    else:
+        # unittest needs a module name (importable via cwd/PYTHONPATH), not a path.
+        cmd = [sys.executable, "-m", "unittest", "-v", Path(test_module_path).stem]
+
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-xvs", test_module_path],
+            cmd,
             cwd=work_dir,
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
         return result.returncode, result.stdout + result.stderr
     except subprocess.TimeoutExpired:
         return 124, "Test timeout (>{}s)".format(timeout)
-    except FileNotFoundError:
-        # pytest not available, fall back to unittest
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "unittest", "-v", test_module_path],
-                cwd=work_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            return result.returncode, result.stdout + result.stderr
-        except Exception as e:
-            return 127, str(e)
 
 
 def run(target_module_path: str, test_module_path: str) -> Dict[str, Any]:
@@ -334,7 +357,7 @@ def run(target_module_path: str, test_module_path: str) -> Dict[str, Any]:
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Mutation testing tool — measure test quality by applying mutations."
+        description="Mutation testing tool - measure test quality by applying mutations."
     )
     parser.add_argument("--target", required=True, help="Target module to mutate (path to .py file)")
     parser.add_argument("--test", required=True, help="Test module to run (path to .py file)")
@@ -347,13 +370,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         print(json.dumps(result, indent=2))
     else:
-        print(f"Mutation test results:")
+        print("Mutation test results:")
         print(f"  Killed:   {result['killed']}")
         print(f"  Survived: {result['survived']}")
         if result["survived"] > 0:
-            print(f"\nSurvived mutations (test gaps):")
+            print("\nSurvived mutations (test gaps):")
             for mut in result["mutations"]:
-                print(f"  {mut['file']}:{mut['line']} — {mut['original']} -> {mut['mutated']}")
+                print(f"  {mut['file']}:{mut['line']} - {mut['original']} -> {mut['mutated']}")
         if "error" in result:
             print(f"\nError: {result['error']}", file=sys.stderr)
 
