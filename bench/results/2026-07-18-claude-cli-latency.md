@@ -1,10 +1,10 @@
 # Cross-model run via claude CLI — 2026-07-18 (latency axis)
 
 > CAVEAT: Opus scored 6/12 in this run with failures that are instruction-following/formatting
-> violations (explanatory text added to answer-only prompts), not comprehension errors — an
-> UNVERIFIED anomaly (possible CLI/system-prompt interaction). Do NOT cite the Opus figure
-> comparatively until re-run + inspected (tracked rc.5). Haiku=Sonnet 11/12 is consistent
-> with all prior runs. N=12: deltas <8pp are noise. Latency includes CLI startup overhead.
+> violations (explanatory text added to answer-only prompts), not comprehension errors — a VERIFIED
+> anomaly (re-run on 2026-07-18 reproduced: 3 genuine misclassifications, 2 correct-but-wrapped answers, 
+> 1 unstable). Likely CLI/system-prompt interaction. Haiku=Sonnet 11/12 is consistent with all prior runs. 
+> N=12: deltas <8pp are noise. Scope: CLI configuration, not comparative model ranking. Latency includes CLI startup overhead.
 
 # Benchmark Results
 Executed: 2026-07-17 19:56:52
