@@ -1,89 +1,84 @@
-# hooks/ — Installable org-policy git pre-push enforcement
+# hooks/ — Git & Claude Code policy enforcement
 
-**Purpose**: Ship executable git hooks that gate pushes with organization security policies (branch protection, secret scanning).
+**Purpose**: Installable git hooks (pre-push, pre-commit) and Claude Code hooks (PreToolUse) that gate commits/pushes with security & cost policies.
 
-## Hook: pre-push-policy.sh
+## Universal rules (every domain)
+- Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
+- Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
+- In worktrees use ABSOLUTE paths under the worktree for every write.
+- Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
-Runs on `git push` via `.git/hooks/pre-push` symlink or copy.
+## pre-push-policy.sh
+
+Runs on `git push` via `.git/hooks/pre-push` (symlink on Unix/macOS/Git Bash; copy on Windows).
 
 **Checks & Exit Contract**:
 1. `check_branch_policy()` — blocks direct pushes to main/master; exit 1 on violation
 2. `check_secret_scan()` — runs `tools/secret_scan.py --staged`; exit 1 on failure
-3. Both trigger `log_block()` to append audit record before exit
+3. Both trigger `log_block()` to append audit record (JSON-lines) before exit
 
-**Audit-Ledger Contract**:
-- Path: `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log` (append-only, git-ignored)
-- Format: JSON-lines (one record per line)
-- Schema: `{"ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure","user":"alice"}`
-- All string values must be json_escaped (backslash → `\\`, quote → `\"`)
-
-**Self-Test Convention**:
-- `bash hooks/pre-push-policy.sh --test` runs the self-test suite, including:
-  1. Branch policy blocks main/master
-  2. Branch policy allows feature/* branches
-  3. Audit log JSON format is valid
-  4. JSON escaping handles special chars (quotes, backslashes)
-  5. stdin handling (git pre-push pipe) doesn't crash hook
-- Exit 0 = all pass; exit 1 = any fail
+**Audit Ledger**: Append-only path: `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log` (git-ignored). 
+Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure"|"push_to_protected_branch","user":"alice"}`
+- `seq`: Monotonically increasing (starts 1); detects truncation.
+- `prev_hash`: SHA-256 of prior line (no newline); first entry = `"GENESIS"`. Detects tampering.
+- All string values must be JSON-escaped (backslash → `\\`, quote → `\"`, control chars → `\uXXXX`).
+- Concurrent writes protected by atomic directory lock (`.audit-log-lock/`, 300s stale recovery); tail-hash sidecar (`state/.audit-tail-hash`) anchors against truncation.
 
 **Installation**:
-- See `docs/HOOK-INSTALL.md` for symlink (Linux/macOS/Git Bash) and copy (Windows) methods
-- Test with `bash hooks/pre-push-policy.sh --test` before org distribution
+- Symlink (Unix/macOS/Git Bash): `ln -s ../../hooks/pre-push-policy.sh .git/hooks/pre-push && chmod +x .git/hooks/pre-push`
+- Copy (Windows): `cp hooks/pre-push-policy.sh .git/hooks/pre-push` (or PowerShell `Copy-Item`)
+- Auto-installed by scaffold; `npx @matt82198/aesop [dir] --force` to replace existing hook.
 
-## Hook: pre-commit-waveguard.sh
+**Test Command**: `bash hooks/pre-push-policy.sh --test` — validates branch policy blocks main/master, allows feature/*, audit log JSON format valid, JSON escaping handles special chars, stdin handling (git pre-push pipe) doesn't crash. Exit 0 = pass; exit 1 = fail.
 
-Prevents accidental commits to the PRIMARY aesop tree during a wave cycle. Runs on `git commit` via `.git/hooks/pre-commit`.
+**Verify Audit Log**: `bash hooks/pre-push-policy.sh --verify-audit-log` — detects hash-chain breaks and tail truncation via sidecar anchor.
 
-**Purpose**: During orchestrated waves, the orchestrator sets a marker file (`state/.wave-in-flight`) in the PRIMARY tree only. Sibling worktrees do not inherit this marker (separate working trees), so fleet agents commit freely in worktrees while stray commits to the primary tree are rejected.
+## pre-commit-waveguard.sh
 
-**Mechanism**:
-1. **Marker Contract**: Orchestrator writes `state/.wave-in-flight` in the PRIMARY tree before dispatching wave work. The marker is git-ignored, so sibling worktrees checked out during the wave do NOT carry it.
-2. **Pre-Commit Check**: Hook resolves the marker relative to the CURRENT working tree via `git rev-parse --show-toplevel` (NOT a hardcoded `$HOME/aesop` — that resolved to the primary tree from every worktree and blocked the whole fleet mid-wave, the wave-24 incident). Primary tree (has marker during a wave) → exit 1 (reject); sibling worktree (no marker) → exit 0 (allow).
-3. **Override**: User or orchestrator may delete `state/.wave-in-flight` to manually allow commits to primary tree.
+Prevents accidental commits to PRIMARY tree during orchestrated wave cycles. Runs on `git commit` via `.git/hooks/pre-commit`.
 
-**Exit Contract**:
-- Exit 0: Marker absent, commit allowed (normal operation)
-- Exit 1: Marker present, commit blocked with clear error message
+**Mechanism**: Orchestrator sets marker file `state/.wave-in-flight` in PRIMARY tree only (git-ignored, so sibling worktrees do NOT inherit it during checkout). Hook resolves marker relative to CURRENT tree via `git rev-parse --show-toplevel` — **NOT hardcoded `$AESOP_ROOT`** (that resolved to primary from every worktree and blocked entire fleet mid-wave: wave-24 incident). Primary tree (marker present) → exit 1; sibling worktree (no marker) → exit 0.
 
-**Error Message**:
-```
-Error: Wave in flight. Commit from a sibling worktree, or clear <marker_path> to override.
-```
+**Error Message**: `Error: Wave in flight in this tree (<marker_path>). Commit from a sibling worktree, or clear the marker to override.`
 
-**Installation**:
-- Run `bash hooks/install-waveguard.sh` to idempotently install into `.git/hooks/pre-commit`.
-- If a pre-commit hook already exists, installer backs it up (`.git/hooks/pre-commit.waveguard-backup`) and wraps both (waveguard first, then existing hook if present).
+**Installation**: `bash hooks/install-waveguard.sh` idempotently installs into `.git/hooks/pre-commit`. If a pre-commit hook already exists, backs it up (`.git/hooks/pre-commit.waveguard-backup`) and chains both (waveguard first, existing hook second).
 
-**Idempotency**:
-- Installer checks if hook already calls waveguard; skips if already installed.
-- Safe to re-run multiple times.
+**Exit Contract**: Exit 0 = marker absent, commit allowed (normal); Exit 1 = marker present, commit blocked.
 
-## Hook: hooks/claude/force-model-policy.mjs
+## force-model-policy.mjs
 
-Claude Code hook enforcing subagent Haiku dispatch (cost optimization).
-
-**Trigger**: On skill invocation or task delegation from main orchestrator thread. Examines Claude API request and enforces model constraint.
+Claude Code **PreToolUse** hook enforcing "subagents are always Haiku" cardinal rule (cost optimization).
 
 **Policy**:
-- **Main orchestrator** (Fable/Opus on primary): no override (uses native model)
-- **Subagent dispatch** (fleet workers): **enforce Haiku** (claude-haiku-4-5-*). Exit 1 on non-Haiku model request.
-- **Specialists** (typed dispatches): Pin model to Haiku in the dispatch call; hook validates + blocks if violated.
+- Main orchestrator (Fable/Opus on primary): no constraint
+- Subagent dispatch (Agent/Task): enforce Haiku or `cardinal_rules.subagent_model` from `aesop.config.json` (searched in `$AESOP_ROOT`, then cwd). Non-compliant model rewritten before dispatch.
+- **Escape hatch**: Prompt containing `[[ALLOW-NON-HAIKU]]` bypasses rewrite; escape logged to `state/MODEL-POLICY-ESCAPES.log` (JSON-lines: ts, event, tool, session_id, cwd, description, requested_model, prompt_head).
 
-**Logging**:
-- On policy violation: log to `state/SECURITY-ALERTS.log` with timestamp, model-name, worker-id, and reason.
-- No alerts on compliant requests.
+**Fail-open reliability**: Malformed stdin → no output, exit 0. Hook never crashes harness or logs payload contents. Stdin read raced against 2s timeout.
 
-**Self-Test**:
-- `node hooks/claude/force-model-policy.mjs --test` validates:
-  1. Haiku model allowed on subagents
-  2. Non-Haiku (e.g., Opus) blocked on subagents
-  3. Orchestrator not subject to policy
-  4. JSON logging format is valid
-- Exit 0 = all pass; exit 1 = any fail
+**Registration (`.claude/settings.json`)**:
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [{"type":"command","command":"node \"$CLAUDE_PROJECT_DIR/hooks/claude/force-model-policy.mjs\""}]
+      }
+    ]
+  }
+}
+```
 
-## Invariants
+**Test Command**: `node hooks/claude/force-model-policy.mjs --test` (or via `node --test tests/force-model-policy.test.mjs`). Validates Haiku allowed on subagents, non-Haiku (e.g., Opus) blocked, orchestrator not subject to policy, JSON logging format valid. Exit 0 = pass; exit 1 = fail.
 
+## Key Invariants
 - POSIX sh compatible, CRLF-safe (no line continuations)
-- Tolerate git pre-push stdin (ref list) + optional args without choking
-- Fail-open only for missing optional tooling (secret_scan.py absent → allow); fail-closed for policy checks
-- Use `AESOP_ROOT` env var or `$HOME/aesop` fallback; no hardcoded machine paths/usernames
+- Tolerate git pre-push stdin (ref list: `<local-ref> <local-oid> <remote-ref> <remote-oid>` per line) + optional args without crashing
+- Fail-open for missing optional tooling (secret_scan.py absent → allow); fail-closed for policy checks (branch, marker, model)
+- `AESOP_ROOT` env var or `$HOME/aesop` fallback; no hardcoded machine paths/usernames
+- Local convenience defense only; real enforcement requires server-side branch protection (GitHub) and centralized audit logs
+
+## Dropped (reason)
+- `docs/HOOK-INSTALL.md` comprehensive guide inlined above (GitHub config, troubleshooting, customization, rotation); refer to that file if org needs full runbook for distribution teams.
+- Map of all domains: /CLAUDE.md

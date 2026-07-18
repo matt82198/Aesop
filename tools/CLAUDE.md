@@ -1,88 +1,88 @@
 # tools/ — Build utilities
 
-Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe). Never print secrets — report by pattern name/location only.
+Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
-## FILES
+## Universal rules (every domain)
+- Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
+- Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
+- In worktrees use ABSOLUTE paths under the worktree for every write.
+- Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
+
+## Core invariants
+
+- **Never print secrets**: mask as pattern name + masked value only; NEVER output raw credentials/tokens.
+- **AESOP_STATE_ROOT**: all heartbeat/ledger/logs use `AESOP_STATE_ROOT` env var (default `./state`) or CLI args; no hardcoded personal paths.
+- **Fragment-assembled secrets in tests**: `scanner_selftest.py` concatenates dummy secrets at runtime so pattern text never appears contiguously (self-scan invariant).
+- **verify_*.py are mandatory CI gates**: `verify_dash.py`, `verify_submit_encoding.py`, `verify_activity_filter.py`, `verify_agent_inspector.py`, `verify_prboard.py`, `verify_failure_drilldown.py`, `verify_wave_telemetry.py` are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run all).
+- **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
+
+## Tool index (one-liners)
 
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
-- `bench_runner.py` — Held-out benchmark runner + scorer with accuracy + cost axis (offline mock runner; pluggable Haiku/Sonnet/Opus runners return text or (text, usage))
+- `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
 - `buildlog.py` — Uniform BUILDLOG.md appender
-- `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks gate)
-- `ci_workflow_lint.py` — CI workflow linter: static analysis of .github/workflows/*.yml (YAML parsing, npm ci lockfile checks, test coverage, file references)
-- `fleet.js` — one-shot fleet snapshot for `aesop fleet` (heartbeats, tracker lanes, orchestrator status; JSON)
-- `wave_preflight.py` — wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json)
-- `common.py` — Shared utilities (state directory resolution, heartbeat staleness checks)
-- `cost_ceiling.py` — Cost-ceiling checker: trips the HALT kill-switch when configured token limits are exceeded
+- `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks requires ALL named checks present AND concluded, --allow-no-checks escape hatch)
+- `ci_workflow_lint.py` — CI workflow linter (YAML parsing, npm ci lockfile checks, test coverage)
+- `common.py` — Shared utilities (state directory resolution, heartbeat staleness)
+- `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits)
-- `fleet.js` — One-shot fleet snapshot (Node STDLIB only; outputs JSON with agents, heartbeats, tracker, orchestrator status; graceful degradation for missing state files)
+- `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
-- `git_identity_check.py` — Validate repo git user.name/user.email against expected values (CLI args or aesop.config.json); detect .git/config drift via physical file inspection
-- `halt.py` — Kill-switch: writes/reads/clears the `.HALT` sentinel that daemons/dispatch check to stop the fleet
+- `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache)
+- `halt.py` — Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
 - `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
-- `lock.mjs` — Fail-closed atomic lock acquisition (exponential backoff + stale-lock detection)
+- `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `orchestrator_status.py` — Atomic orchestrator status updates
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
-- `proposals.mjs` — Proposal lifecycle manager (list/accept/reject)
-- `reconcile.py` — Detect/resolve drift between git STATE.md (phase) and the state_store projection (git-authoritative; --resolve appends to SQLite only)
+- `proposals.mjs` — Proposal lifecycle manager (list/accept/reject via lock.mjs)
+- `reconcile.py` — Detect/resolve drift (git STATE.md vs. state_store projection; git-authoritative; --resolve appends to SQLite only, never rewrites git-side state)
 - `reconstitute.sh` — Clone/fetch repos from config with security validation
-- `rotate_logs.py` — Log rotation utility with size/line thresholds
+- `rotate_logs.py` — Log rotation utility (size/line thresholds)
 - `scanner_selftest.py` — Regression harness for secret_scan.py
-- `secret_scan.py` — Pre-push secret/credential detection gate
+- `secret_scan.py` — Pre-push secret/credential detection gate (staged/history/paths)
 - `self_stats.py` — Git-derived metrics counter + README block generator
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
 - `stall_check.py` — Automated agent transcript stall detector
-- `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (with lazy import error handling)
+- `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
-- `verify_activity_filter.py` — Browser proof for Activity view agent status filter (All/Running/Error-Suspicious filters)
-- `verify_agent_inspector.py` — Browser proof for the Agent Inspector drawer (/api/agent?id=), agents + transcript stubbed via a temp AESOP_ROOT
+- `verify_activity_filter.py` — Browser proof for Activity view agent status filter
+- `verify_agent_inspector.py` — Browser proof for Agent Inspector drawer (/api/agent?id=)
 - `verify_dash.py` — Browser proof for realtime SSE dashboard
-- `verify_failure_drilldown.py` — End-to-end verification of wave failure drill-down feature (API + Playwright UI tests)
-- `verify_prboard.py` — Browser proof for the Wave PR Board (/api/wave/prs), gh stubbed via AESOP_GH_BIN
+- `verify_failure_drilldown.py` — Browser proof for wave failure drill-down feature
+- `verify_prboard.py` — Browser proof for Wave PR Board (/api/wave/prs)
 - `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
-- `verify_wave_telemetry.py` — Browser proof for wave telemetry components (WaveTelemetryProgress, WaveTelemetryCost)
-- `wave_preflight.py` — Wave preflight validator (check repo readiness before wave: branch, tree clean, heartbeats fresh, tracker.json valid)
-- `agent-forensics.sh` — Incident forensics / behavior reconstruction
+- `verify_wave_telemetry.py` — Browser proof for wave telemetry components
+- `wave_preflight.py` — Wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1)
+- `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
 
-## secret_scan.py — Pre-push secret/credential detection gate
+## secret_scan.py — Pre-push gate
 
-Scans staged/history/paths for secrets by regex pattern and credential filenames; blocks pushes on findings.
+CLI: `secret_scan.py --staged [--repo PATH]` | `--history [--repo PATH]` | `PATH [PATH...]`
 
-- `secret_scan.py --staged [--repo PATH]` — scan git staged files
-- `secret_scan.py --history [--repo PATH]` — scan all git history blobs
-- `secret_scan.py PATH [PATH...]` — scan files/dirs directly (recurse)
-
-Exit: 0=clean, 1=findings, 2=usage error. Output masks secrets as `xxxx...`.
-
-**Pragma escape** (pattern findings only; credential filenames always fatal):
+Exit: 0=clean, 1=findings, 2=error. Pragma escape (pattern findings only; filenames always fatal):
 ```
 # secretscan: allow-pattern-docs
 ```
-Mark file's first 10 lines to report rule-based findings as ALLOWED-DOC (non-fatal). Use only for deliberate pattern documentation.
 
-## agent-forensics.sh — Incident forensics / behavior reconstruction
+## agent-forensics.sh — Behavior forensics
 
-Read-only git plumbing; reconstructs agent behavior snapshot or diffs behavior-controlling files.
+CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commitA> <commitB>` (diff rules/docs)
 
-- `bash tools/agent-forensics.sh <commit>` — print commit header, rules snapshot, CLAUDE.md, STATE.md, last 30 lines of BUILDLOG.md
-- `bash tools/agent-forensics.sh --diff <commitA> <commitB>` — diff CLAUDE.md, STATE.md, docs/, monitor/CHARTER.md, hooks/ between commits
+## Test commands
 
-Exit: 0=success, 1=error (never raw git traces). Requires: git, head, tail, wc, grep.
+- **Python**: `npm run test:py` (= `python -m unittest discover -s tests`); a single module: `python -m unittest tests.test_<name>` (tests live in tests/, not tools/; the repo uses unittest, not pytest)
+- **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh` (syntax + linting)
+- **Node**: `node --check tools/*.mjs` (syntax validation)
+- **Full suite**: `python tools/scanner_selftest.py && python tools/power_selftest.py` (mandatory CI gates)
 
+---
 
-## Invariants
-
-- **Dependency-light**: Python tools must work on base Python 3 (no pip installs).
-- **CRLF-safe shell**: no line continuations in .sh scripts; Git Bash + Linux compatible.
-- **Never print secrets**: mask as pattern name + masked value only.
-- **Config-driven paths**: heartbeat/ledger/logs use AESOP_STATE_ROOT env var (default ./state) or CLI args; no hardcoded personal paths.
-- **Fragment-assembled secrets in tests**: scanner_selftest.py concatenates dummy secrets at runtime so pattern text never appears contiguously (self-scan invariant).
-- **verify_*.py are mandatory CI gates**: verify_dash.py and verify_submit_encoding.py are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run both).
-- **lock.mjs is the ONLY lock implementation**: never reimplement locking in proposals.mjs or elsewhere; all proposals/state updates must use fail-closed lock.mjs with exponential backoff + stale-lock breaking.
+Map of all domains: /CLAUDE.md

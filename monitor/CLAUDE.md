@@ -1,40 +1,79 @@
 # monitor/ — Orchestration monitor
 
-**Purpose**: Continuous background signal collector and refinement proposer — watches fleet machinery health deterministically (Node.js, no LLM), emits cycle snapshots, and proposes rule changes via append-only PROPOSALS.md; GOAL IS FIXED (improve machinery, never mission).
+**Purpose**: Continuous background signal collector and refinement proposer — watches fleet machinery health deterministically (Node.js, no LLM), emits cycle snapshots, and proposes rule changes via append-only PROPOSALS.md. **GOAL IS FIXED**: improve machinery, never mission; if monitor thinks goal should change, it writes to PROPOSALS.md and stops.
 
-## Files
+## Universal rules (every domain)
+- Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
+- Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
+- In worktrees use ABSOLUTE paths under the worktree for every write.
+- Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
-- **CHARTER.md** — Governance document; defines 11 signal checks (4 of them extended/opt-in), action tiers (AUTO/PROPOSE), outputs, single-instance guard, single-writer discipline. Read-only; behavior changes only via PROPOSALS/behavioral-PR flow.
-- **collect-signals.mjs** — Deterministic signal collector (Node.js built-ins only); emits BRIEF.md + SIGNALS.json each cycle; reads config from env or aesop.config.json.
-- **BRIEF.md** — Human-readable cycle snapshot (heartbeats, git state, memory freshness, log rotation, junk sprawl, stray scripts, security alerts, respawn watch, cost cadence, unreviewed prompts); overwritten each cycle; runtime.
-- **SIGNALS.json** — Machine-readable metrics (same signal keys as BRIEF); JSON; overwritten each cycle; runtime.
-- **PROPOSALS.md** — Structured inbox for user approval (idempotent per signal key, append-only); never edited by monitor after emission; tracks isolation-violation-detected, respawn-watch-breach, stray-repo-scripts, security-alerts-high-med, stale-memory-files; gitignored.
-- **ACTIONS.log** — Append-only log of AUTO tier actions taken (heartbeat updates, log rotation invokes, junk quarantine); runtime; gitignored.
-- **.monitor-heartbeat** — Epoch timestamp (line 1) for single-instance liveness check (<300s = skip cycle); runtime; gitignored.
-- **.signal-state.json** — Sidecar state (cycleCount, etc.); runtime; gitignored.
+## Files & Ownership
 
-## Contracts
+- **collect-signals.mjs** — Deterministic signal collector (Node.js built-ins only, no Python/LLM); runs each cycle deterministically + idempotently; emits BRIEF.md + SIGNALS.json; updates .monitor-heartbeat (epoch) and .signal-state.json.
+- **BRIEF.md** — Human-readable cycle snapshot; overwritten each cycle; runtime/gitignored. Format: heartbeat status, git state, memory freshness, logs, junk sprawl, stray scripts, security alerts, respawn watch, unreviewed prompts, isolation violations.
+- **SIGNALS.json** — Machine-readable signal metrics (same keys as BRIEF); JSON structure; overwritten each cycle; runtime/gitignored.
+- **PROPOSALS.md** — Append-only inbox for user-approval rule changes (config, policy, deletions); never edited by monitor after emission; gitignored.
+- **ACTIONS.log** — Append-only log of AUTO tier actions taken (heartbeat updates, log rotation, junk quarantine); runtime/gitignored.
+- **.monitor-heartbeat** — Epoch timestamp (line 1 only) for single-instance liveness guard; if <300s old, skip cycle; runtime/gitignored.
+- **.signal-state.json** — Sidecar state (cycleCount, last-seen hashes, etc.); runtime/gitignored.
 
-**Signal keys collected**: heartbeats, git, memory, logs, junk, strayRepo, alerts, respawnWatch, costTick, unreviewedPrompts, isolationViolations. Outputs: BRIEF.md (human), SIGNALS.json (machine); both runtime/gitignored. PROPOSALS.md (tracked, append-only); ACTIONS.log (runtime/gitignored).
+## Deterministic Collector Cycle (Node.js only)
 
-**Extended signals (opt-in, default OFF)**: checks 5 (junk), 6 (strayRepo), 8 (respawnWatch), and 10 (unreviewedPrompts) are extended — disabled by default.
-- Config key: `monitor.extended_signals` (boolean, default `false`) in aesop.config.json.
-- Env override: `AESOP_EXTENDED_SIGNALS` (`'true'` or `'1'` to enable).
+Each cycle:
+1. Check single-instance guard: read .monitor-heartbeat; if <300s old, skip cycle.
+2. Load config from env (AESOP_ROOT, BRAIN_ROOT, SCRIPTS_ROOT, TEMP_ROOT, AESOP_EXTENDED_SIGNALS) or aesop.config.json; fallback to safe defaults.
+3. Deterministically collect signals (read-only filesystem ops, no calls to external services or LLMs).
+4. Emit BRIEF.md (human format) and SIGNALS.json (machine format); both overwritten, idempotent.
+5. Apply AUTO tier actions (heartbeat write, log rotation, quarantine).
+6. Update .monitor-heartbeat (epoch timestamp) and .signal-state.json.
+7. Append any AUTO actions to ACTIONS.log (timestamped).
+
+**Robustness**: Treat missing files/dirs as empty; never crash; config errors fallback to safe defaults.
+
+## Signal Contract
+
+**Signal keys collected** (11 total): heartbeats (watchdog, monitor, other loops), git (branches, unpushed, dirty), memory (stale files >30d), logs (rotation triggers), junk (script sprawl), strayRepo (scripts outside ~/scripts), alerts (SECURITY-ALERTS.log), respawnWatch (agent respawn loops), unreviewedPrompts (new spawns), isolationViolations (FIXED GOAL drift), and others per governance.
+
+**Output formats**:
+- **BRIEF.md**: Human-readable notes, status lines, warnings; overwritten each cycle.
+- **SIGNALS.json**: Flat JSON object with signal key → {value, timestamp, details}; overwritten each cycle.
+
+**Extended signals** (opt-in, default OFF): junk, strayRepo, respawnWatch, unreviewedPrompts checks; skip-step if disabled.
+- Config key: `monitor.extended_signals` (boolean, default `false`) in aesop.config.json (check monitor section).
+- Env override: `AESOP_EXTENDED_SIGNALS` (`'true'` or `'1'` string to enable).
 - Precedence: env var > config file > default (false).
-- When disabled, extended checks emit `{"skipped": true}` in SIGNALS.json and BRIEF.md notes them as "extended (off)"; their dirs are not walked. PROPOSE-tier signals for extended checks (respawn-watch-breach, stray-repo-scripts) are only emitted when extended_signals is ON.
+- Behavior when disabled: emit `{"skipped": true}` for each extended check in SIGNALS.json; BRIEF.md notes "extended (off)" for those sections; directories are not walked.
 
-**AUTO tier actions** (apply immediately, log to ACTIONS.log): heartbeat checks (read-only); log rotation (invoke rotate_logs.py if available, fail-open); heartbeat write (.monitor-heartbeat update); junk script quarantine (move old temp .py/.mjs to monitor/quarantine/ + manifest — only when extended_signals is ON).
+## Action Tiers & Idempotency
 
-**PROPOSE tier actions** (write to PROPOSALS.md, await user approval): rule changes, agent config changes, deletions outside monitor/quarantine/, orchestration policy changes.
+**AUTO** (apply immediately, log to ACTIONS.log):
+- Heartbeat checks (read-only).
+- Log rotation (invoke rotate_logs.py if available; fail-open if unavailable).
+- Heartbeat write (.monitor-heartbeat epoch update).
+- Junk script quarantine (move old .py/.mjs from temp dirs to monitor/quarantine/ + MANIFEST.tsv; only when extended_signals is ON).
 
-**Idempotency rule**: Proposal emission keyed on signal key (e.g., 'respawn-watch-breach'); only emitted if not already present in PROPOSALS.md (check: `**Signal:** <key>` exists). Idempotent + append-only; safe to run repeatedly.
+**PROPOSE** (write to PROPOSALS.md, await user approval):
+- Rule/config/policy changes.
+- Deletions or quarantines outside monitor/quarantine/.
+- Orchestration behavior changes.
+
+**Idempotency rule**: Proposal emission keyed on signal key (e.g., 'respawn-watch-breach'); only emitted once per cycle if not already present in PROPOSALS.md (check: `**Signal:** <key>` line exists). Safe to run repeatedly; append-only preserves audit trail.
 
 ## Invariants & Gotchas
 
-- CHARTER.md is authority; monitor logic is faithful to it; never edit CHARTER.md or collect-signals.mjs directly — propose via PROPOSALS.md.
-- Goal is FIXED (improve machinery, never mission); if monitor thinks goal should change, it writes note to PROPOSALS.md and stops.
-- Single-instance guard via .monitor-heartbeat; if <300s old, skip cycle.
-- Single-writer discipline: only monitor writes BRIEF.md, SIGNALS.json, ACTIONS.log, .monitor-heartbeat, .signal-state.json.
-- Config from env (AESOP_ROOT, BRAIN_ROOT, SCRIPTS_ROOT, TEMP_ROOT, AESOP_EXTENDED_SIGNALS) or aesop.config.json; falls back to safe defaults.
-- Robust to missing files; treats missing dirs/logs as empty, never crashes.
-- Node.js only (no Python, no LLM, no cloud); deterministic + cheap.
+- **Goal is FIXED**: Improve machinery (heartbeat health, cost, security), never mission (project scope, architecture direction). Cardinal Rule enforcement only.
+- **Single-instance guard**: .monitor-heartbeat <300s old = skip cycle. Prevents concurrent collectors.
+- **Single-writer discipline**: Only monitor writes BRIEF.md, SIGNALS.json, ACTIONS.log, .monitor-heartbeat, .signal-state.json. External tools read-only.
+- **Config sourcing**: Env vars (AESOP_ROOT, BRAIN_ROOT, SCRIPTS_ROOT, TEMP_ROOT, AESOP_EXTENDED_SIGNALS, heartbeat thresholds from config) override aesop.config.json (monitor section: log_max_lines, log_max_kb, extended_signals, heartbeat_thresholds). Safe defaults if missing.
+- **Robustness to missing files**: Missing logs/dirs are treated as empty; no crash; graceful degradation.
+- **Node.js only**: No Python, no LLM, no cloud calls; deterministic + cheap. Any orchestration-level actions (Python scripts, LLM review, etc.) are run by external agents, not the collector.
+- **CHARTER.md governs behavior**: Define new signals by proposing via PROPOSALS.md; never edit CHARTER or collect-signals.mjs directly.
+
+## Dropped (reason)
+- Detailed 11-signal-check list names/numbers (governance reference; see CHARTER.md for check definitions and extended-signal details).
+- End-of-day wipe-survival sweep (separate orchestration flow, not core deterministic collector).
+- Mirror refresh cadence and asset sync (orchestration-level; not collector responsibility).
+- Prompt semantic review (LLM-based; runs as separate agent, not in deterministic collector).
+
+Map of all domains: /CLAUDE.md
