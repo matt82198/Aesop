@@ -65,6 +65,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_wave_telemetry.py` — Browser proof for wave telemetry components
 - `verify_dispatch_panel.py` — Browser proof for DispatchPanel component (ui/web/dist/ + /api/wave/dispatch; Playwright/Chromium; exit 0=proven, 1=failed, --allow-skip for CI)
 - `wave_preflight.py` — Wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1)
+- `wave_resume.py` — Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
 
 ## secret_scan.py — Pre-push gate

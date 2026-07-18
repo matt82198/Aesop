@@ -11,20 +11,30 @@ Output contract:
   Line 1: EOD-SWEEP: SAFE or EOD-SWEEP: AT-RISK — <n> findings
   Lines 2+: One finding per line (if any)
   Exit code 0 only when SAFE.
+  Verdict also appended to BUILDLOG.md (if --buildlog provided or AESOP_STATE_ROOT set).
 
 Usage: eod_sweep.py [--repos PATHS] [--readonly-repos PATHS] [--fix-push]
+                    [--buildlog PATH] [--timestamp YYYY-MM-DD HH:MM]
 
   --repos: Colon-separated paths to scan (default: empty; use env var or flag to specify)
   --readonly-repos: Colon-separated paths that should NOT be auto-pushed
   --fix-push: Auto-push unpushed commits in repos where safe
+  --buildlog: Path to BUILDLOG.md (default: AESOP_STATE_ROOT/BUILDLOG.md or ./state/BUILDLOG.md)
+  --timestamp: Timestamp for BUILDLOG entry (format: YYYY-MM-DD HH:MM; omit to exclude timestamp)
 """
 
 import json
 import subprocess
 import sys
+import os
 from pathlib import Path
 from datetime import datetime
 import time
+
+try:
+    from common import get_state_dir
+except ImportError:
+    from tools.common import get_state_dir
 
 
 class Finding:
@@ -153,6 +163,32 @@ def run_secret_scan(repo_path):
         return False
 
 
+def append_to_buildlog(buildlog_path, verdict_line, timestamp_str=None):
+    """Append verdict to BUILDLOG.md (append-only).
+
+    Args:
+        buildlog_path: Path to BUILDLOG.md file.
+        verdict_line: The verdict line to append (e.g., "EOD-SWEEP: SAFE").
+        timestamp_str: Optional timestamp string (format: YYYY-MM-DD HH:MM).
+                      If None, timestamp is omitted from the entry.
+    """
+    buildlog_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create header if file doesn't exist
+    if not buildlog_path.exists():
+        buildlog_path.write_text("# Build Log (append-only)\n")
+
+    # Build entry line with optional timestamp
+    if timestamp_str:
+        entry_line = f"### [{timestamp_str}] {verdict_line}"
+    else:
+        entry_line = f"### {verdict_line}"
+
+    # Append to BUILDLOG
+    with open(buildlog_path, "a", encoding="utf-8") as f:
+        f.write(entry_line + "\n")
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -170,6 +206,16 @@ def main():
         '--fix-push',
         action='store_true',
         help='Auto-push unpushed commits'
+    )
+    parser.add_argument(
+        '--buildlog',
+        default=None,
+        help='Path to BUILDLOG.md (default: AESOP_STATE_ROOT/BUILDLOG.md or ./state/BUILDLOG.md)'
+    )
+    parser.add_argument(
+        '--timestamp',
+        default=None,
+        help='Timestamp for BUILDLOG entry (format: YYYY-MM-DD HH:MM; omit to exclude timestamp)'
     )
     args = parser.parse_args()
 
@@ -231,6 +277,18 @@ def main():
     print(verdict_line)
     for finding in findings:
         print(f"  {finding}")
+
+    # Append to BUILDLOG if path is available
+    buildlog_path = None
+    if args.buildlog:
+        buildlog_path = Path(args.buildlog)
+    else:
+        # Try to derive from AESOP_STATE_ROOT or default to ./state
+        state_dir = get_state_dir()
+        buildlog_path = state_dir / "BUILDLOG.md"
+
+    if buildlog_path:
+        append_to_buildlog(buildlog_path, verdict_line, args.timestamp)
 
     sys.exit(exit_code)
 
