@@ -16,6 +16,7 @@ import sse
 import wave_prs
 import wave_telemetry
 import wave_failure
+import wave_dispatch
 import api
 import api.tracker
 import api.submit
@@ -201,6 +202,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_wave_prs()
         elif self.path == "/api/wave/telemetry":
             self.serve_api_wave_telemetry()
+        elif self.path == "/api/wave/dispatch":
+            self.serve_api_wave_dispatch()
         elif self.path.startswith("/api/wave/failure"):
             self.serve_api_wave_failure()
         elif self.path == "/api/backlog":
@@ -448,6 +451,27 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
             print(f"[serve_api_wave_telemetry] Uncaught exception: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_wave_dispatch(self):
+        """GET /api/wave/dispatch — live per-agent phase and activity visibility.
+
+        Read-only; reads at call time (no caching). Returns per-agent phase,
+        last-activity age, and token burn estimates. Degrades to {available:false}
+        when no active workflow.
+        """
+        try:
+            payload = wave_dispatch.get_wave_dispatch()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            print(f"[serve_api_wave_dispatch] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()

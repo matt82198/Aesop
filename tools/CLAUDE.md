@@ -41,6 +41,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 always (advisory)
 - `orchestrator_status.py` — Atomic orchestrator status updates
+- `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject via lock.mjs)
@@ -64,7 +65,9 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_prboard.py` — Browser proof for Wave PR Board (/api/wave/prs)
 - `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
 - `verify_wave_telemetry.py` — Browser proof for wave telemetry components
+- `verify_dispatch_panel.py` — Browser proof for DispatchPanel component (ui/web/dist/ + /api/wave/dispatch; Playwright/Chromium; exit 0=proven, 1=failed, --allow-skip for CI)
 - `wave_preflight.py` — Wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1)
+- `wave_resume.py` — Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
 
 ## secret_scan.py — Pre-push gate

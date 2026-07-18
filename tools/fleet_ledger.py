@@ -147,6 +147,7 @@ def harvest():
     seen_agents, _ = load_harvest_state()
     new_seen = set(seen_agents)
     harvested_count = 0
+    skipped_count = 0
 
     # Determine temp root for tasks scanning
     if os.environ.get("AESOP_TEMP_ROOT"):
@@ -174,6 +175,11 @@ def harvest():
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
+                continue
+
+            # Type guard: skip non-dict scalars (int, string, etc.)
+            if not isinstance(obj, dict):
+                skipped_count += 1
                 continue
 
             # Look for agent spawn events (type='assistant' with Agent/Task tool_use)
@@ -225,6 +231,8 @@ def harvest():
 
     ledger_file, _, _ = get_ledger_paths()
     print(f'Harvested {harvested_count} new agent outcomes to {ledger_file}')
+    if skipped_count > 0:
+        print(f'Skipped {skipped_count} malformed JSONL lines (non-dict scalars)')
     return harvested_count
 
 

@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import Timeline from '../components/Timeline';
 import MessagesTail from '../components/MessagesTail';
+import DispatchPanel from '../components/DispatchPanel';
 import { TESTIDS } from '../test/fixtures';
 import type { SSEState } from '../lib/useSSE';
 import type { Agent } from '../lib/types';
@@ -35,6 +36,10 @@ export default function Activity({ state }: Props) {
 
   return (
     <div data-testid={TESTIDS.viewActivity} className={styles.container}>
+      <section className={styles.section}>
+        <DispatchPanel />
+      </section>
+
       <section className={styles.section}>
         <div className={styles.timelineHeader}>
           <h3 className={styles.timelineTitle}>Agent Timeline</h3>

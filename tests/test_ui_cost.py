@@ -491,6 +491,84 @@ class TestPerWeekCosts(CostIsolationCase):
         for week_data in per_week.values():
             self.assertGreaterEqual(week_data["cost"], 0.0)
 
+    def test_each_week_uses_only_own_model_mix_regression(self):
+        """REGRESSION TEST: Each week's cost uses ONLY that week's per-model token counts.
+
+        This is a regression test for a bug where _calculate_weekly_costs() would apply
+        the GLOBAL model distribution to every week, causing inflation. This test creates
+        2+ weeks with DIFFERENT per-week model mixes and asserts that each week reflects
+        only its own model token counts (not the global distribution).
+
+        Example of the bug:
+          - Week 1 (2026-07-14): only Haiku, 100 tokens
+          - Week 2 (2026-07-21): only Opus, 200 tokens
+          - BUG: Week 1 would incorrectly include Opus tokens (200) from week 2's data
+          - FIX: Week 1 should only have Haiku (100), Week 2 only Opus (200)
+        """
+        # Week 1 (2026-W29, July 14-20): only Haiku with different token count
+        # Week 2 (2026-W30, July 21-27): only Opus with different token count
+        # Week 3 (2026-W31, July 28 onwards): different mix
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-14T10:00:00 | Agent | claude-haiku-4-5-20251001 | 0 | 10 | 90 | OK |
+| 2026-07-15T10:00:00 | Agent | claude-haiku-4-5-20251001 | 0 | 10 | 90 | OK |
+| 2026-07-21T10:00:00 | Agent | claude-opus-4-8 | 0 | 20 | 180 | OK |
+| 2026-07-22T10:00:00 | Agent | claude-opus-4-8 | 0 | 20 | 180 | OK |
+| 2026-07-28T10:00:00 | Agent | claude-haiku-4-5-20251001 | 0 | 5 | 50 | OK |
+| 2026-07-28T11:00:00 | Agent | claude-opus-4-8 | 0 | 15 | 150 | OK |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        per_week = summary["per_week_costs"]
+
+        # Should have 3 weeks (W29, W30, W31)
+        self.assertEqual(len(per_week), 3, f"Expected 3 weeks, got {len(per_week)}: {list(per_week.keys())}")
+
+        # Week 1 (2026-W29): only Haiku
+        # Should have only haiku in model_tokens, not opus
+        week_29 = per_week.get("2026-W29")
+        self.assertIsNotNone(week_29, "2026-W29 not found in per_week_costs")
+        self.assertIn("claude-haiku-4-5-20251001", week_29["model_tokens"],
+                     "Week 29 should have haiku")
+        self.assertNotIn("claude-opus-4-8", week_29["model_tokens"],
+                        "Week 29 should NOT have opus (bug: applying global distribution)")
+        # Haiku tokens: 10+10 = 20 in, 90+90 = 180 out, total = 200
+        self.assertEqual(week_29["model_tokens"]["claude-haiku-4-5-20251001"], 200,
+                        "Week 29 haiku should have exactly 200 total tokens")
+        self.assertEqual(week_29["tokens_in"], 20, "Week 29 should have 20 tokens_in")
+        self.assertEqual(week_29["tokens_out"], 180, "Week 29 should have 180 tokens_out")
+
+        # Week 2 (2026-W30): only Opus
+        # Should have only opus in model_tokens, not haiku
+        week_30 = per_week.get("2026-W30")
+        self.assertIsNotNone(week_30, "2026-W30 not found in per_week_costs")
+        self.assertNotIn("claude-haiku-4-5-20251001", week_30["model_tokens"],
+                        "Week 30 should NOT have haiku (bug: applying global distribution)")
+        self.assertIn("claude-opus-4-8", week_30["model_tokens"],
+                     "Week 30 should have opus")
+        # Opus tokens: 20+20 = 40 in, 180+180 = 360 out, total = 400
+        self.assertEqual(week_30["model_tokens"]["claude-opus-4-8"], 400,
+                        "Week 30 opus should have exactly 400 total tokens")
+        self.assertEqual(week_30["tokens_in"], 40, "Week 30 should have 40 tokens_in")
+        self.assertEqual(week_30["tokens_out"], 360, "Week 30 should have 360 tokens_out")
+
+        # Week 3 (2026-W31): mixed (both Haiku and Opus)
+        # Should have both models with their respective token counts
+        week_31 = per_week.get("2026-W31")
+        self.assertIsNotNone(week_31, "2026-W31 not found in per_week_costs")
+        self.assertIn("claude-haiku-4-5-20251001", week_31["model_tokens"],
+                     "Week 31 should have haiku")
+        self.assertIn("claude-opus-4-8", week_31["model_tokens"],
+                     "Week 31 should have opus")
+        # Haiku tokens: 5 in, 50 out, total = 55
+        self.assertEqual(week_31["model_tokens"]["claude-haiku-4-5-20251001"], 55,
+                        "Week 31 haiku should have exactly 55 total tokens")
+        # Opus tokens: 15 in, 150 out, total = 165
+        self.assertEqual(week_31["model_tokens"]["claude-opus-4-8"], 165,
+                        "Week 31 opus should have exactly 165 total tokens")
+        self.assertEqual(week_31["tokens_in"], 20, "Week 31 should have 20 tokens_in (5+15)")
+        self.assertEqual(week_31["tokens_out"], 200, "Week 31 should have 200 tokens_out (50+150)")
+
 
 class TestVerdictWeightedCost(CostIsolationCase):
     """Test verdict-weighted cost-per-outcome metrics."""

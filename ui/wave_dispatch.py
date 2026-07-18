@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""
+Wave dispatch collector — live per-agent phase and activity visibility.
+
+Surfaces what a wave's workers are doing RIGHT NOW: per-agent phase (dispatch/thinking/tool-use/stall/done),
+last-activity age, and token burn estimates.
+
+Data sources:
+  - Agent transcripts: ~/.claude/projects/*/memory/agent-*.jsonl (mtime + file size)
+  - Orchestrator status: state/orchestrator-status.json (phase info)
+  - Workflow journal: state/workflow.journal.jsonl (per-agent state transitions, optional)
+
+Degrades to {available:false} when no active workflow.
+"""
+import json
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+import config
+
+
+# Conservative token estimate: 4.5 bytes per token (empirical average)
+BYTES_PER_TOKEN = 4.5
+
+
+def _infer_agent_phase_from_transcript(transcript_path):
+    """Infer agent phase from transcript tail.
+
+    Reads the last ~10 lines of an NDJSON transcript to infer phase state.
+    Returns one of: 'dispatch', 'thinking', 'tool-use', 'stall', 'done'.
+
+    Args:
+        transcript_path: Path to agent-*.jsonl file
+
+    Returns:
+        str: phase label, or 'unknown' if inference fails
+    """
+    try:
+        if not transcript_path.exists():
+            return "unknown"
+
+        # Read last ~10 lines to infer phase
+        with open(transcript_path, 'rb') as f:
+            # Seek to end and read backwards to get tail
+            f.seek(0, 2)
+            file_size = f.tell()
+            if file_size == 0:
+                return "dispatch"  # Empty file, likely just dispatched
+
+            # Read last ~2KB to capture ~10 lines
+            read_size = min(2048, file_size)
+            f.seek(max(0, file_size - read_size))
+            tail = f.read().decode('utf-8', errors='replace')
+
+        # Count message types to infer phase
+        lines = tail.strip().split('\n')
+        message_types = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+                if isinstance(entry, dict) and 'type' in entry:
+                    message_types.append(entry['type'].lower())
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Phase inference logic:
+        # - If last message is user: dispatch
+        # - If last message is assistant: thinking or tool-use
+        # - If we see [tool_use: ...]: tool-use
+        # - If we see [error] or timestamp recent: stall
+        # - If multiple completions: done
+        if not message_types:
+            return "unknown"
+
+        last_type = message_types[-1] if message_types else "unknown"
+
+        # Simple heuristic: check for tool_use markers in tail
+        tail_lower = tail.lower()
+        if '[tool_use:' in tail_lower or 'tool_use' in last_type:
+            return "tool-use"
+        elif '[error]' in tail_lower or 'error' in tail_lower:
+            return "stall"
+        elif last_type == 'assistant':
+            # Check if we have many completions (indicates done)
+            completion_count = tail.count('"type": "assistant"') + tail.count('"type":"assistant"')
+            if completion_count >= 3:
+                return "done"
+            return "thinking"
+        elif last_type == 'user':
+            return "dispatch"
+        else:
+            return "thinking"
+    except Exception as e:
+        print(f"[wave_dispatch] Error inferring phase from {transcript_path}: {e}", file=sys.stderr)
+        return "unknown"
+
+
+def _estimate_tokens_from_file_size(file_path):
+    """Estimate tokens from file size.
+
+    Uses conservative ratio: size (bytes) / 4.5 bytes-per-token.
+
+    Args:
+        file_path: Path to transcript file
+
+    Returns:
+        int: estimated token count, or 0 if file missing
+    """
+    try:
+        if not file_path.exists():
+            return 0
+        size = file_path.stat().st_size
+        return max(0, int(size / BYTES_PER_TOKEN))
+    except Exception:
+        return 0
+
+
+def _get_last_activity_age_sec(file_path):
+    """Get age of last file modification in seconds.
+
+    Args:
+        file_path: Path to transcript file
+
+    Returns:
+        int: seconds since last mtime, or -1 if file missing
+    """
+    try:
+        if not file_path.exists():
+            return -1
+        mtime = file_path.stat().st_mtime
+        now = time.time()
+        age_sec = int(now - mtime)
+        return max(0, age_sec)
+    except Exception:
+        return -1
+
+
+def get_wave_dispatch():
+    """Get consolidated wave dispatch snapshot.
+
+    Reads agent transcripts and orchestrator status at call time (not import time)
+    to ensure test isolation. Returns per-agent phase, activity age, and token burn.
+
+    Returns:
+        dict: {
+            "available": bool,
+            "wave_phase": str or None,
+            "agents": [
+                {
+                    "id": str,
+                    "phase": str,
+                    "last_activity_age_sec": int,
+                    "token_estimate": int,
+                    "warnings": [str] (optional)
+                }
+            ],
+            "at": str (ISO 8601)
+        }
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        timestamp = now.isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+        # Try to read orchestrator status to get wave phase
+        wave_phase = None
+        try:
+            orch_status_file = config.ORCH_STATUS_FILE
+            if orch_status_file.exists():
+                content = orch_status_file.read_text(encoding='utf-8')
+                orch_data = json.loads(content)
+                wave_phase = orch_data.get("phase")
+        except Exception as e:
+            print(f"[wave_dispatch] Error reading orchestrator status: {e}", file=sys.stderr)
+
+        # Find active agent transcripts
+        agents = []
+        transcripts_root = config.TRANSCRIPTS_ROOT
+
+        try:
+            # Look for agent-*.jsonl files in ~/.claude/projects/*/memory/
+            # Pattern: {transcripts_root}/{project}/memory/agent-*.jsonl
+            if transcripts_root.exists():
+                for project_dir in transcripts_root.iterdir():
+                    if not project_dir.is_dir():
+                        continue
+
+                    memory_dir = project_dir / "memory"
+                    if not memory_dir.exists():
+                        continue
+
+                    # Scan for agent-*.jsonl files
+                    for transcript_file in memory_dir.glob("agent-*.jsonl"):
+                        agent_id = transcript_file.stem  # e.g., "agent-12345"
+                        if agent_id.startswith("agent-"):
+                            # Remove "agent-" prefix for display
+                            display_id = agent_id[6:]  # "12345"
+
+                            phase = _infer_agent_phase_from_transcript(transcript_file)
+                            age_sec = _get_last_activity_age_sec(transcript_file)
+                            tokens = _estimate_tokens_from_file_size(transcript_file)
+
+                            # Build warnings
+                            warnings = []
+                            if age_sec > 300:  # 5 minutes
+                                warnings.append("inactive >5min")
+                            if age_sec > 600:  # 10 minutes
+                                warnings.append("stalled >10min")
+
+                            agent_entry = {
+                                "id": display_id,
+                                "phase": phase,
+                                "last_activity_age_sec": age_sec,
+                                "token_estimate": tokens,
+                            }
+                            if warnings:
+                                agent_entry["warnings"] = warnings
+
+                            agents.append(agent_entry)
+        except Exception as e:
+            print(f"[wave_dispatch] Error scanning transcripts: {e}", file=sys.stderr)
+
+        # Determine availability: if no agents found, mark as unavailable
+        available = len(agents) > 0
+
+        return {
+            "available": available,
+            "wave_phase": wave_phase,
+            "agents": agents,
+            "at": timestamp
+        }
+    except Exception as e:
+        print(f"[wave_dispatch] Uncaught error: {e}", file=sys.stderr)
+        return {
+            "available": False,
+            "wave_phase": None,
+            "agents": [],
+            "error": "Internal error",
+            "at": datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+        }
