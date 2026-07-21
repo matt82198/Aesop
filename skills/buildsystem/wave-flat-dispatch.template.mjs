@@ -50,6 +50,13 @@
 //                                       // Returns {holds:boolean, breakingScenario:string} per item;
 //                                       // items where holds=false are collected as contractFindings.
 //                                       // Absent => unchanged behavior (backward-compatible).
+//   adversarialReviewMode: 'blocking' | 'concurrent-note' | null  // optional (LEVER 2, wall-clock)
+//                                       // 'blocking' (default): run the refutation INLINE before return (current behavior).
+//                                       // 'concurrent-note': do NOT await adversarialReview before signaling merge-readiness —
+//                                       //   defer it (adversarialReviewPending=true, contractFindings=null here) so the
+//                                       //   orchestrator kicks CI immediately and runs adversarialReview in parallel with the
+//                                       //   CI-wait window; contractFindings then gate MERGE (not CI). Overlaps review + CI.
+//                                       // Absent / any other value => 'blocking' (backward-compatible).
 //   agentTimeboxNote: number | null  // optional: per-agent wall-clock budget in minutes (latency fix #2)
 //                                     // when set: adds hard timebox line to Build/SelfCheck/Repair prompts,
 //                                     // caps repair rounds to top 3 worst failing items (rest deferred).
@@ -57,7 +64,7 @@
 // }
 // Returns: { preflight, build, integration:{green,passed,failed}, repairsUsed,
 //            tokens:{buildOut,verifyOut,repairOut,adversarialReviewOut,totalOut}, mergeReady:boolean, aborted, reason,
-//            contractFindings: [{slug, breakingScenario}] }
+//            contractFindings: [{slug, breakingScenario}], adversarialReviewMode, adversarialReviewPending:boolean }
 //          (may include aborted:true, reason:'cost_ceiling', spent, ceiling when ceiling exceeded)
 // ============================================================================
 
@@ -83,6 +90,10 @@ const CAP = typeof A.repairCap === 'number' ? A.repairCap : 1
 const HINT = A.contractHint || `Read the shared contract/spec files in ${WORK} before implementing.`
 const CEILING = A.ceiling ? { tokens: A.ceiling.tokens, recheckBrake: A.ceiling.recheckBrake } : null
 const ADVERSARIAL_REVIEW = !!A.adversarialReview
+// LEVER 2 (wall-clock): adversarialReview blocking vs concurrent-note. Default 'blocking' = current inline
+// behavior (findings produced before return). 'concurrent-note' defers the refutation so the orchestrator
+// can kick CI immediately and run adversarialReview in parallel, gating MERGE (not CI) on contractFindings.
+const ADVERSARIAL_REVIEW_MODE = A.adversarialReviewMode === 'concurrent-note' ? 'concurrent-note' : 'blocking'
 const TIMEBOX_MINUTES = typeof A.agentTimeboxNote === 'number' ? A.agentTimeboxNote : null
 // Helper to build timebox line for agent prompts (latency fix #2).
 function timeboxLine() {
@@ -456,6 +467,10 @@ while (v && !v.green && round < CAP) {
     // run commands ONCE to a file, never re-run to grep, and never run full union suites.
     const itemFiles = (it.ownsFiles || []).map(f => `  ${f}`).join('\n')
     const repairPrompt = `ONE-TURN-WAVE repair for item "${it.slug}". Working dir: ${WORK}. The integration suite failed: ${v.detail}\n` +
+      `\n** SCOPED REPAIR CONTEXT (token discipline — repair cache-read tax fix, measured #1 sink): **\n` +
+      `You are given ONLY (a) the failing-suite verdict above and (b) the diff of YOUR OWN files. Do NOT re-read the whole prior build context — re-reading the full build is the measured top token sink.\n` +
+      `To see exactly what you changed, run ONCE: \`git -C ${WORK} diff -- ${(it.ownsFiles || []).join(' ')}\` (your owned files only).\n` +
+      `You MAY read your OWNED files and the named contract (${HINT}); do NOT read sibling workers' files or dump the whole build.\n` +
       `\n** TARGETED TEST DISCIPLINE (latency fix #1): **\n` +
       `You own these files (run tests ONLY for these, never the full union suite):\n${itemFiles}\n` +
       `\nTo run tests for ONLY your files:\n` +
@@ -467,7 +482,7 @@ while (v && !v.green && round < CAP) {
       `  1. Run it ONCE with full timeout (>= 5 minutes): cmd > /tmp/repair-output.log 2>&1; echo "exit=$?" >> /tmp/repair-output.log\n` +
       `  2. Read the file to see results (tail, grep, etc) — never re-run the suite to see another slice.\n` +
       `  3. Fix based on that ONE output; multiple runs of the same suite burn wall-clock minutes.\n` +
-      `\nYou MAY now read sibling files and the full contract/specs to reconcile drift, but still edit ONLY your owned files. Fix them with Edit/Write. Report.${timeboxLine()}`
+      `\nFix ONLY your owned files with Edit/Write. Report.${timeboxLine()}`
     return agent(repairPrompt, { label: `repair:${it.slug}`, phase: 'Repair', model: 'haiku', schema: DONE })
   }))
   const rEnd = budget.spent()
@@ -479,7 +494,8 @@ while (v && !v.green && round < CAP) {
 // -------- Adversarial Review (optional, gated on args.adversarialReview) --------
 let contractFindings = []
 let adversarialReviewOut = 0
-if (ADVERSARIAL_REVIEW && v && v.green) {
+let adversarialReviewPending = false
+if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green) {
   phase('AdversarialReview')
   const reviewStart = budget.spent()
   const REVIEW = {
@@ -527,6 +543,14 @@ if (ADVERSARIAL_REVIEW && v && v.green) {
 
   adversarialReviewOut = budget.spent() - reviewStart
   log(`AdversarialReview done: ${contractFindings.length} contract violation(s) found.`)
+}
+
+// LEVER 2 (wall-clock): in concurrent-note mode, do NOT run adversarialReview inline / do NOT await it before
+// signaling merge-readiness. Defer it so the orchestrator kicks CI immediately and runs the refutation in
+// parallel with the CI-wait window; contractFindings then gate MERGE (not CI). Findings are pending here.
+if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'concurrent-note' && v && v.green) {
+  adversarialReviewPending = true
+  log('AdversarialReview DEFERRED (concurrent-note): integration green — orchestrator should kick CI immediately and run adversarialReview in parallel; contractFindings gate MERGE, not CI.')
 }
 
 // Check ceiling before Ship.
@@ -605,10 +629,12 @@ const result = {
   integration: v ? { green: v.green, passed: v.passed, failed: v.failed } : { green: false, passed: null, failed: null },
   repairsUsed,
   contractFindings: contractFindings.length > 0 ? contractFindings : null,
+  adversarialReviewMode: ADVERSARIAL_REVIEW ? ADVERSARIAL_REVIEW_MODE : null,
+  adversarialReviewPending,
   tokens: { buildOut, verifyOut, selfCheckOut, repairOut, adversarialReviewOut, totalOut, model: 'all-haiku (weight 1)' },
   mergeReady: !!(v && v.green),
   ship,
-  note: 'One Workflow call = one orchestrator turn. All-Haiku => raw==weighted. Setup tokens excluded. SelfCheck/PostBuild tokens included. AdversarialReview tokens only when args.adversarialReview is truthy. Real-repo wiring: give each item its own sibling git worktree (git worktree add ../aesop-wt-<slug> -b <branch> origin/main), workers write there + push; orchestrator opens PRs + ci_merge_wait after — the async CI/merge boundary stays outside this one turn.',
+  note: 'One Workflow call = one orchestrator turn. All-Haiku => raw==weighted. Setup tokens excluded. SelfCheck/PostBuild tokens included. AdversarialReview tokens only when args.adversarialReview is truthy. AdversarialReviewMode: "blocking" (default) runs the refutation inline before this return; "concurrent-note" defers it (adversarialReviewPending=true, contractFindings=null here) so the orchestrator kicks CI immediately and runs adversarialReview in parallel, gating MERGE (not CI) on contractFindings — overlapping the review with the CI-wait window. Real-repo wiring: give each item its own sibling git worktree (git worktree add ../aesop-wt-<slug> -b <branch> origin/main), workers write there + push; orchestrator opens PRs + ci_merge_wait after — the async CI/merge boundary stays outside this one turn.',
 }
 log(`DONE. selfcheck=${selfCheckFailed.length} failed, integration green=${result.mergeReady} passed=${result.integration.passed} repairs=${repairsUsed} contractViolations=${contractFindings.length} buildOut=${buildOut} totalOut=${totalOut}`)
 return result
