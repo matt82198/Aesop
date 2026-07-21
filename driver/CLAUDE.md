@@ -5,7 +5,7 @@ backends other than Claude Code (Codex, open models). The wave loop dispatches
 through the `AgentDriver` interface and nothing else; each backend is a subclass.
 
 Grounded in a multi-model portability design spike.
-**Phase 1 (interface + reference adapter, shipped)** + **Phase 2 (Codex OpenAI Chat Completions, shipped)**.
+**Phase 1 (interface + reference adapter, shipped)** + **Phase 2 (Codex OpenAI Chat Completions, shipped)** + **Phase 3 (wave-manifest bridge, shipped)**.
 
 ## Files
 
@@ -24,11 +24,20 @@ Grounded in a multi-model portability design spike.
 - **verification_policy.py** — pure function mapping recommended_verification_tier
   -> orchestrator tuning (validate_all_json, spot_check_frac, repair_cap,
   require_adversarial_review).
+- **wave_bridge.py** — Phase 3 IMPLEMENTATION: bridges AgentDriver backends to
+  wave-flat-dispatch manifest items. Two core functions: build_manifest_item()
+  produces manifest item with verificationTier + model from driver probe;
+  dispatch_item() routes execution by capabilities (harness for tier-1, orchestrator
+  for tier-2+) and decides green ONLY from test exit code (never model's say-so).
 - **README.md** — the abstraction, the phased roadmap, the verification thesis.
 - **../tests/test_agent_driver.py** — the contract's test suite.
 - **../tests/test_codex_driver_e2e.py** — Phase 2 end-to-end offline tests
   (FakeTransport, red-to-green verification, retry logic, ownership enforcement)
   + gated live test (AESOP_CODEX_LIVE env var).
+- **../tests/test_wave_bridge.py** — Phase 3 end-to-end offline tests proving
+  non-Claude backend drives a real RED stub to verified-GREEN offline (no API key,
+  no network). Tests: manifest building, routing, fail-safe, ownership enforcement,
+  headline test (red stub + FakeTransport fix + test pass -> ok=True).
 
 ## The five operations (what the wave loop needs from ANY backend)
 
@@ -102,11 +111,38 @@ from environment and uses default_openai_transport (stdlib urllib, hard timeout)
 validate_all_json: True, spot_check_frac: 0.50, repair_cap: 2,
 require_adversarial_review: True }. Feeds the wave's integration verifier.
 
+## Phase 3 Bridge Implementation Details
+
+The wave bridge connects AgentDriver backends to wave-flat-dispatch manifest
+items, making verification tier driven by backend capability, not config.
+
+**build_manifest_item(driver, item) -> dict**:
+- Takes a backlog item {slug, ownsFiles, prompt, testCmd, workDir, ...} + driver.
+- Returns manifest-item dict enriched with: model (from driver.resolve_model('worker'))
+  and verificationTier (from driver.probe_capabilities().recommended_verification_tier).
+- Preserves all input fields; adds only model + tier.
+
+**dispatch_item(driver, item) -> dict**:
+- Routes execution by driver.probe_capabilities().worker_filesystem_access:
+  - True (Claude tier-1): returns {route:'harness', ...} (harness will dispatch).
+  - False (Codex tier-2+): orchestrator-managed: calls driver.dispatch_worker(),
+    then driver.run_command() for the test. Returns {route:'driver', ok, testExit, filesWritten, ...}.
+- CRITICAL: Green ONLY if test exit code == 0. Never from model's done:true.
+- Fail-safe: any exception -> ok=False, never a false green.
+- Ownership enforced at driver level (dispatch_worker rejects out-of-scope paths).
+
+**Tests**: prove a non-Claude backend (Codex + FakeTransport) takes a RED unittest
+stub, applies a fix, runs the test, and returns ok=True ONLY because the test passed
+(exit 0). All offline, no API key, no network.
+
 ## Status
 
 - **Phase 1**: shipped. Interface + Claude reference adapter + contract tests.
 - **Phase 2**: shipped. Codex OpenAI Chat Completions implementation wired
   end-to-end. All offline tests GREEN (no API key, no network). One live test
   gated by AESOP_CODEX_LIVE + OPENAI_API_KEY (skipped in CI).
+- **Phase 3**: shipped. Wave bridge wiring driver -> manifest + orchestrator-side
+  dispatch. Proves non-Claude backends can drive items end-to-end with verified-honest
+  decisions (green only from test exit 0). All offline tests GREEN.
 - **Next**: Refactor wave-flat-dispatch onto the driver (Phase 1 handoff).
-- **Future**: Open-model adapter (Phase 3, Tier-4 backend).
+- **Future**: Open-model adapter (Tier-4 backend).
