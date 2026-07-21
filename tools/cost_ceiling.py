@@ -125,10 +125,15 @@ def read_ledger_total_tokens(state_dir, period="wave"):
 def check(spent=None, period="wave", config=None, state_dir=None, trip=True):
     """Check spend against the configured ceiling for `period`.
 
-    Returns a dict: {"period", "ceiling", "spent", "exceeded", "tripped"}.
+    Returns a dict: {"period", "ceiling", "spent", "exceeded", "tripped", "reason"}.
 
-    Fail-closed: any error during check (e.g., corrupt ledger, bad config) is
-    treated as over-ceiling and triggers abort when trip=True (never fail-open).
+    Distinctions:
+    - Genuine ceiling breach (ceiling is configured, spent >= ceiling): when trip=True,
+      writes persistent .HALT sentinel via halt.halt() and sets tripped=True.
+    - Exception during spend computation (ledger read/create failure, etc.): signals
+      abort of current wave (exceeded=True) but does NOT write persistent sentinel
+      (tripped=False). This preserves fleet availability across transient I/O errors
+      (e.g., momentary file lock, disk full) while still aborting the current wave.
     """
     try:
         if config is None:
@@ -160,43 +165,24 @@ def check(spent=None, period="wave", config=None, state_dir=None, trip=True):
             "spent": spent,
             "exceeded": exceeded,
             "tripped": tripped,
+            "reason": None,
         }
     except Exception as e:
-        # Fail-closed: any error during check is treated as over-ceiling.
-        # This prevents fail-open scenarios (e.g., corrupt ledger silently passing).
-        if trip:
-            try:
-                reason = f"cost ceiling check failed (error: {type(e).__name__}: {str(e)[:100]}); treating as over-ceiling"
-                halt.halt(reason, state_dir=state_dir if state_dir else halt.resolve_state_dir(config))
-                return {
-                    "period": period,
-                    "ceiling": None,
-                    "spent": None,
-                    "exceeded": True,
-                    "tripped": True,
-                    "error": str(e),
-                }
-            except Exception as halt_error:
-                # Even halt failed — still return tripped=True so caller knows
-                # the check failed and must abort.
-                return {
-                    "period": period,
-                    "ceiling": None,
-                    "spent": None,
-                    "exceeded": True,
-                    "tripped": True,
-                    "error": f"check failed: {str(e)[:50]}; halt also failed: {str(halt_error)[:50]}",
-                }
-        else:
-            # trip=False: caller doesn't want side effects, but still report error
-            return {
-                "period": period,
-                "ceiling": None,
-                "spent": None,
-                "exceeded": True,
-                "tripped": False,
-                "error": str(e),
-            }
+        # Exception during spend computation (e.g., ledger read/create failure,
+        # file lock, transient I/O error). This is fail-SAFE: abort the current
+        # wave (exceeded=True) to prevent runaway work, but do NOT write the
+        # persistent .HALT sentinel (tripped=False). The distinction ensures a
+        # transient I/O hiccup does not permanently wedge the fleet.
+        reason_text = f"cost_check_error: {type(e).__name__}: {str(e)[:100]}"
+        return {
+            "period": period,
+            "ceiling": None,
+            "spent": None,
+            "exceeded": True,
+            "tripped": False,
+            "error": str(e),
+            "reason": reason_text,
+        }
 
 
 def main(argv=None):

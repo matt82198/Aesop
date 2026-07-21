@@ -195,7 +195,8 @@ class TestCostSpikeRealScenarios(CostCeilingSpikeTesting):
 
 
 class TestCostCeilingFailClosed(CostCeilingSpikeTesting):
-    """Test fail-closed behavior: errors computing spend are treated as over-ceiling."""
+    """Test fail-closed behavior: errors computing spend abort the wave but do NOT
+    permanently halt the fleet."""
 
     def test_bad_ledger_data_treated_as_error_spike(self):
         """If ledger has malformed data that causes parsing errors, should abort
@@ -246,6 +247,47 @@ class TestCostCeilingFailClosed(CostCeilingSpikeTesting):
         # Bad ceiling value should be ignored (None), so never exceeded
         self.assertIsNone(result["ceiling"])
         self.assertFalse(result["exceeded"])
+
+    def test_transient_io_error_aborts_wave_without_persistent_halt(self):
+        """Test the critical safety fix: when spend computation fails (e.g.,
+        transient I/O error reading/creating the ledger), abort the current wave
+        (exceeded=True) but do NOT write the persistent .HALT sentinel (tripped=False).
+        This preserves fleet availability across transient errors."""
+        config = {"limits": {"max_wave_tokens": 1000}}
+
+        # Monkeypatch fleet_ledger.parse_ledger_rows to raise an OSError
+        # (simulating a transient file lock or permission error)
+        original_parse = self.fleet_ledger.parse_ledger_rows
+
+        def mock_parse_ledger_rows():
+            raise OSError("WinError 183: Cannot create a file when that file already exists")
+
+        self.fleet_ledger.parse_ledger_rows = mock_parse_ledger_rows
+
+        try:
+            result = self.cost_ceiling.check(period="wave", config=config)
+
+            # Verify the result signals abort of current wave
+            self.assertTrue(
+                result["exceeded"],
+                "Computation error should abort the wave (exceeded=True)"
+            )
+            # Verify tripped=False: no persistent sentinel written
+            self.assertFalse(
+                result["tripped"],
+                "Computation error should NOT write persistent halt (tripped=False)"
+            )
+            # Verify the persistent sentinel was NOT written
+            self.assertFalse(
+                self.halt.is_halted(),
+                "Transient I/O error should NOT write .HALT sentinel"
+            )
+            # Verify the error is recorded in the result
+            self.assertIn("error", result)
+            self.assertIn("reason", result)
+            self.assertIn("cost_check_error", result["reason"])
+        finally:
+            self.fleet_ledger.parse_ledger_rows = original_parse
 
 
 class TestCostCeilingMultipleCheckPoints(CostCeilingSpikeTesting):
@@ -340,7 +382,7 @@ class TestReturnValueStructure(CostCeilingSpikeTesting):
 
         result = self.cost_ceiling.check(spent=500, period="wave", config=config)
 
-        required_keys = {"period", "ceiling", "spent", "exceeded", "tripped"}
+        required_keys = {"period", "ceiling", "spent", "exceeded", "tripped", "reason"}
         self.assertTrue(
             required_keys.issubset(result.keys()),
             f"Missing keys: {required_keys - set(result.keys())}",
@@ -352,6 +394,8 @@ class TestReturnValueStructure(CostCeilingSpikeTesting):
         self.assertIsInstance(result["spent"], int)
         self.assertIsInstance(result["exceeded"], bool)
         self.assertIsInstance(result["tripped"], bool)
+        # reason can be None (normal case) or a string (error case)
+        self.assertTrue(result["reason"] is None or isinstance(result["reason"], str))
 
     def test_return_values_on_spike(self):
         """When ceiling is exceeded by a spike, verify all return values are correct."""
@@ -365,6 +409,8 @@ class TestReturnValueStructure(CostCeilingSpikeTesting):
         self.assertEqual(result["spent"], 1200)
         self.assertTrue(result["exceeded"])
         self.assertTrue(result["tripped"])
+        # On a genuine ceiling breach, reason should be None (no error)
+        self.assertIsNone(result["reason"])
 
 
 if __name__ == "__main__":
