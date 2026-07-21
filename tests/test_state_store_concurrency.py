@@ -252,10 +252,17 @@ class MultiProcessConcurrencyTest(unittest.TestCase):
         # Release from instance_1
         release(store, resource, instance_1)
 
-        # Now instance_2's claim becomes active (it's the lowest un-released claim)
+        # Now resource should be free (instance_2's losing claim was retracted).
+        # The stale-claim resurrection guard ensures only un-retracted claims matter.
+        self.assertIsNone(current_holder(store, resource),
+                          "Resource should be free; instance_2's losing claim was retracted")
+
+        # Now instance_2 can reclaim
+        success_2_reclaim = try_claim(store, resource, instance_2)
+        self.assertTrue(success_2_reclaim, "instance_2 should win a fresh claim on free resource")
         self.assertEqual(current_holder(store, resource), instance_2)
 
-        # Release from instance_2 as well
+        # Release from instance_2
         release(store, resource, instance_2)
 
         # Now should be truly unclaimed
@@ -289,6 +296,190 @@ class MultiProcessConcurrencyTest(unittest.TestCase):
         # Claims should be unchanged
         self.assertEqual(current_holder(store, resource_1), instance_1)
         self.assertEqual(current_holder(store, resource_2), instance_2)
+
+    def test_same_instance_retry_interleaved(self):
+        """Test BUG 1 fix: same-instance retry with interleaved claim from another instance.
+
+        Scenario:
+          - A claims resource (wins, has version 1)
+          - B claims resource (loses, has version 2)
+          - A claims resource again/retries (version 3)
+
+        Expected:
+          - A's first claim (version 1) remains active; later claims from A are ignored
+          - Minimum version per instance determines the winner
+          - A remains sole holder, B is never holder
+        """
+        store = StateAPI(self.db_path)
+        resource = "retry_test_resource"
+        instance_a = "orchestrator_a"
+        instance_b = "orchestrator_b"
+
+        # A claims (version 1, will win)
+        success_a1 = try_claim(store, resource, instance_a)
+        self.assertTrue(success_a1, "A should win first claim")
+
+        # B claims (version 2, will lose)
+        success_b = try_claim(store, resource, instance_b)
+        self.assertFalse(success_b, "B should lose (A already claimed)")
+
+        # A claims again/retries (version 3, but A's minimum is still 1)
+        success_a2 = try_claim(store, resource, instance_a)
+        self.assertTrue(success_a2, "A should still hold via minimum version")
+
+        # Verify A is sole holder
+        holder = current_holder(store, resource)
+        self.assertEqual(holder, instance_a, "A should remain sole holder")
+
+        # Verify the fold correctly identifies A's minimum version
+        events = store.get("claims")
+        claims = fold_claims(events)
+        self.assertEqual(claims.get(resource), instance_a)
+
+    def test_release_and_reclaim_correctness(self):
+        """Test proper holder tracking through release and reclaim cycles.
+
+        Scenario:
+          - A claims (wins)
+          - B claims (loses and retracts)
+          - A releases
+          - Resource is free (no stale-resurrection of B's claim)
+          - A reclaims and holds again
+
+        Expected:
+          - At each step, holder is correct
+          - B never becomes holder spuriously (its claim was retracted)
+          - After A's release, resource is free
+          - After A's reclaim, A is again holder
+        """
+        store = StateAPI(self.db_path)
+        resource = "reclaim_test_resource"
+        instance_a = "orchestrator_a"
+        instance_b = "orchestrator_b"
+
+        # A claims (wins)
+        success_a1 = try_claim(store, resource, instance_a)
+        self.assertTrue(success_a1)
+        self.assertEqual(current_holder(store, resource), instance_a)
+
+        # B claims (loses and retracts its claim)
+        success_b1 = try_claim(store, resource, instance_b)
+        self.assertFalse(success_b1)
+        self.assertEqual(current_holder(store, resource), instance_a,
+                         "A should still hold after B's failed claim")
+
+        # A releases
+        release(store, resource, instance_a)
+        holder_after_release = current_holder(store, resource)
+        # After A's release, resource should be free (B's claim was retracted when it lost)
+        self.assertIsNone(holder_after_release,
+                          "Resource should be free; B's losing claim was retracted")
+
+        # A reclaims
+        success_a2 = try_claim(store, resource, instance_a)
+        # A's reclaim succeeds (resource is free, A's new claim wins)
+        self.assertTrue(success_a2,
+                        "A's reclaim should succeed when resource is free")
+
+        # A is again holder
+        self.assertEqual(current_holder(store, resource), instance_a)
+
+    def test_stale_claim_resurrection_guard(self):
+        """Test BUG 2 fix: losing claim is retracted, preventing resurrection.
+
+        Scenario:
+          - A claims (wins, version 1)
+          - B tries to claim (loses, version 2)
+          - A releases (should leave resource FREE)
+
+        Expected:
+          - After A's release, B does NOT become holder
+          - Resource is truly free (current_holder returns None)
+          - A fresh claim by any instance succeeds
+        """
+        store = StateAPI(self.db_path)
+        resource = "stale_resurrection_test"
+        instance_a = "orchestrator_a"
+        instance_b = "orchestrator_b"
+        instance_c = "orchestrator_c"
+
+        # A claims (version 1, wins)
+        success_a = try_claim(store, resource, instance_a)
+        self.assertTrue(success_a)
+        self.assertEqual(current_holder(store, resource), instance_a)
+
+        # B tries to claim (version 2, loses)
+        success_b = try_claim(store, resource, instance_b)
+        self.assertFalse(success_b, "B should lose")
+
+        # Verify B's losing claim is retracted (it appended claim_released)
+        events = store.get("claims")
+        b_released = any(
+            ev.get("type") == "claim_released"
+            and ev.get("payload", {}).get("instance_id") == instance_b
+            for ev in events
+        )
+        self.assertTrue(b_released, "B's claim should be retracted (claim_released appended)")
+
+        # A releases
+        release(store, resource, instance_a)
+
+        # Resource should be FREE (no holder), NOT held by B
+        holder_after_a_release = current_holder(store, resource)
+        self.assertIsNone(holder_after_a_release,
+                          "Resource should be free after A releases; B should NOT resurrect")
+
+        # Fresh claim by C succeeds
+        success_c = try_claim(store, resource, instance_c)
+        self.assertTrue(success_c, "Fresh claim by C should succeed when resource is free")
+        self.assertEqual(current_holder(store, resource), instance_c)
+
+    def test_full_release_enables_fresh_claim(self):
+        """Test that after full release, resource can be re-claimed and yields one winner.
+
+        Scenario:
+          - A claims and releases
+          - Multiple instances attempt to claim
+          - Exactly one should win
+
+        Expected:
+          - Resource is truly free after full release
+          - Fresh claim produces exactly one winner
+          - Winner is deterministic (lowest version append)
+        """
+        store = StateAPI(self.db_path)
+        resource = "fresh_claim_test"
+        instance_a = "orchestrator_a"
+
+        # A claims and releases
+        try_claim(store, resource, instance_a)
+        release(store, resource, instance_a)
+
+        # Verify resource is free
+        self.assertIsNone(current_holder(store, resource))
+
+        # Multiple fresh claims
+        instance_b = "orchestrator_b"
+        instance_c = "orchestrator_c"
+        instance_d = "orchestrator_d"
+
+        # All claim at roughly the same time (in-process sequential, but versions reflect order)
+        success_b = try_claim(store, resource, instance_b)
+        success_c = try_claim(store, resource, instance_c)
+        success_d = try_claim(store, resource, instance_d)
+
+        # Exactly one should win
+        winners = sum([success_b, success_c, success_d])
+        self.assertEqual(winners, 1, f"Expected 1 winner from fresh claims, got {winners}")
+
+        # Identify winner and verify it's the one that succeeded
+        holder = current_holder(store, resource)
+        if success_b:
+            self.assertEqual(holder, instance_b)
+        elif success_c:
+            self.assertEqual(holder, instance_c)
+        elif success_d:
+            self.assertEqual(holder, instance_d)
 
 
 if __name__ == "__main__":

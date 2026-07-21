@@ -22,10 +22,11 @@ def fold_claims(events: list) -> dict[str, str]:
     """Fold a claims stream into the current state of who holds each resource.
 
     Processes claim_requested and claim_released events to determine the winner
-    for each resource. The winner is the lowest-version claim_requested for
+    for each resource. The winner is the lowest-version un-released claim for
     that resource (first serialized append wins; ties impossible because versions
-    are unique). A claim is valid only if it has NOT been released (or was re-claimed
-    after release, in which case the re-claim is the new low-version claim).
+    are unique). A claim is valid only if it has NOT been released by a
+    subsequent claim_released event. If an instance releases and then re-claims,
+    the re-claim is the new active claim for that instance.
 
     Args:
         events: list of event dicts from the claims stream
@@ -35,9 +36,9 @@ def fold_claims(events: list) -> dict[str, str]:
         dict mapping resource_id -> holding_instance_id for all currently
         held resources. Empty dict if no claims exist or all have been released.
     """
-    # Track all claims by resource and instance
-    claims_by_resource = {}  # resource -> {instance_id: version}
-    # Track all releases by resource and instance
+    # Track all claims by resource and instance (as list, to preserve order)
+    claims_by_resource = {}  # resource -> {instance_id: [versions...]}
+    # Track all releases by resource and instance (as sorted list)
     releases_by_resource = {}  # resource -> {instance_id: [release_versions]}
 
     # First pass: collect all claims and releases
@@ -52,7 +53,9 @@ def fold_claims(events: list) -> dict[str, str]:
             if resource is not None and instance_id is not None:
                 if resource not in claims_by_resource:
                     claims_by_resource[resource] = {}
-                claims_by_resource[resource][instance_id] = version
+                if instance_id not in claims_by_resource[resource]:
+                    claims_by_resource[resource][instance_id] = []
+                claims_by_resource[resource][instance_id].append(version)
 
         elif etype == "claim_released":
             resource = payload.get("resource")
@@ -66,16 +69,33 @@ def fold_claims(events: list) -> dict[str, str]:
 
     # Second pass: determine current holders
     holders = {}
-    for resource, claims in claims_by_resource.items():
-        # For each instance claiming this resource, check if it was released
+    for resource, claims_dict in claims_by_resource.items():
+        # For each instance claiming this resource, find the latest un-released claim
         active_claims = {}
-        for instance_id, claim_version in claims.items():
-            releases = releases_by_resource.get(resource, {}).get(instance_id, [])
-            # Check if there's a release AFTER this claim (that invalidates it)
-            if any(rel_version > claim_version for rel_version in releases):
-                # This claim was released and not re-claimed; skip it
-                continue
-            active_claims[instance_id] = claim_version
+        for instance_id, claim_versions in claims_dict.items():
+            releases = sorted(releases_by_resource.get(resource, {}).get(instance_id, []))
+
+            # Process claims in order, tracking "current active" claim within streaks
+            # (separated by releases). The current active claim is the latest claim
+            # that comes after the most recent release.
+            current_active = None
+            for claim_v in sorted(claim_versions):
+                # Check if there's a release between the current active and this claim
+                if current_active is not None:
+                    # Check if current_active was released
+                    if any(r > current_active for r in releases):
+                        # Yes, released; start a new streak with this claim
+                        current_active = claim_v
+                    # else: already in this streak, keep current_active
+                else:
+                    # First claim for this instance
+                    current_active = claim_v
+
+            # After processing all claims, check if current_active is released
+            if current_active is not None:
+                if not any(r > current_active for r in releases):
+                    # Not released; it's active
+                    active_claims[instance_id] = current_active
 
         # Find the minimum version among active claims (the winner)
         if active_claims:
@@ -92,6 +112,11 @@ def try_claim(store, resource: str, instance_id: str, ttl: float = 300.0) -> boo
     and folds to check if this instance won the claim. Fail-CLOSED: if ANY
     exception occurs (append fails, read fails, or exception during fold),
     return False (claim not held, do not proceed).
+
+    If this instance does NOT win, it retracts its claim by appending a
+    claim_released event (scoped to this instance + resource) before returning
+    False. This prevents stale-claim resurrection: a losing claim left un-retracted
+    in the stream could later become the winner if the true holder releases.
 
     Args:
         store: StateAPI or EventStore instance (must have append() and get() methods)
@@ -118,8 +143,24 @@ def try_claim(store, resource: str, instance_id: str, ttl: float = 300.0) -> boo
         events = store.get("claims")
         claims = fold_claims(events)
 
-        # Return True if we hold this resource
-        return claims.get(resource) == instance_id
+        # Check if we won
+        if claims.get(resource) == instance_id:
+            return True
+
+        # We did NOT win: retract our claim to prevent stale-claim resurrection.
+        # Fail-closed: if retract fails, still return False (never a false grant).
+        try:
+            store.append(
+                "claims",
+                "claim_released",
+                {"resource": resource, "instance_id": instance_id},
+                actor=instance_id,
+            )
+        except Exception:
+            # Retract failed, but we still don't hold the claim; return False.
+            pass
+
+        return False
     except Exception:
         # Fail-closed: any exception means we don't hold the claim
         return False
