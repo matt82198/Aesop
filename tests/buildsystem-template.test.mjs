@@ -174,7 +174,7 @@ test('adversarialReview parameter documented in args', () => {
 
 test('adversarialReview block exists and is gated on args', () => {
   assert.ok(src.includes('const ADVERSARIAL_REVIEW = !!A.adversarialReview'), 'ADVERSARIAL_REVIEW constant missing');
-  assert.ok(src.includes('if (ADVERSARIAL_REVIEW && v && v.green)'), 'gate condition missing');
+  assert.ok(src.includes("if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green)"), 'gate condition missing');
   assert.ok(src.includes("phase('AdversarialReview')"), 'AdversarialReview phase missing');
 });
 
@@ -227,7 +227,7 @@ test('contractFindings added to all early-return paths (ceiling/brake aborts)', 
 
 test('adversarialReview gated: absent args.adversarialReview => no review phase', () => {
   // Static check: when adversarialReview is absent/falsy, the phase should not run
-  assert.ok(src.includes('if (ADVERSARIAL_REVIEW && v && v.green)'), 'gating condition missing');
+  assert.ok(src.includes("if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green)"), 'gating condition missing');
   // Verify the gate uses the ADVERSARIAL_REVIEW constant, not directly checking args
   assert.ok(src.includes('const ADVERSARIAL_REVIEW = !!A.adversarialReview'), 'ADVERSARIAL_REVIEW constant not used for gate');
 });
@@ -243,4 +243,79 @@ test('adversarialReview backward-compatible: all existing assertions still pass'
 
 test('adversarialReview log message includes contract violations count', () => {
   assert.ok(src.includes('contractViolations=${contractFindings.length}'), 'contract violations count missing from log');
+});
+
+// ============================================================================
+// LEVER 1 (token): repair worker gets ONLY failing-suite verdict + own diff,
+// NOT the full prior build context. May read owned files + named contract only.
+// ============================================================================
+test('LEVER 1: repair prompt has SCOPED REPAIR CONTEXT (cache-read tax fix)', () => {
+  assert.ok(src.includes('SCOPED REPAIR CONTEXT'), 'SCOPED REPAIR CONTEXT block missing');
+  assert.ok(src.includes('the diff of YOUR OWN files'), 'own-diff scoping missing');
+  assert.ok(src.includes('Do NOT re-read the whole prior build'), 'no-full-context directive missing');
+});
+
+test('LEVER 1: repair prompt directs worker to diff ONLY its owned files', () => {
+  assert.ok(src.includes('git -C ${WORK} diff --'), 'git diff of owned files command missing');
+  assert.ok(src.includes('(your owned files only)'), 'owned-files-only qualifier missing');
+});
+
+test('LEVER 1: repair worker may read owned files + named contract, not the whole build', () => {
+  assert.ok(src.includes('the named contract'), 'named-contract read allowance missing');
+  assert.ok(src.includes("do NOT read sibling workers' files or dump the whole build"), 'sibling/full-build prohibition missing');
+});
+
+test('LEVER 1: old full-context invitation is removed', () => {
+  assert.ok(!src.includes('read sibling files and the full contract/specs'),
+    'old "read sibling files and the full contract/specs" invitation must be gone');
+});
+
+test('LEVER 1: repair still edits only owned files (behavior preserved)', () => {
+  assert.ok(src.includes('Fix ONLY your owned files with Edit/Write'), 'owned-files edit restriction missing');
+  // existing latency-fix blocks must remain intact (backward compatible)
+  assert.ok(src.includes('TARGETED TEST DISCIPLINE'), 'TARGETED TEST DISCIPLINE removed by LEVER 1');
+  assert.ok(src.includes('RUN-ONCE-TO-FILE'), 'RUN-ONCE-TO-FILE removed by LEVER 1');
+});
+
+// ============================================================================
+// LEVER 2 (wall-clock): adversarialReviewMode blocking|concurrent-note lets the
+// orchestrator overlap the refutation with the CI-wait window.
+// ============================================================================
+test('LEVER 2: adversarialReviewMode documented in args', () => {
+  assert.ok(src.includes("adversarialReviewMode: 'blocking' | 'concurrent-note' | null"),
+    'adversarialReviewMode arg not documented');
+  assert.ok(src.includes('gate MERGE (not CI)'), 'MERGE-not-CI gate semantics not documented');
+});
+
+test('LEVER 2: mode constant defaults to blocking (backward compatible)', () => {
+  assert.ok(src.includes("const ADVERSARIAL_REVIEW_MODE = A.adversarialReviewMode === 'concurrent-note' ? 'concurrent-note' : 'blocking'"),
+    'ADVERSARIAL_REVIEW_MODE constant with default-blocking missing');
+});
+
+test('LEVER 2: blocking gate runs the inline review only in blocking mode', () => {
+  assert.ok(src.includes("if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green)"),
+    'blocking-mode gate on inline review missing');
+});
+
+test('LEVER 2: concurrent-note branch defers review and flags pending', () => {
+  assert.ok(src.includes("if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'concurrent-note' && v && v.green)"),
+    'concurrent-note branch missing');
+  assert.ok(src.includes('let adversarialReviewPending = false'), 'adversarialReviewPending declaration missing');
+  assert.ok(src.includes('adversarialReviewPending = true'), 'pending flag not set in concurrent-note mode');
+});
+
+test('LEVER 2: result exposes mode + pending flag for the orchestrator', () => {
+  const reportSection = src.substring(src.indexOf('const result = {'), src.indexOf('log(`DONE'));
+  assert.ok(reportSection.includes('adversarialReviewMode: ADVERSARIAL_REVIEW ? ADVERSARIAL_REVIEW_MODE : null'),
+    'adversarialReviewMode not in result');
+  assert.ok(reportSection.includes('adversarialReviewPending'), 'adversarialReviewPending not in result');
+});
+
+test('LEVER 2: report note documents the CI/review overlap protocol', () => {
+  assert.ok(src.includes('gating MERGE (not CI) on contractFindings'), 'overlap gate note missing');
+  assert.ok(src.includes('overlapping the review with the CI-wait window'), 'overlap description missing');
+});
+
+test('LEVER 2: mergeReady still reflects integration-green only (unchanged)', () => {
+  assert.ok(src.includes('mergeReady: !!(v && v.green)'), 'mergeReady semantics changed unexpectedly');
 });
