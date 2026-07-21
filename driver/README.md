@@ -4,9 +4,9 @@
 > eventually open models — through one narrow interface.
 
 This directory is **Phase 1** of the multi-model portability effort described in
-the design spike (`conductor3/plans/spike-multitool-portability.md`). It defines
-the abstraction seam and ships a reference adapter plus an honest Codex stub. No
-wave-loop code is rewired yet; that is the next step (see roadmap below).
+a design spike. It defines the abstraction seam and ships a reference adapter
+plus an honest Codex stub. No wave-loop code is rewired yet; that is the next
+step (see roadmap below).
 
 ---
 

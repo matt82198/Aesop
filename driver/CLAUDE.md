@@ -4,7 +4,7 @@
 backends other than Claude Code (Codex, open models). The wave loop dispatches
 through the `AgentDriver` interface and nothing else; each backend is a subclass.
 
-Grounded in `conductor3/plans/spike-multitool-portability.md` (the design spike).
+Grounded in a multi-model portability design spike.
 This is **Phase 1**: the interface + reference adapter + honest Codex stub.
 
 ## Files
