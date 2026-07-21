@@ -11,9 +11,10 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 
 ## API Surface (state_store.api.StateAPI)
 **Facade over EventStore + projections; swap backend (SQLite→Postgres) here without touching callers.**
-- `append(stream, event_type, payload, actor="system") → int`: Append one event; return its new per-stream version.
+- `append(stream, event_type, payload, actor="system", expected_version=None) → int`: Append one event; return its new per-stream version. **OCC support (Phase 2)**: if `expected_version` is provided, the append succeeds ONLY if the stream's current max version equals `expected_version`; otherwise raises `ConcurrencyConflict` WITHOUT writing (fail-closed, atomic). Enables writers to serialize reads: "I read version N; I will append only if it's still N when I try."
 - `get(stream) → list`: Return all events in ``stream`` ascending by version.
 - `project(view) → dict`: Fold the same-named stream through its projector into current state. Registered views: "tracker" (via `project_tracker`).
+- **Exceptions:** `ConcurrencyConflict(expected_version, actual_version)` — raised by `append()` when OCC check fails; carries both versions so caller can rebase and retry.
 
 ## Concurrency Model & Measured Safety
 **Multi-writer safe via SQLite WAL + atomicity:**
@@ -22,10 +23,19 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 - `BEGIN IMMEDIATE` in `append()` — atomic read-max-version-then-insert; two writers never collide or duplicate a version.
 - **Measured safety (2026-07-18 spike):** 4 concurrent writers, 800 events each (800/800), 0 lock errors, ~704 events/sec throughput.
 
+**Optimistic Concurrency Control (Phase 2, 2026-07-21):**
+- `append(..., expected_version=N)` — writer asserts "stream is at version N"; append succeeds only if true.
+- **Atomicity:** The version check and append both happen under `BEGIN IMMEDIATE`, so no TOCTOU window.
+- **Failure mode:** On version mismatch, raises `ConcurrencyConflict(expected, actual)` WITHOUT writing any event (fail-closed).
+- **Retry protocol:** Caller re-reads the stream, extracts the new version from `ConcurrencyConflict.actual_version` or re-count events, and retries `append(..., expected_version=new_version)`.
+- **Backward compatible:** `expected_version=None` (default) disables OCC; old code remains unchanged and unaffected.
+- **Use case:** Multiple orchestrators coordinating on multi-instance state (e.g., distributed tracing, multi-writer audit log) can use OCC to prevent lost updates when racing to extend the same stream.
+
 ## Module Layout
-- **store.py** — `EventStore(db_path)`: append-only SQLite log. `append(stream, type, payload, actor)` returns new version; `read(stream)` / `read_all()` return event rows. Corrupt JSON payloads are skipped with stderr log; snapshot read/write for tail-replay optimization.
+- **store.py** — `EventStore(db_path)`: append-only SQLite log. `append(stream, type, payload, actor, expected_version=None)` returns new version or raises `ConcurrencyConflict` on OCC mismatch; `read(stream)` / `read_all()` return event rows. Corrupt JSON payloads are skipped with stderr log; snapshot read/write for tail-replay optimization.
+- **__init__.py** — Public exports: `EventStore`, `StateAPI`, `ConcurrencyConflict`, `project_tracker`, `export_tracker`, `ingest_tracker_json`.
 - **projections.py** — `project_tracker(events)`: folds `item_created` / `item_updated` / `item_archived` into the full `tracker.json` shape, preserving first-seen order.
-- **api.py** — `StateAPI(db_path)`: the swap seam. Callers use this only; backend implementation hidden.
+- **api.py** — `StateAPI(db_path)`: the swap seam. Callers use this only; backend implementation hidden. Passes through OCC support transparently.
 - **export.py** — `export_tracker(api, out_path)`: render the projection back to a git-tracked JSON snapshot (indent=2, ascii-escaped to match the live file).
 - **ingest.py** — `ingest_tracker_json(api, path)`: backfill one `item_created` per existing item; validates event structure at boundary.
 
@@ -41,6 +51,8 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 ## Test Commands
 Run from repo root:
 - `python -m unittest tests.test_state_store` — Core API, concurrency, round-trip tests.
+- `python -m unittest tests.test_state_store_occ` — OCC multi-process tests (Phase 2): exactly-one-succeeds, no-write-on-conflict, retry-convergence, backward-compat.
+- `python -m unittest tests.test_state_store_concurrency` — Phase 1 multi-process coordination tests (claims, leases).
 - `python -m unittest tests.test_state_store_hardening` — Corrupt event handling, input validation.
 - `python -m unittest tests.test_state_store_snapshots` — Snapshot read/write and tail-replay.
 - `npm run test:py` — All Python test suites (includes state_store).
