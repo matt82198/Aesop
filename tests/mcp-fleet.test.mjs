@@ -218,18 +218,18 @@ async function runTests() {
     console.log('Test 2: tools/list...');
     const listResp = await client.request('tools/list', {});
 
-    if (listResp.result && Array.isArray(listResp.result.tools) && listResp.result.tools.length === 6) {
+    if (listResp.result && Array.isArray(listResp.result.tools) && listResp.result.tools.length === 8) {
       const toolNames = listResp.result.tools.map(t => t.name).sort();
-      const expected = ['fleet_agents', 'fleet_budget', 'fleet_cost', 'fleet_cost_by_wave', 'fleet_status', 'fleet_tracker'];
+      const expected = ['fleet_agents', 'fleet_budget', 'fleet_cost', 'fleet_cost_by_wave', 'fleet_cost_trend', 'fleet_status', 'fleet_tracker', 'fleet_verify_stats'];
       if (JSON.stringify(toolNames) === JSON.stringify(expected)) {
-        console.log(`✓ tools/list succeeded, found 6 tools: ${toolNames.join(', ')}\n`);
+        console.log(`✓ tools/list succeeded, found 8 tools: ${toolNames.join(', ')}\n`);
         testsPassed++;
       } else {
         console.log(`✗ Unexpected tools: ${toolNames.join(', ')}\n`);
         testsFailed++;
       }
     } else {
-      console.log('✗ tools/list failed\n');
+      console.log(`✗ tools/list failed, got ${listResp.result?.tools?.length || 'unknown'} tools\n`);
       testsFailed++;
     }
 
@@ -417,6 +417,180 @@ async function runTests() {
       console.log('✗ Read-only check failed: tracker.json was modified\n');
       testsFailed++;
     }
+
+    // Test 10: fleet_cost_trend with default N
+    console.log('Test 10: fleet_cost_trend (default N=10)...');
+    const trendResp = await client.request('tools/call', {
+      name: 'fleet_cost_trend',
+      arguments: {}
+    });
+
+    if (trendResp.result && trendResp.result.content) {
+      const content = trendResp.result.content[0];
+      if (content.type === 'text') {
+        const trendData = JSON.parse(content.text);
+        if (trendData.trend && Array.isArray(trendData.trend) && trendData.trend.length === 2) {
+          if (trendData.trend[0].wave === 'wave-1' && trendData.trend[1].wave === 'wave-2') {
+            console.log(`✓ fleet_cost_trend succeeded, found ${trendData.trend.length} waves in trend\n`);
+            testsPassed++;
+          } else {
+            console.log(`✗ Trend wave order incorrect\n`);
+            testsFailed++;
+          }
+        } else {
+          console.log(`✗ Trend data unexpected: ${trendData.trend?.length || 0} waves\n`);
+          testsFailed++;
+        }
+      } else {
+        console.log('✗ Content type unexpected\n');
+        testsFailed++;
+      }
+    } else {
+      console.log('✗ fleet_cost_trend failed\n');
+      testsFailed++;
+    }
+
+    // Test 11: fleet_cost_trend with custom N
+    console.log('Test 11: fleet_cost_trend (custom N=1)...');
+    const trendCustomResp = await client.request('tools/call', {
+      name: 'fleet_cost_trend',
+      arguments: { n: 1 }
+    });
+
+    if (trendCustomResp.result && trendCustomResp.result.content) {
+      const content = trendCustomResp.result.content[0];
+      if (content.type === 'text') {
+        const trendData = JSON.parse(content.text);
+        if (trendData.trend && trendData.trend.length === 1 && trendData.trend[0].wave === 'wave-2') {
+          console.log(`✓ fleet_cost_trend with N=1 succeeded, got last wave only\n`);
+          testsPassed++;
+        } else {
+          console.log(`✗ Custom N trend data unexpected\n`);
+          testsFailed++;
+        }
+      } else {
+        console.log('✗ Content type unexpected\n');
+        testsFailed++;
+      }
+    } else {
+      console.log('✗ fleet_cost_trend custom failed\n');
+      testsFailed++;
+    }
+
+    // Test 12: fleet_verify_stats with no data (should be absent)
+    console.log('Test 12: fleet_verify_stats (no data)...');
+    const verifyResp = await client.request('tools/call', {
+      name: 'fleet_verify_stats',
+      arguments: {}
+    });
+
+    if (verifyResp.result && verifyResp.result.content) {
+      const content = verifyResp.result.content[0];
+      if (content.type === 'text') {
+        const verifyData = JSON.parse(content.text);
+        if (verifyData.absent === true) {
+          console.log('✓ fleet_verify_stats absent when no data\n');
+          testsPassed++;
+        } else {
+          console.log(`✗ Expected absent:true, got absent=${verifyData.absent}\n`);
+          testsFailed++;
+        }
+      } else {
+        console.log('✗ Content type unexpected\n');
+        testsFailed++;
+      }
+    } else {
+      console.log('✗ fleet_verify_stats failed\n');
+      testsFailed++;
+    }
+
+    // Test 13: fleet_verify_stats with pre-computed data
+    console.log('Test 13: fleet_verify_stats (with pre-computed data)...');
+    const verifyStats = {
+      feature_commits: 10,
+      fixforward_commits: 2,
+      fixforward_rate: 0.2,
+      first_try_estimate: 0.8
+    };
+    fs.writeFileSync(join(stateRoot, 'verify-stats.json'), JSON.stringify(verifyStats));
+
+    const verifyDataResp = await client.request('tools/call', {
+      name: 'fleet_verify_stats',
+      arguments: {}
+    });
+
+    if (verifyDataResp.result && verifyDataResp.result.content) {
+      const content = verifyDataResp.result.content[0];
+      if (content.type === 'text') {
+        const verifyData = JSON.parse(content.text);
+        if (verifyData.absent === false && verifyData.fix_forward_rate === 0.2 && verifyData.first_try_green === 0.8) {
+          console.log(`✓ fleet_verify_stats with data succeeded, fix_forward_rate=${verifyData.fix_forward_rate}\n`);
+          testsPassed++;
+        } else {
+          console.log(`✗ Verify stats data unexpected: absent=${verifyData.absent}, rate=${verifyData.fix_forward_rate}\n`);
+          testsFailed++;
+        }
+      } else {
+        console.log('✗ Content type unexpected\n');
+        testsFailed++;
+      }
+    } else {
+      console.log('✗ fleet_verify_stats with data failed\n');
+      testsFailed++;
+    }
+
+    // Test 14: fleet_cost_trend with empty ledger
+    console.log('Test 14: fleet_cost_trend (empty ledger)...');
+    // Create a new temp state root with empty ledger
+    const emptyLedgerRoot = join(tmpdir(), 'aesop-mcp-test-empty-');
+    fs.mkdirSync(emptyLedgerRoot, { recursive: true });
+    const emptyStateRoot = join(emptyLedgerRoot, 'state');
+    const emptyLedgerDir = join(emptyStateRoot, 'ledger');
+    fs.mkdirSync(emptyLedgerDir, { recursive: true });
+    // Create empty ledger with header only
+    fs.writeFileSync(join(emptyLedgerDir, 'OUTCOMES-LEDGER.md'), '| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n');
+
+    // Test with new server on empty state
+    const serverProcess2 = spawn('node', [
+      './mcp/server.mjs',
+      '--root',
+      emptyLedgerRoot
+    ], {
+      env: {
+        ...process.env,
+        AESOP_ROOT: emptyLedgerRoot,
+        AESOP_STATE_ROOT: emptyStateRoot
+      }
+    });
+
+    await new Promise(r => setTimeout(r, 100));
+    const client2 = new MCPTestClient(serverProcess2);
+
+    const emptyTrendResp = await client2.request('tools/call', {
+      name: 'fleet_cost_trend',
+      arguments: {}
+    });
+
+    if (emptyTrendResp.result && emptyTrendResp.result.content) {
+      const content = emptyTrendResp.result.content[0];
+      if (content.type === 'text') {
+        const trendData = JSON.parse(content.text);
+        if (trendData.absent === true && trendData.trend.length === 0) {
+          console.log('✓ fleet_cost_trend with empty ledger returns absent:true\n');
+          testsPassed++;
+        } else {
+          console.log(`✗ Expected absent:true with empty ledger, got absent=${trendData.absent}\n`);
+          testsFailed++;
+        }
+      }
+    } else {
+      console.log('✗ Empty ledger trend test failed\n');
+      testsFailed++;
+    }
+
+    client2.close();
+    await new Promise(r => setTimeout(r, 100));
+    rmSync(emptyLedgerRoot, { recursive: true, force: true });
 
   } catch (err) {
     console.error(`Test error: ${err.message}`);
