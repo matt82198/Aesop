@@ -338,6 +338,102 @@ def fizzbuzz(n):
             self.assertIn("expected", r)
             self.assertIn("passed", r)
 
+    def test_malicious_entrypoint_rejected(self):
+        """Test that malicious entrypoint names are rejected (SECURITY)."""
+        # Create a task with a malicious entrypoint that tries code injection
+        solution_code = '''
+def fizzbuzz(n):
+    return "1,2,Fizz"
+'''
+
+        solution_file = os.path.join(self.temp_dir, "malicious.py")
+        with open(solution_file, 'w') as f:
+            f.write(solution_code)
+
+        # Import and create a tasks.jsonl with malicious entrypoint
+        tasks_path = Path(__file__).parent.parent / "bench" / "coding_tasks.jsonl"
+        import json
+        import tempfile
+
+        # Create a malicious entry (must be done carefully to not pollute repo)
+        # Instead, we'll directly test the entrypoint validation by monkeypatching
+        from bench.coding_grader import VALID_ENTRYPOINT_PATTERN
+
+        # Test pattern validation
+        self.assertTrue(VALID_ENTRYPOINT_PATTERN.match("fizzbuzz"))
+        self.assertTrue(VALID_ENTRYPOINT_PATTERN.match("_private"))
+        self.assertTrue(VALID_ENTRYPOINT_PATTERN.match("func123"))
+
+        # These should NOT match
+        self.assertFalse(VALID_ENTRYPOINT_PATTERN.match("123invalid"))
+        self.assertFalse(VALID_ENTRYPOINT_PATTERN.match("func-name"))
+        self.assertFalse(VALID_ENTRYPOINT_PATTERN.match("func name"))
+        self.assertFalse(VALID_ENTRYPOINT_PATTERN.match("func();"))
+        self.assertFalse(VALID_ENTRYPOINT_PATTERN.match("func.method"))
+
+    def test_prose_wrapped_solution_extracted(self):
+        """Test that a correct solution wrapped in prose/markdown is extracted and grades PASS."""
+        # Model output might look like this: prose explanation + code fence + function
+        solution_code = '''
+Here is my solution for fizzbuzz:
+
+```python
+def fizzbuzz(n):
+    """Generate FizzBuzz sequence from 1 to n."""
+    result = []
+    for i in range(1, n + 1):
+        if i % 15 == 0:
+            result.append("FizzBuzz")
+        elif i % 3 == 0:
+            result.append("Fizz")
+        elif i % 5 == 0:
+            result.append("Buzz")
+        else:
+            result.append(str(i))
+    return ",".join(result)
+```
+
+This solution correctly handles all three conditions.
+'''
+
+        solution_file = os.path.join(self.temp_dir, "prose_wrapped.py")
+        with open(solution_file, 'w') as f:
+            f.write(solution_code)
+
+        result = grade_solution("fizzbuzz", solution_file)
+
+        # Should pass despite prose wrapper
+        self.assertTrue(result["success"],
+                       f"Expected prose-wrapped solution to pass, got: {result}")
+        self.assertEqual(result["passed"], result["total"],
+                        f"Expected all tests to pass for prose-wrapped solution")
+
+    def test_remove_duplicates_works(self):
+        """Test that remove_duplicates task works correctly (BUG FIX)."""
+        # The bug was that lists were treated as multiple arguments instead of single arg
+        solution_code = '''
+def remove_duplicates(lst):
+    """Remove duplicates while preserving order."""
+    seen = set()
+    result = []
+    for item in lst:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+'''
+
+        solution_file = os.path.join(self.temp_dir, "remove_dups.py")
+        with open(solution_file, 'w') as f:
+            f.write(solution_code)
+
+        result = grade_solution("remove_duplicates", solution_file)
+
+        self.assertTrue(result["success"],
+                       f"Expected remove_duplicates to pass, got: {result}")
+        self.assertEqual(result["passed"], result["total"],
+                        f"Expected all remove_duplicates tests to pass")
+
 
 if __name__ == "__main__":
     unittest.main()

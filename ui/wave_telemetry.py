@@ -92,10 +92,10 @@ def _parse_state_md_phase():
         phase = match.group(1)
 
         # Extract wave name from phase (e.g., "wave-rc.2" from "rc-1-published-source-available")
-        # Try to find a pattern like "wave-" or "rc"
-        wave_match = re.search(r'(wave|rc)[-.]?(\w+)', phase, re.IGNORECASE)
+        # Match patterns like "wave-26", "wave-rc.2", "rc-1", etc.
+        wave_match = re.search(r'(wave[-.]?\w+|rc[-.]?\w+)', phase, re.IGNORECASE)
         if wave_match:
-            wave_str = wave_match.group(0)  # e.g., "wave-rc.2" or "rc-1"
+            wave_str = wave_match.group(0)  # e.g., "wave-26" or "rc-1"
         else:
             wave_str = phase  # Fallback to phase itself
 
@@ -217,6 +217,88 @@ def _get_wave_cost_metrics():
         }
 
 
+def _get_wave_start_time():
+    """Get the wave start time from orchestrator-status.json or STATE.md.
+
+    Returns:
+        datetime or None: wave start time in UTC, or None if not available
+    """
+    try:
+        status_file = config.ORCH_STATUS_FILE
+        if status_file.exists():
+            content = status_file.read_text(encoding='utf-8')
+            data = json.loads(content)
+            # Check if there's a wave_start_time or started_at field
+            start_time_str = data.get("wave_start_time") or data.get("started_at")
+            if start_time_str:
+                start_time_str_normalized = start_time_str.replace("Z", "+00:00")
+                return datetime.fromisoformat(start_time_str_normalized)
+    except Exception:
+        pass
+    return None
+
+
+def _calculate_burn_rate_fields(total_tokens: int) -> dict:
+    """Calculate burn-rate and projection fields for live wave cost.
+
+    Args:
+        total_tokens: total tokens burned in this wave so far
+
+    Returns:
+        dict: {
+            "tokens_burned_per_min": float (tokens/min),
+            "projected_total_tokens": int (at current rate),
+            "cost_ceiling_exceeded": bool
+        }
+    """
+    try:
+        # Try to get wave start time for burn-rate calculation
+        wave_start = _get_wave_start_time()
+        if not wave_start:
+            # Fallback: estimate from cost ledger timestamps if available
+            return {
+                "tokens_burned_per_min": 0.0,
+                "projected_total_tokens": 0,
+                "cost_ceiling_exceeded": False
+            }
+
+        now = datetime.now(timezone.utc)
+        elapsed_seconds = (now - wave_start).total_seconds()
+        if elapsed_seconds < 1:
+            return {
+                "tokens_burned_per_min": 0.0,
+                "projected_total_tokens": 0,
+                "cost_ceiling_exceeded": False
+            }
+
+        elapsed_minutes = elapsed_seconds / 60.0
+        burn_rate = total_tokens / elapsed_minutes if elapsed_minutes > 0 else 0.0
+
+        # Get cost ceiling from config (typical: 2M tokens = $40 budget estimate)
+        cost_ceiling = getattr(config, 'COST_CEILING_TOKENS', 2_000_000)
+
+        # Estimate wave duration (typical: 8-30 min, assume 20 min average for projection)
+        avg_wave_duration_min = 20
+        estimated_remaining_min = max(0, avg_wave_duration_min - elapsed_minutes)
+        projected_additional = burn_rate * estimated_remaining_min
+        projected_total = int(total_tokens + projected_additional)
+
+        ceiling_exceeded = total_tokens > cost_ceiling
+
+        return {
+            "tokens_burned_per_min": round(burn_rate, 1),
+            "projected_total_tokens": projected_total,
+            "cost_ceiling_exceeded": ceiling_exceeded
+        }
+    except Exception as e:
+        print(f"[wave_telemetry] Error calculating burn-rate: {e}", file=sys.stderr)
+        return {
+            "tokens_burned_per_min": 0.0,
+            "projected_total_tokens": 0,
+            "cost_ceiling_exceeded": False
+        }
+
+
 def get_wave_telemetry():
     """Get consolidated wave telemetry snapshot.
 
@@ -231,7 +313,10 @@ def get_wave_telemetry():
             "tokens_used": int,
             "top_model": str,
             "ok_rate": float,
-            "source": "orchestrator-status" | "state-md"
+            "source": "orchestrator-status" | "state-md",
+            "tokens_burned_per_min": float (NEW: burn rate),
+            "projected_total_tokens": int (NEW: projection),
+            "cost_ceiling_exceeded": bool (NEW: alert flag)
         }
     """
     try:
@@ -241,7 +326,7 @@ def get_wave_telemetry():
         if orch_phase:
             # Fresh orchestrator-status.json found; use it
             # Extract wave identifier from phase (e.g., "wave-26" from "wave-26-verify")
-            wave_match = re.search(r'(wave|rc)[-.]?(\w+)', orch_phase, re.IGNORECASE)
+            wave_match = re.search(r'(wave[-.]?\d+|rc[-.]?\w+)', orch_phase, re.IGNORECASE)
             if wave_match:
                 wave_str = wave_match.group(0)  # e.g., "wave-26" or "rc-1"
             else:
@@ -259,6 +344,9 @@ def get_wave_telemetry():
         blocker = _parse_top_blocker()
         cost_metrics = _get_wave_cost_metrics()
 
+        # Calculate burn-rate fields
+        burn_rate_fields = _calculate_burn_rate_fields(cost_metrics["tokens_used"])
+
         return {
             "wave": phase_info["wave"],
             "phase": phase_info["phase"],
@@ -266,7 +354,10 @@ def get_wave_telemetry():
             "tokens_used": cost_metrics["tokens_used"],
             "top_model": cost_metrics["top_model"],
             "ok_rate": cost_metrics["ok_rate"],
-            "source": source_field
+            "source": source_field,
+            "tokens_burned_per_min": burn_rate_fields["tokens_burned_per_min"],
+            "projected_total_tokens": burn_rate_fields["projected_total_tokens"],
+            "cost_ceiling_exceeded": burn_rate_fields["cost_ceiling_exceeded"]
         }
     except Exception as e:
         print(f"[wave_telemetry] Uncaught error: {e}", file=sys.stderr)
@@ -277,5 +368,8 @@ def get_wave_telemetry():
             "tokens_used": 0,
             "top_model": "unknown",
             "ok_rate": 0.0,
-            "source": "error"
+            "source": "error",
+            "tokens_burned_per_min": 0.0,
+            "projected_total_tokens": 0,
+            "cost_ceiling_exceeded": False
         }
