@@ -6,13 +6,25 @@ Functions:
   get_state_dir() -> Path
     Resolve state directory from AESOP_STATE_ROOT env var or default to ./state
 
+  get_state_db_path() -> Path
+    Return the canonical SQLite DB path for the event store.
+
   check_heartbeat_staleness(hb_file, threshold_s) -> (is_stale, age_s, info)
     Check if a heartbeat file is stale and return staleness, age, and descriptive info
+
+Constants:
+  STATE_DB_FILENAME: The canonical filename for the event-sourced state DB.
+    Multi-instance coordination requires all instances to point to the same file.
 """
 
 import os
 import time
 from pathlib import Path
+
+# Canonical filename for the event-sourced state database.
+# Multi-instance requires all instances (including reconcile.py, ui/collectors.py, etc.)
+# to point at the SAME shared file. Previously inconsistent (tracker_events.db vs events.db).
+STATE_DB_FILENAME = "tracker_events.db"
 
 
 def get_state_dir():
@@ -26,6 +38,18 @@ def get_state_dir():
         return Path(os.environ["AESOP_STATE_ROOT"])
     # Default to ./state (relative to cwd)
     return Path.cwd() / "state"
+
+
+def get_state_db_path():
+    """Return the canonical SQLite DB path for the event store.
+
+    Multi-instance coordination requires all orchestrators to point at the
+    SAME shared database file. This function centralizes the DB path resolution.
+
+    Returns:
+        Path: The canonical path to the state database (state/tracker_events.db).
+    """
+    return get_state_dir() / STATE_DB_FILENAME
 
 
 def check_heartbeat_staleness(hb_file, threshold_s):
