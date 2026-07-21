@@ -124,10 +124,12 @@ def dispatch_item(
         dict with the following keys:
           - route: 'harness' or 'driver'
           - ok: bool (only True if driver route AND test passed)
-          - testExit: int (exit code from run_command, if route=='driver'; None if 'harness')
+          - testExit: int (exit code from run_command, if route=='driver'; None otherwise)
           - filesWritten: list of str (files written by the driver, if route=='driver'; None if 'harness')
           - error: str (error message, if ok=False; None otherwise)
-          - workerId: str (worker id from dispatch_worker, if route=='driver')
+          - workerId: str (worker id from dispatch_worker, if route=='driver'; None otherwise)
+          - verified: bool (True only if test was run and passed; False if not tested or test failed)
+          - reason: str (optional; present when item could not be verified, e.g. 'no_test_command')
     """
     try:
         caps = driver.probe_capabilities()
@@ -146,6 +148,7 @@ def dispatch_item(
                 "filesWritten": None,
                 "error": None,
                 "workerId": None,
+                "verified": False,  # Not verified by orchestrator (harness will verify)
             }
 
         # Codex/tier-2 non-agentic path: orchestrator-managed dispatch.
@@ -175,19 +178,24 @@ def dispatch_item(
                 "filesWritten": None,
                 "error": f"dispatch_worker failed: {result.error}",
                 "workerId": result.worker_id,
+                "verified": False,  # Not verified (dispatch failed)
             }
 
         # Worker succeeded; now run the test command.
         # Green is decided ONLY by exit code 0, never by the model's done:true.
         if not test_cmd:
-            # No test command: vacuous success (files were written).
+            # No test command: MUST fail-closed. An unverified item must never
+            # report success — that violates aesop's core honesty guarantee:
+            # "no test to fail" is NOT the same as "verified correct."
             return {
                 "route": "driver",
-                "ok": True,
-                "testExit": 0,
+                "ok": False,
+                "testExit": None,
                 "filesWritten": list(result.files_written or []),
-                "error": None,
+                "error": "no testCmd: cannot verify, refusing to report success",
                 "workerId": result.worker_id,
+                "verified": False,  # Not verified (no test to run)
+                "reason": "no_test_command",
             }
 
         test_result = driver.run_command(test_cmd, cwd=exec_workdir)
@@ -202,6 +210,7 @@ def dispatch_item(
             "filesWritten": list(result.files_written or []),
             "error": None if ok else f"test failed with exit {test_result.exit_code}",
             "workerId": result.worker_id,
+            "verified": ok,  # Verified if and only if test passed (exit 0)
         }
 
     except Exception as exc:
@@ -213,4 +222,5 @@ def dispatch_item(
             "filesWritten": None,
             "error": f"dispatch_item internal error: {exc}",
             "workerId": None,
+            "verified": False,  # Not verified (exception during execution)
         }

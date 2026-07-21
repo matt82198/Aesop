@@ -123,13 +123,11 @@ items, making verification tier driven by backend capability, not config.
 - Preserves all input fields; adds only model + tier.
 
 **dispatch_item(driver, item) -> dict**:
-- Routes execution by driver.probe_capabilities().worker_filesystem_access:
-  - True (Claude tier-1): returns {route:'harness', ...} (harness will dispatch).
-  - False (Codex tier-2+): orchestrator-managed: calls driver.dispatch_worker(),
-    then driver.run_command() for the test. Returns {route:'driver', ok, testExit, filesWritten, ...}.
-- CRITICAL: Green ONLY if test exit code == 0. Never from model's done:true.
-- Fail-safe: any exception -> ok=False, never a false green.
-- Ownership enforced at driver level (dispatch_worker rejects out-of-scope paths).
+- Routes by worker_filesystem_access: True→{route:'harness'}; False→orchestrator-managed
+  (dispatch_worker + run_command test). Returns {route, ok, testExit, filesWritten, verified, ...}.
+- HONESTY: Green (ok=True) ONLY on test exit 0; never from model's done:true. No testCmd
+  → unverified (ok=False, verified=False, reason='no_test_command'): "no test" ≠ "verified."
+- Fail-safe: exception → ok=False, verified=False. Ownership at driver level.
 
 **Tests**: prove a non-Claude backend (Codex + FakeTransport) takes a RED unittest
 stub, applies a fix, runs the test, and returns ok=True ONLY because the test passed

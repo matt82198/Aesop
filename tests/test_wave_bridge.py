@@ -197,10 +197,14 @@ class TestDispatchItemRouting(unittest.TestCase):
             # Should route to driver, not harness.
             self.assertEqual(result["route"], "driver")
             self.assertIsNotNone(result["workerId"])
-            # No test command, so ok=True (vacuous success).
-            self.assertTrue(result["ok"])
-            self.assertEqual(result["testExit"], 0)
+            # No test command: must fail-closed (ok=False, verified=False, reason='no_test_command').
+            # Honesty guarantee: "no test to fail" is NOT the same as "verified correct."
+            self.assertFalse(result["ok"], msg="No testCmd should never yield ok=True")
+            self.assertFalse(result["verified"], msg="No testCmd means not verified")
+            self.assertEqual(result["reason"], "no_test_command")
+            self.assertIsNone(result["testExit"])
             self.assertEqual(result["filesWritten"], ["test.py"])
+            self.assertIn("no testCmd", result["error"])
 
 
 class TestDispatchItemHeadlineTest(unittest.TestCase):
@@ -274,6 +278,7 @@ class TestDispatchItemHeadlineTest(unittest.TestCase):
             # Verify routing and result.
             self.assertEqual(result["route"], "driver")
             self.assertTrue(result["ok"], msg="Should be GREEN after FakeTransport fix + test run")
+            self.assertTrue(result["verified"], msg="verified=True when test passes (exit 0)")
             self.assertEqual(result["testExit"], 0)
             self.assertEqual(result["filesWritten"], ["test_stub.py"])
             self.assertIsNone(result["error"])
@@ -339,6 +344,7 @@ class TestDispatchItemHeadlineTest(unittest.TestCase):
                 result["ok"],
                 msg="result.ok must be False when test fails, ignoring model's done:true",
             )
+            self.assertFalse(result["verified"], msg="verified=False when test fails")
             self.assertNotEqual(result["testExit"], 0)
             self.assertIn("test failed", result["error"])
 
@@ -368,11 +374,50 @@ class TestDispatchItemHeadlineTest(unittest.TestCase):
 
             # Must fail cleanly, never a false green.
             self.assertFalse(result["ok"])
+            self.assertFalse(result["verified"])
             self.assertIsNone(result["testExit"])
             self.assertIsNone(result["filesWritten"])
             # Error should be present and contain the failure reason.
             self.assertIsNotNone(result["error"])
             self.assertTrue(len(result["error"]) > 0)
+
+    def test_no_test_command_never_yields_ok_true(self):
+        """Honesty guarantee: no testCmd -> ok=False, verified=False, reason='no_test_command'.
+
+        An item without a verifiable test must be reported as unverified (ok=False),
+        not as a vacuous success. Aesop's core honesty principle: "no test to fail"
+        is NOT the same as "verified correct."
+        """
+        # FakeTransport returns a valid patch; files ARE written.
+        patch = {
+            "files": [{"path": "module.py", "contents": "def func():\n    return True\n"}],
+            "summary": "Implemented",
+            "done": True,
+        }
+        fake_transport = FakeTransport(response=make_response(patch))
+        driver = CodexDriver(transport=fake_transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            module_file = Path(tmpdir) / "module.py"
+            module_file.write_text("# stub")
+
+            # Item with NO testCmd: no way to verify the code works.
+            item = {
+                "slug": "no-test",
+                "ownsFiles": ["module.py"],
+                "prompt": "Implement a function",
+                # EXPLICITLY NO testCmd
+            }
+
+            result = dispatch_item(driver, item, workdir=tmpdir)
+
+            # MUST fail-closed: ok=False, verified=False, with reason.
+            self.assertFalse(result["ok"], msg="no testCmd must never yield ok=True")
+            self.assertFalse(result["verified"], msg="no testCmd means not verified")
+            self.assertEqual(result["reason"], "no_test_command")
+            self.assertIn("no testCmd", result["error"])
+            # But files WERE written (report them).
+            self.assertEqual(result["filesWritten"], ["module.py"])
 
 
 class TestDispatchItemOwnershipEnforcement(unittest.TestCase):
