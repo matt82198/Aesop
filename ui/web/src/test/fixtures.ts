@@ -116,6 +116,7 @@ export const TESTIDS = {
   prBoardError: 'prboard-error',
   prBoardLoading: 'prboard-loading',
   prBoardRefresh: 'prboard-refresh',
+  prBoardTogglePRless: 'prboard-toggle-prless',
 
   // Failure Drill-down component
   failureDrilldown: 'failure-drilldown',

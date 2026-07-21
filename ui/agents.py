@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import config
@@ -101,6 +102,12 @@ def get_fleet_agents():
     return agents
 
 _AGENT_ID_FORBIDDEN = re.compile(r'\.\.|[/\\*?\[\]]')
+
+# Fingerprint caching: prevent expensive recursive glob on every collector tick (~1Hz).
+# Cache the fingerprint for N seconds, recompute only when window expires.
+# This keeps the cache-busting purpose (detect real changes), but throttles the cost.
+_FINGERPRINT_CACHE = {"value": None, "expires": 0.0}
+_FINGERPRINT_CACHE_TTL = 5.0  # seconds; can be overridden by tests
 
 # Transcript-tail bounds (defense against loading a whole multi-MB transcript
 # into memory and against emitting an unbounded payload to the browser).
@@ -457,12 +464,15 @@ def extract_agent_dispatch_prompt(agent_id):
         print(f"[extract_agent_dispatch_prompt] Uncaught exception: {e}", file=sys.stderr)
         return {"error": "Failed to extract dispatch prompt"}
 
-def _transcripts_fingerprint():
-    """Cheap fs-stat-only fingerprint of the transcripts tree.
+def _transcripts_fingerprint_uncached():
+    """Cheap fs-stat-only fingerprint of the transcripts tree (no caching).
 
     Used to decide whether it's worth re-invoking `node dash-extra.mjs` (which is
     comparatively expensive: process spawn + re-parsing every agent transcript).
     Only file count + max mtime — no file content is read.
+
+    This is the raw implementation; see _transcripts_fingerprint() for the
+    cache-throttled wrapper.
     """
     try:
         if not config.TRANSCRIPTS_ROOT.exists():
@@ -480,3 +490,28 @@ def _transcripts_fingerprint():
         return (count, latest)
     except Exception:
         return (0, 0.0)
+
+
+def _transcripts_fingerprint():
+    """Cached wrapper around _transcripts_fingerprint_uncached().
+
+    Throttles fingerprint recomputation to at most once per _FINGERPRINT_CACHE_TTL
+    seconds (default 5s, configurable). Returns cached value until window expires.
+    This keeps the cache-busting purpose (detect real agent changes) but prevents
+    the expensive recursive glob from running on every collector tick (~1Hz).
+
+    Returns:
+        tuple: (file_count, latest_mtime) — same format as uncached version.
+    """
+    global _FINGERPRINT_CACHE
+    now = time.time()
+
+    # If cache is still valid, return cached value
+    if _FINGERPRINT_CACHE["value"] is not None and now < _FINGERPRINT_CACHE["expires"]:
+        return _FINGERPRINT_CACHE["value"]
+
+    # Cache expired or uninitialized; recompute
+    value = _transcripts_fingerprint_uncached()
+    _FINGERPRINT_CACHE["value"] = value
+    _FINGERPRINT_CACHE["expires"] = now + _FINGERPRINT_CACHE_TTL
+    return value

@@ -46,6 +46,14 @@
   --tile-accent: var(--color-amber-500);
 }
 
+.cost-tile--burnrate {
+  --tile-accent: var(--color-purple-500);
+}
+
+.cost-tile--projection {
+  --tile-accent: var(--color-cyan-500);
+}
+
 .tile-label {
   font-size: 0.75rem;
   font-weight: 600;
@@ -83,10 +91,38 @@
   color: var(--color-severity-error) !important;
 }
 
+.wave-telemetry-cost--alert {
+  border-color: var(--color-severity-error);
+  background: var(--color-surface-alert);
+}
+
+.cost-alert-badge {
+  background: var(--color-severity-error);
+  color: #fff;
+  padding: 0.25rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.cost-ceiling-warning {
+  background: rgba(255, 107, 107, 0.1);
+  border-left: 3px solid var(--color-severity-error);
+  color: var(--color-severity-error);
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
 @media (prefers-color-scheme: dark) {
   .wave-telemetry-cost {
     --color-surface-secondary: #1a1a1a;
     --color-surface-primary: #0a0a0a;
+    --color-surface-alert: #2a1515;
     --color-border-secondary: #333;
     --color-border-primary: #222;
     --color-text-secondary: #999;
@@ -94,6 +130,8 @@
     --color-blue-500: #4a9eff;
     --color-green-500: #4caf50;
     --color-amber-500: #ffa726;
+    --color-purple-500: #b47ff0;
+    --color-cyan-500: #4dd9ff;
     --color-severity-error: #ff6b6b;
   }
 }
@@ -102,6 +140,7 @@
   .wave-telemetry-cost {
     --color-surface-secondary: #f5f5f5;
     --color-surface-primary: #fff;
+    --color-surface-alert: #fff3f0;
     --color-border-secondary: #d0d0d0;
     --color-border-primary: #e0e0e0;
     --color-text-secondary: #666;
@@ -109,6 +148,8 @@
     --color-blue-500: #1976d2;
     --color-green-500: #388e3c;
     --color-amber-500: #f57c00;
+    --color-purple-500: #7b1fa2;
+    --color-cyan-500: #0097a7;
     --color-severity-error: #d32f2f;
   }
 }

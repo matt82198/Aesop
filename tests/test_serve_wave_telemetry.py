@@ -15,7 +15,6 @@ tests/test_api_state.py).
 Run: python -m unittest tests.test_serve_wave_telemetry
 """
 import http.client
-from datetime import datetime, timezone, timedelta
 import importlib.util
 import json
 import os
@@ -67,29 +66,33 @@ FIXTURE_LEDGER = """| timestamp | agent_type | model | duration | tokens_in | to
 | 2026-07-17T10:10:00 | Agent | claude-sonnet-4-5 | 15 | 800 | 600 | FAILED |
 """
 
-# Clock-derived so fixtures never rot (the >24h staleness gate would reject a hardcoded old ts)
-_FRESH_TS = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-_STALE_TS = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-# Fixture orchestrator-status.json (fresh, <24h)
-FIXTURE_ORCH_STATUS_FRESH = ("""{
+# Fixture orchestrator-status.json (fresh, <24h) — generated with fresh timestamp
+def _get_fresh_orch_status():
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    updated_at = (now - timedelta(hours=12)).isoformat()
+    return f"""{{
   "id": "main",
   "role": "orchestrator",
   "parent_id": null,
   "activity": "dispatching wave-rc.3",
   "phase": "wave-rc.3: dispatch",
-  "updated_at": "__TS__"
-}""".replace("__TS__", _FRESH_TS))
+  "updated_at": "{updated_at}"
+}}"""
 
-# Fixture orchestrator-status.json (stale, >24h)
-FIXTURE_ORCH_STATUS_STALE = ("""{
+# Fixture orchestrator-status.json (stale, >24h) — generated with stale timestamp
+def _get_stale_orch_status():
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    updated_at = (now - timedelta(hours=30)).isoformat()
+    return f"""{{
   "id": "main",
   "role": "orchestrator",
   "parent_id": null,
   "activity": "old activity",
   "phase": "wave-rc.2",
-  "updated_at": "__TS__"
-}""".replace("__TS__", _STALE_TS))
+  "updated_at": "{updated_at}"
+}}"""
 
 
 def load_serve(fixture_root, extra_env=None):
@@ -300,7 +303,7 @@ class OrchestratorStatusSource(WaveTelemetryFixtureCase):
         """Fresh orchestrator-status.json (<24h) is preferred over STATE.md."""
         # Write fresh orchestrator status
         (self.fixture_root / "state" / "orchestrator-status.json").write_text(
-            FIXTURE_ORCH_STATUS_FRESH, encoding="utf-8")
+            _get_fresh_orch_status(), encoding="utf-8")
 
         status, hdrs, body = self._get_json("/api/wave/telemetry")
         self.assertEqual(status, 200)
@@ -314,7 +317,7 @@ class OrchestratorStatusSource(WaveTelemetryFixtureCase):
         """Stale orchestrator-status.json (>24h) falls back to STATE.md."""
         # Write stale orchestrator status
         (self.fixture_root / "state" / "orchestrator-status.json").write_text(
-            FIXTURE_ORCH_STATUS_STALE, encoding="utf-8")
+            _get_stale_orch_status(), encoding="utf-8")
 
         status, hdrs, body = self._get_json("/api/wave/telemetry")
         self.assertEqual(status, 200)
@@ -384,6 +387,28 @@ class OrchestratorStatusSource(WaveTelemetryFixtureCase):
         self.assertIn("source", body)
         self.assertIn(body["source"], ["orchestrator-status", "state-md", "error"])
 
+    def test_wave_telemetry_burn_rate_fields_present(self):
+        """Wave telemetry includes burn-rate and projection fields."""
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should have burn-rate fields
+        self.assertIn("tokens_burned_per_min", body)
+        self.assertIn("projected_total_tokens", body)
+        self.assertIn("cost_ceiling_exceeded", body)
+
+    def test_wave_telemetry_burn_rate_types(self):
+        """Wave telemetry burn-rate fields have correct types."""
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Check types
+        self.assertIsInstance(body["tokens_burned_per_min"], (int, float))
+        self.assertGreaterEqual(body["tokens_burned_per_min"], 0.0)
+        self.assertIsInstance(body["projected_total_tokens"], int)
+        self.assertGreaterEqual(body["projected_total_tokens"], 0)
+        self.assertIsInstance(body["cost_ceiling_exceeded"], bool)
+
     def test_wave_telemetry_future_dated_orchestrator_status_falls_back(self):
         """Future-dated orchestrator-status.json (P3 bug fix) falls back to STATE.md.
 
@@ -419,13 +444,16 @@ class OrchestratorStatusSource(WaveTelemetryFixtureCase):
         If orchestrator-status.json has phase='wave-26-verify', the wave field should be
         'wave-26', not 'wave'.
         """
-        orch_status = """{
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        fresh_timestamp = (now - timedelta(hours=6)).isoformat()
+        orch_status = f"""{{
   "id": "main",
   "role": "orchestrator",
   "activity": "verifying wave-26",
   "phase": "wave-26-verify",
-  "updated_at": "%s"
-}""" % _FRESH_TS
+  "updated_at": "{fresh_timestamp}"
+}}"""
         (self.fixture_root / "state" / "orchestrator-status.json").write_text(
             orch_status, encoding="utf-8")
 

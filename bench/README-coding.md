@@ -33,11 +33,7 @@ Each task is a small, self-contained Python function. Haiku is the target model 
 
 ### 1. Generate Candidate Solutions
 
-Run a model over `coding_tasks.jsonl` to generate solutions:
-
-```bash
-python -m bench.coding_grader <task_id> <solution_file>
-```
+Run a model over `coding_tasks.jsonl` to generate solutions.
 
 The task prompt tells the model to write a Python function with a specific name (entrypoint). For example:
 
