@@ -60,9 +60,11 @@ manufacturing a false "in sync".
 
 ## Usage
 
-    python tools/reconcile.py --state-md STATE.md --db state/events.db
-    python tools/reconcile.py --state-md STATE.md --db state/events.db --resolve
-    python tools/reconcile.py --state-md STATE.md --db state/events.db --json
+    python tools/reconcile.py --state-md STATE.md
+    python tools/reconcile.py --state-md STATE.md --resolve
+    python tools/reconcile.py --state-md STATE.md --json
+
+(DB path defaults to state/tracker_events.db; override with --db if needed.)
 
 Exit codes: 0 = no drift (or drift cleanly resolved), 1 = drift detected and
 NOT resolved (report mode), 2 = usage/file error.
@@ -81,6 +83,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from state_store.store import EventStore  # noqa: E402
+from tools.common import get_state_db_path  # noqa: E402
 
 PHASE_RE = re.compile(r"^##\s*Phase:\s*`([^`]+)`", re.MULTILINE)
 
@@ -251,7 +254,7 @@ def _format_human(report: dict) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--state-md", default="STATE.md", help="Path to STATE.md (default: ./STATE.md)")
-    parser.add_argument("--db", default="state/events.db", help="Path to state_store SQLite db")
+    parser.add_argument("--db", default=str(get_state_db_path()), help="Path to state_store SQLite db (default: state/tracker_events.db)")
     parser.add_argument("--resolve", action="store_true", help="Fix drift by writing the authoritative value to the non-authoritative side (opt-in; default is detect+report only)")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of human text")
     args = parser.parse_args(argv)
