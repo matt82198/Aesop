@@ -155,6 +155,60 @@ for driver in (ClaudeCodeDriver(), CodexDriver()):
     print("  require_adversarial_review:", policy['require_adversarial_review'])
 ```
 
+### Running other models (OpenAI-compatible backends)
+
+Aesop can target any OpenAI Chat Completions-compatible endpoint: OpenRouter,
+Together AI, Ollama (local), or any service offering a compatible API. Use the
+`OpenAICompatibleDriver`:
+
+```python
+from openai_compatible_driver import OpenAICompatibleDriver
+
+# OpenRouter (hosted model, Tier 2)
+driver = OpenAICompatibleDriver(
+    base_url="https://openrouter.ai/api/v1",
+    model="openrouter/auto",           # or specific model like "openai/gpt-4-turbo"
+    api_key_env="OPENAI_API_KEY",      # env var name (default)
+)
+
+# Local Ollama (small/local model, Tier 3)
+driver = OpenAICompatibleDriver(
+    base_url="http://localhost:11434/v1",
+    model="neural-chat",
+    is_local=True,                      # Marks as local -> tier 3, higher verification
+)
+
+# Together AI
+driver = OpenAICompatibleDriver(
+    base_url="https://api.together.xyz/v1",
+    model="meta-llama/Llama-2-70b-chat",
+    api_key_env="TOGETHER_API_KEY",
+)
+```
+
+All OpenAI-compatible backends run through the **Phase 2 orchestrator-managed
+execution contract**: the orchestrator injects file contents, validates JSON
+output, writes files, and runs tests. No backend has native filesystem/shell
+access. The driver reports its honest verification tier (2 for hosted strong
+models, 3 for local/small models), and the wave template enforces the
+appropriate verification policy (validate all JSON, spot-check, repair bounds).
+
+To run aesop against a backend:
+
+1. Set up the environment (API key, endpoint URL).
+2. Instantiate the driver.
+3. Pass it to your wave orchestration loop:
+   ```python
+   caps = driver.probe_capabilities()
+   policy = verification_policy(caps)
+   # Proceed with wave dispatch, respecting policy.verification_tier
+   ```
+
+**Important note**: Non-agentic backends (Ollama, smaller models) run at a higher
+verification tier (3+) because their tool-use accuracy is lower. The cost of
+cheaper inference is re-spent on orchestrator verification. See the verification
+thesis in the README for details.
+
 ### Wiring verification tier into a wave manifest
 
 When building a manifest for `wave-flat-dispatch.template.mjs`, include the
@@ -182,6 +236,8 @@ Run the contract tests:
 
 ```
 python -m unittest tests.test_agent_driver
+python -m unittest tests.test_codex_driver_e2e
+python -m unittest tests.test_openai_compatible_driver
 ```
 
 ## Design constraints
