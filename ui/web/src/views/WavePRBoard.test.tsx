@@ -34,7 +34,9 @@ describe('WavePRBoard', () => {
   it('renders one row per PR / branch', async () => {
     render(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
     const rows = await screen.findAllByTestId(TESTIDS.prBoardRow);
-    expect(rows.length).toBe(fixtureWavePRBoard.prs.length);
+    // By default, PR-less branches are filtered out, so only 3 rows show
+    // (the ones with has_pr=true). fixtureWavePRBoard has 4 total but 1 is PR-less.
+    expect(rows.length).toBe(3);
   });
 
   it('shows PR number, title, and branch', async () => {
@@ -64,7 +66,9 @@ describe('WavePRBoard', () => {
     render(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
     const table = await screen.findByTestId(TESTIDS.prBoardTable);
     expect(table.textContent).toContain('CI failing');
-    expect(table.textContent).toContain('No PR opened yet');
+    // "No PR opened yet" is on the PR-less branch which is hidden by default
+    expect(table.textContent).toContain('Review required');
+    expect(table.textContent).toContain('Draft — not ready for review');
   });
 
   it('renders PR titles as real links to the PR url', async () => {
@@ -167,5 +171,109 @@ describe('WavePRBoard', () => {
 
     expect(unmountWarnings).toHaveLength(0);
     consoleErrorSpy.mockRestore();
+  });
+
+  describe('Filter: show/hide PR-less branches', () => {
+    it('defaults to hiding PR-less branches (only real PRs shown)', async () => {
+      // fixtureWavePRBoard has 4 items: 3 with has_pr=true, 1 with has_pr=false
+      render(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
+
+      // Default: PR-less branches hidden, so only 3 rows (the PRs with numbers)
+      const rows = await screen.findAllByTestId(TESTIDS.prBoardRow);
+      expect(rows.length).toBe(3);
+
+      // Verify the table has only PRs (#173, #172, #171), not the branch-only row
+      const table = screen.getByTestId(TESTIDS.prBoardTable);
+      expect(table.textContent).toContain('#173');
+      expect(table.textContent).toContain('#172');
+      expect(table.textContent).toContain('#171');
+      // The PR-less branch row should not appear in the filtered view
+      expect(table.textContent).not.toContain('feat/wave30-cost-pricing');
+    });
+
+    it('shows the toggle control with hidden count', async () => {
+      render(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
+      await screen.findByTestId(TESTIDS.prBoardTable);
+
+      // The toggle should be unchecked (false = hidden)
+      const toggle = screen.getByTestId(TESTIDS.prBoardTogglePRless) as HTMLInputElement;
+      expect(toggle).toBeInTheDocument();
+      expect(toggle.type).toBe('checkbox');
+      expect(toggle.checked).toBe(false);
+
+      // The label should indicate 1 hidden branch (4 total - 3 with PR)
+      expect(screen.getByText(/Show branches without PR.*1 hidden/)).toBeInTheDocument();
+    });
+
+    it('toggle reveals PR-less branches and updates the hidden count', async () => {
+      const { rerender } = render(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
+
+      // Initially 3 rows (PRs only)
+      const initialRows = await screen.findAllByTestId(TESTIDS.prBoardRow);
+      expect(initialRows.length).toBe(3);
+
+      // Click the toggle to show PR-less branches
+      const toggle = screen.getByTestId(TESTIDS.prBoardTogglePRless) as HTMLInputElement;
+      toggle.click();
+
+      // Need a small wait for state update
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Rerender to pick up state changes
+      rerender(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
+
+      // After toggle, all 4 rows should be visible
+      const allRows = screen.getAllByTestId(TESTIDS.prBoardRow);
+      expect(allRows.length).toBe(4);
+
+      // Table should now contain the PR-less branch
+      const table = screen.getByTestId(TESTIDS.prBoardTable);
+      expect(table.textContent).toContain('feat/wave30-cost-pricing');
+    });
+
+    it('toggle is properly labeled for accessibility', async () => {
+      render(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
+      await screen.findByTestId(TESTIDS.prBoardTable);
+
+      const toggle = screen.getByTestId(TESTIDS.prBoardTogglePRless);
+      const label = toggle.closest('label');
+      expect(label).toBeInTheDocument();
+      expect(label?.textContent).toMatch(/Show branches without PR/);
+
+      // The label should be associated with the checkbox
+      const labelFor = document.querySelector('label[for="prboard-toggle-prless"]');
+      expect(labelFor).toBeInTheDocument();
+      expect(labelFor?.textContent).toMatch(/Show branches without PR/);
+    });
+
+    it('shows table when there are PRs to display (toggle off hides PR-less)', async () => {
+      render(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
+      await screen.findByTestId(TESTIDS.prBoardTable);
+
+      // In default state (toggle off), PR-less branches are filtered out
+      // The table shows the remaining PRs (3 items)
+      const table = screen.getByTestId(TESTIDS.prBoardTable);
+      expect(table).toBeInTheDocument();
+      expect(table.textContent).toContain('#173');
+      expect(table.textContent).toContain('#172');
+      expect(table.textContent).toContain('#171');
+    });
+
+    it('shows all rows when toggle is on, no callout about hidden branches', async () => {
+      const { container, rerender } = render(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
+      await screen.findByTestId(TESTIDS.prBoardTable);
+
+      // Toggle on to show all
+      const toggle = screen.getByTestId(TESTIDS.prBoardTogglePRless) as HTMLInputElement;
+      toggle.click();
+
+      // Rerender to pick up state changes
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      rerender(<WavePRBoard fetcher={ready(fixtureWavePRBoard)} />);
+
+      // The table should render with all 4 rows
+      const allRows = container.querySelectorAll(`[data-testid="${TESTIDS.prBoardRow}"]`);
+      expect(allRows.length).toBeGreaterThanOrEqual(4);
+    });
   });
 });

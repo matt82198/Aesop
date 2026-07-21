@@ -11,6 +11,9 @@
  * <table> semantics with scope="col" headers; PR titles are keyboard-navigable
  * links whose hrefs pass through sanitizeUrl (hostile schemes render inert).
  * Loading / empty / error / gh-unavailable states are all first-class.
+ *
+ * Filter: Toggle hides PR-less feat/* branches by default (a11y: real label +
+ * toggle checkbox).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -119,6 +122,7 @@ export function WavePRBoard({ fetcher = fetchWavePRs }: WavePRBoardProps) {
   const [data, setData] = useState<WavePRBoardData | null>(null);
   const [state, setState] = useState<LoadState>('loading');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showPRless, setShowPRless] = useState(false);
   // Keep the latest fetcher without re-subscribing the poll interval on each render.
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
@@ -172,6 +176,8 @@ export function WavePRBoard({ fetcher = fetchWavePRs }: WavePRBoardProps) {
   }, [load]);
 
   const prs = data?.prs ?? [];
+  // Filter: hide PR-less branches by default (showPRless = false)
+  const filteredPrs = showPRless ? prs : prs.filter((pr) => pr.has_pr);
 
   return (
     <section className="view-prboard" data-testid={TESTIDS.viewPRBoard} aria-label="Wave PR board">
@@ -245,28 +251,54 @@ export function WavePRBoard({ fetcher = fetchWavePRs }: WavePRBoardProps) {
 
       {state === 'ready' && data && data.available && prs.length > 0 && (
         <div className="prboard-table-wrapper">
-          <table className="prboard-table" data-testid={TESTIDS.prBoardTable}>
-            <caption>
-              Open pull requests and feature branches for the current wave
-              {data.generated_at ? ` (as of ${formatTimestamp(data.generated_at)})` : ''}
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">PR</th>
-                <th scope="col">Title</th>
-                <th scope="col">Branch</th>
-                <th scope="col">CI</th>
-                <th scope="col">Mergeable</th>
-                <th scope="col">Age</th>
-                <th scope="col">Top blocker</th>
-              </tr>
-            </thead>
-            <tbody>
-              {prs.map((pr) => (
-                <PRRow key={pr.number != null ? `pr-${pr.number}` : `branch-${pr.branch}`} pr={pr} />
-              ))}
-            </tbody>
-          </table>
+          <div className="prboard-filter">
+            <label htmlFor="prboard-toggle-prless" className="prboard-toggle-label">
+              <input
+                id="prboard-toggle-prless"
+                type="checkbox"
+                className="prboard-toggle-input"
+                checked={showPRless}
+                onChange={(e) => setShowPRless(e.currentTarget.checked)}
+                data-testid={TESTIDS.prBoardTogglePRless}
+              />
+              <span>Show branches without PR ({prs.length - filteredPrs.length} hidden)</span>
+            </label>
+          </div>
+
+          {filteredPrs.length === 0 && (
+            <div
+              className="prboard-callout prboard-callout--info"
+              role="status"
+              data-testid={TESTIDS.prBoardEmpty}
+            >
+              <p>All open PRs are shown. {prs.length} branches without PR are hidden.</p>
+            </div>
+          )}
+
+          {filteredPrs.length > 0 && (
+            <table className="prboard-table" data-testid={TESTIDS.prBoardTable}>
+              <caption>
+                Open pull requests and feature branches for the current wave
+                {data.generated_at ? ` (as of ${formatTimestamp(data.generated_at)})` : ''}
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">PR</th>
+                  <th scope="col">Title</th>
+                  <th scope="col">Branch</th>
+                  <th scope="col">CI</th>
+                  <th scope="col">Mergeable</th>
+                  <th scope="col">Age</th>
+                  <th scope="col">Top blocker</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredPrs.map((pr) => (
+                  <PRRow key={pr.number != null ? `pr-${pr.number}` : `branch-${pr.branch}`} pr={pr} />
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
     </section>
