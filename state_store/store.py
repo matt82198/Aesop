@@ -21,6 +21,28 @@ _MAX_DB_LOCK_RETRIES = 3
 _DB_LOCK_RETRY_BASE_DELAY = 0.05  # 50ms base, exponential backoff
 
 
+class ConcurrencyConflict(Exception):
+    """Raised when an optimistic concurrency control check fails on append.
+
+    Signifies that the event stream's current version does not match the
+    expected version provided to append(), indicating that another writer
+    has extended the stream since the caller last read it. No event is
+    written when this exception is raised (fail-closed).
+
+    Attributes:
+        expected_version: The version the caller expected
+        actual_version: The version found in the database
+    """
+
+    def __init__(self, expected_version: int, actual_version: int):
+        self.expected_version = expected_version
+        self.actual_version = actual_version
+        super().__init__(
+            f"Concurrency conflict: expected version {expected_version}, "
+            f"but stream is at version {actual_version}"
+        )
+
+
 def _retry_on_db_lock(func, max_retries=_MAX_DB_LOCK_RETRIES, base_delay=_DB_LOCK_RETRY_BASE_DELAY):
     """Retry a callable up to max_retries times if it hits 'database is locked' error.
 
@@ -109,8 +131,43 @@ class EventStore:
 
         _retry_on_db_lock(_init_db)
 
-    def append(self, stream: str, event_type: str, payload: dict, actor: str = "system") -> int:
-        """Append one event to ``stream``; return its new per-stream version (1-based)."""
+    def append(
+        self,
+        stream: str,
+        event_type: str,
+        payload: dict,
+        actor: str = "system",
+        expected_version: int | None = None,
+    ) -> int:
+        """Append one event to ``stream``; return its new per-stream version (1-based).
+
+        Supports optimistic concurrency control via the optional ``expected_version``
+        parameter. If provided, the append succeeds ONLY if the stream's current
+        maximum version equals ``expected_version``. If the versions do not match,
+        raises ConcurrencyConflict WITHOUT writing any event (fail-closed, atomic).
+
+        The version check and append are both performed under BEGIN IMMEDIATE so
+        they are atomic (no TOCTOU window).
+
+        Args:
+            stream: The stream name (e.g. "tracker", "claims")
+            event_type: The event type (e.g. "claim_requested", "claim_released")
+            payload: The event payload dict (will be JSON-serialized)
+            actor: The actor performing the append (default "system")
+            expected_version: Optional OCC check: if provided, append only if the
+                             stream's current max version equals this value.
+                             If None (default), OCC is disabled (backward-compatible).
+
+        Returns:
+            The new per-stream version assigned to this event (1-based).
+
+        Raises:
+            ConcurrencyConflict: If expected_version is provided and the stream's
+                               current max version does not match. The exception
+                               carries expected_version and actual_version for retry.
+                               No event is written when this exception is raised.
+        """
+
         def _do_append():
             conn = sqlite3.connect(self.db_path)
             try:
@@ -122,7 +179,17 @@ class EventStore:
                     "SELECT COALESCE(MAX(version), 0) FROM events WHERE stream = ?",
                     (stream,),
                 ).fetchone()
-                version = row[0] + 1
+                current_version = row[0]
+
+                # Perform OCC check (if expected_version provided)
+                if expected_version is not None:
+                    if current_version != expected_version:
+                        # Mismatch: abort transaction and raise
+                        conn.rollback()
+                        raise ConcurrencyConflict(expected_version, current_version)
+
+                # OCC check passed or not enabled: proceed with append
+                version = current_version + 1
                 conn.execute(
                     "INSERT INTO events (ts, actor, stream, type, payload, version) "
                     "VALUES (?, ?, ?, ?, ?, ?)",

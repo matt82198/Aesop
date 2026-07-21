@@ -13,11 +13,12 @@ from .api import StateAPI
 from .export import export_tracker
 from .ingest import ingest_tracker_json
 from .projections import project_tracker
-from .store import EventStore
+from .store import EventStore, ConcurrencyConflict
 
 __all__ = [
     "EventStore",
     "StateAPI",
+    "ConcurrencyConflict",
     "project_tracker",
     "export_tracker",
     "ingest_tracker_json",
