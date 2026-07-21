@@ -126,37 +126,77 @@ def check(spent=None, period="wave", config=None, state_dir=None, trip=True):
     """Check spend against the configured ceiling for `period`.
 
     Returns a dict: {"period", "ceiling", "spent", "exceeded", "tripped"}.
+
+    Fail-closed: any error during check (e.g., corrupt ledger, bad config) is
+    treated as over-ceiling and triggers abort when trip=True (never fail-open).
     """
-    if config is None:
-        config = load_config()
-    if state_dir is None:
-        state_dir = halt.resolve_state_dir(config=config)
-    state_dir = Path(state_dir)
+    try:
+        if config is None:
+            config = load_config()
+        if state_dir is None:
+            state_dir = halt.resolve_state_dir(config=config)
+        state_dir = Path(state_dir)
 
-    ceiling = get_ceiling(config, period)
+        ceiling = get_ceiling(config, period)
 
-    if spent is None:
-        spent = read_ledger_total_tokens(state_dir, period=period)
-    spent = int(spent)
+        if spent is None:
+            spent = read_ledger_total_tokens(state_dir, period=period)
+        spent = int(spent)
 
-    exceeded = ceiling is not None and spent >= ceiling
-    tripped = False
+        exceeded = ceiling is not None and spent >= ceiling
+        tripped = False
 
-    if exceeded and trip:
-        reason = (
-            f"cost ceiling exceeded: {period} spend {spent} tokens >= "
-            f"ceiling {ceiling} tokens"
-        )
-        halt.halt(reason, state_dir=state_dir)
-        tripped = True
+        if exceeded and trip:
+            reason = (
+                f"cost ceiling exceeded: {period} spend {spent} tokens >= "
+                f"ceiling {ceiling} tokens"
+            )
+            halt.halt(reason, state_dir=state_dir)
+            tripped = True
 
-    return {
-        "period": period,
-        "ceiling": ceiling,
-        "spent": spent,
-        "exceeded": exceeded,
-        "tripped": tripped,
-    }
+        return {
+            "period": period,
+            "ceiling": ceiling,
+            "spent": spent,
+            "exceeded": exceeded,
+            "tripped": tripped,
+        }
+    except Exception as e:
+        # Fail-closed: any error during check is treated as over-ceiling.
+        # This prevents fail-open scenarios (e.g., corrupt ledger silently passing).
+        if trip:
+            try:
+                reason = f"cost ceiling check failed (error: {type(e).__name__}: {str(e)[:100]}); treating as over-ceiling"
+                halt.halt(reason, state_dir=state_dir if state_dir else halt.resolve_state_dir(config))
+                return {
+                    "period": period,
+                    "ceiling": None,
+                    "spent": None,
+                    "exceeded": True,
+                    "tripped": True,
+                    "error": str(e),
+                }
+            except Exception as halt_error:
+                # Even halt failed — still return tripped=True so caller knows
+                # the check failed and must abort.
+                return {
+                    "period": period,
+                    "ceiling": None,
+                    "spent": None,
+                    "exceeded": True,
+                    "tripped": True,
+                    "error": f"check failed: {str(e)[:50]}; halt also failed: {str(halt_error)[:50]}",
+                }
+        else:
+            # trip=False: caller doesn't want side effects, but still report error
+            return {
+                "period": period,
+                "ceiling": None,
+                "spent": None,
+                "exceeded": True,
+                "tripped": False,
+                "error": str(e),
+            }
 
 
 def main(argv=None):
