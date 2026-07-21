@@ -16,6 +16,38 @@ import sqlite3
 import sys
 import time
 
+# Retry configuration for database lock contention (especially under parallel CI shards)
+_MAX_DB_LOCK_RETRIES = 3
+_DB_LOCK_RETRY_BASE_DELAY = 0.05  # 50ms base, exponential backoff
+
+
+def _retry_on_db_lock(func, max_retries=_MAX_DB_LOCK_RETRIES, base_delay=_DB_LOCK_RETRY_BASE_DELAY):
+    """Retry a callable up to max_retries times if it hits 'database is locked' error.
+
+    Used for defense-in-depth when multiple EventStore instances or CI shards
+    briefly contend on WAL locks. Implements exponential backoff.
+
+    Args:
+        func: A callable that may raise sqlite3.OperationalError('database is locked').
+        max_retries: Number of attempts (default 3).
+        base_delay: Base delay in seconds for exponential backoff (default 0.05s).
+
+    Returns:
+        The return value of func().
+
+    Raises:
+        sqlite3.OperationalError: If all retries are exhausted or non-lock error occurs.
+    """
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except sqlite3.OperationalError as e:
+            if "database is locked" not in str(e):
+                raise
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(base_delay * (2 ** attempt))  # exponential: 0.05s, 0.1s, 0.2s
+
 
 class EventStore:
     """Append-only event log stored at ``db_path``.
@@ -25,73 +57,83 @@ class EventStore:
     ``PRAGMA busy_timeout`` and assigns the per-stream version inside a
     ``BEGIN IMMEDIATE`` transaction, so the read-max-version-then-insert is
     atomic and two writers can never collide or duplicate a version.
+
+    Implements defense-in-depth retry logic for 'database is locked' errors that
+    can occur under heavy parallel contention (e.g., CI shards).
     """
 
     def __init__(self, db_path: str):
         self.db_path = db_path
-        conn = sqlite3.connect(self.db_path)
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS events (
-                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts      REAL    NOT NULL,
-                    actor   TEXT    NOT NULL,
-                    stream  TEXT    NOT NULL,
-                    type    TEXT    NOT NULL,
-                    payload TEXT    NOT NULL,
-                    version INTEGER NOT NULL
+
+        def _init_db():
+            conn = sqlite3.connect(self.db_path)
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS events (
+                        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ts      REAL    NOT NULL,
+                        actor   TEXT    NOT NULL,
+                        stream  TEXT    NOT NULL,
+                        type    TEXT    NOT NULL,
+                        payload TEXT    NOT NULL,
+                        version INTEGER NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_events_stream_version "
-                "ON events(stream, version)"
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS snapshots (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts           REAL    NOT NULL,
-                    stream       TEXT    NOT NULL,
-                    event_version INTEGER NOT NULL,
-                    projection   TEXT    NOT NULL,
-                    checksum     TEXT    NOT NULL
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_events_stream_version "
+                    "ON events(stream, version)"
                 )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_snapshots_stream_version "
-                "ON snapshots(stream, event_version)"
-            )
-            conn.commit()
-        finally:
-            conn.close()
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS snapshots (
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ts           REAL    NOT NULL,
+                        stream       TEXT    NOT NULL,
+                        event_version INTEGER NOT NULL,
+                        projection   TEXT    NOT NULL,
+                        checksum     TEXT    NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_snapshots_stream_version "
+                    "ON snapshots(stream, event_version)"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        _retry_on_db_lock(_init_db)
 
     def append(self, stream: str, event_type: str, payload: dict, actor: str = "system") -> int:
         """Append one event to ``stream``; return its new per-stream version (1-based)."""
-        conn = sqlite3.connect(self.db_path)
-        try:
-            conn.execute("PRAGMA busy_timeout=5000")
-            # BEGIN IMMEDIATE takes the write lock up front so the
-            # read-max-then-insert below is atomic under contention.
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT COALESCE(MAX(version), 0) FROM events WHERE stream = ?",
-                (stream,),
-            ).fetchone()
-            version = row[0] + 1
-            conn.execute(
-                "INSERT INTO events (ts, actor, stream, type, payload, version) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (time.time(), actor, stream, event_type, json.dumps(payload), version),
-            )
-            conn.commit()
-            return version
-        finally:
-            conn.close()
+        def _do_append():
+            conn = sqlite3.connect(self.db_path)
+            try:
+                conn.execute("PRAGMA busy_timeout=5000")
+                # BEGIN IMMEDIATE takes the write lock up front so the
+                # read-max-then-insert below is atomic under contention.
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM events WHERE stream = ?",
+                    (stream,),
+                ).fetchone()
+                version = row[0] + 1
+                conn.execute(
+                    "INSERT INTO events (ts, actor, stream, type, payload, version) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (time.time(), actor, stream, event_type, json.dumps(payload), version),
+                )
+                conn.commit()
+                return version
+            finally:
+                conn.close()
+
+        return _retry_on_db_lock(_do_append)
 
     def read(self, stream: str) -> list:
         """Return all events for ``stream`` ascending by version (empty if none)."""
@@ -138,19 +180,22 @@ class EventStore:
             event_version: the per-stream event version this snapshot was computed through
             projection: the materialized state dict (e.g. the full tracker projection)
         """
-        conn = sqlite3.connect(self.db_path)
-        try:
-            conn.execute("PRAGMA busy_timeout=5000")
-            projection_json = json.dumps(projection, separators=(",", ":"), sort_keys=True)
-            checksum = hashlib.sha256(projection_json.encode()).hexdigest()
-            conn.execute(
-                "INSERT INTO snapshots (ts, stream, event_version, projection, checksum) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (time.time(), stream, event_version, projection_json, checksum),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        def _do_save_snapshot():
+            conn = sqlite3.connect(self.db_path)
+            try:
+                conn.execute("PRAGMA busy_timeout=5000")
+                projection_json = json.dumps(projection, separators=(",", ":"), sort_keys=True)
+                checksum = hashlib.sha256(projection_json.encode()).hexdigest()
+                conn.execute(
+                    "INSERT INTO snapshots (ts, stream, event_version, projection, checksum) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (time.time(), stream, event_version, projection_json, checksum),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        _retry_on_db_lock(_do_save_snapshot)
 
     def read_snapshot(self, stream: str) -> tuple | None:
         """Read the most recent snapshot for a stream.

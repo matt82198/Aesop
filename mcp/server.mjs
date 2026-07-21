@@ -12,6 +12,8 @@
  *   fleet_cost         - per-model token totals from state/ledger/OUTCOMES-LEDGER.md
  *   fleet_cost_by_wave - per-wave token totals from state/ledger/OUTCOMES-LEDGER.md
  *   fleet_budget       - cost ceiling, current spend, remaining headroom, halt status
+ *   fleet_cost_trend   - per-wave token trend over last N waves from ledger
+ *   fleet_verify_stats - defect escape stats (first-try-green, fix-forward rate) if available
  *
  * All tools are read-only; no state mutations, no file writes.
  */
@@ -549,6 +551,120 @@ function getFleetBudget() {
   return result;
 }
 
+/**
+ * fleet_cost_trend: Parse ledger and return per-wave token trend over last N waves
+ */
+function getFleetCostTrend(params = {}) {
+  const result = {
+    absent: !fs.existsSync(LEDGER_FILE),
+    trend: [],
+    period_count: 0
+  };
+
+  const N = params.n || 10;
+
+  try {
+    if (fs.existsSync(LEDGER_FILE)) {
+      const lines = fs.readFileSync(LEDGER_FILE, 'utf8').split('\n');
+
+      // Parse all waves from ledger
+      const waveData = {};
+      const waveOrder = [];
+
+      for (const line of lines) {
+        if (!line.startsWith('|') || !line.endsWith('|')) continue;
+
+        const parts = line.split('|').map(p => p.trim()).filter(p => p !== '');
+
+        if (parts.length < 9) continue;
+
+        // Skip header and separator lines
+        if (parts[0].toLowerCase() === 'iso ts' || parts[0].toLowerCase() === 'timestamp') continue;
+        if (parts[0].toLowerCase().includes('iso') || parts[1].toLowerCase() === 'agent_type') continue;
+        if (/^-+$/.test(parts[0])) continue;
+
+        try {
+          const tokensIn = parseInt(parts[4], 10);
+          const tokensOut = parseInt(parts[5], 10);
+
+          if (isNaN(tokensIn) || isNaN(tokensOut)) continue;
+
+          const wave = parts[8].trim() || 'unknown';
+
+          if (!waveData[wave]) {
+            waveData[wave] = {
+              tokens_in: 0,
+              tokens_out: 0,
+              total_tokens: 0,
+              count: 0
+            };
+            waveOrder.push(wave);
+          }
+
+          waveData[wave].tokens_in += tokensIn;
+          waveData[wave].tokens_out += tokensOut;
+          waveData[wave].total_tokens += tokensIn + tokensOut;
+          waveData[wave].count += 1;
+        } catch (e) {
+          continue;
+        }
+      }
+
+      // Get last N waves in chronological order
+      const lastNWaves = waveOrder.slice(-N);
+      result.trend = lastNWaves.map(wave => ({
+        wave,
+        total_tokens: waveData[wave].total_tokens,
+        tokens_in: waveData[wave].tokens_in,
+        tokens_out: waveData[wave].tokens_out,
+        count: waveData[wave].count
+      }));
+      result.period_count = lastNWaves.length;
+
+      if (result.period_count === 0) {
+        result.absent = true;
+      }
+    }
+  } catch (e) {
+    // Silently ignore errors
+  }
+
+  return result;
+}
+
+/**
+ * fleet_verify_stats: Read defect escape stats if available
+ * Attempts to read pre-computed state/verify-stats.json or invoke defect_escape.py
+ */
+function getFleetVerifyStats() {
+  const result = {
+    absent: true,
+    first_try_green: null,
+    fix_forward_rate: null,
+    source: null
+  };
+
+  // Try to read pre-computed stats file
+  const statsFile = path.join(STATE_ROOT, 'verify-stats.json');
+  if (fs.existsSync(statsFile)) {
+    try {
+      const content = fs.readFileSync(statsFile, 'utf8').trim();
+      if (content) {
+        const stats = JSON.parse(content);
+        result.absent = false;
+        result.first_try_green = stats.first_try_estimate || null;
+        result.fix_forward_rate = stats.fixforward_rate || null;
+        result.source = 'verify-stats.json';
+        return result;
+      }
+    } catch (e) {
+      // Silently ignore parse errors
+    }
+  }
+
+  return result;
+}
+
 // ============================================================================
 // MCP Tool & Resource Definitions
 // ============================================================================
@@ -597,6 +713,28 @@ const TOOLS = [
   {
     name: 'fleet_budget',
     description: 'Get cost budget status: configured ceiling, current spend, remaining headroom, and halt status',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'fleet_cost_trend',
+    description: 'Get per-wave token usage trend over the last N waves from outcomes ledger',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        n: {
+          type: 'integer',
+          description: 'Number of waves to return (default: 10)',
+          default: 10
+        }
+      }
+    }
+  },
+  {
+    name: 'fleet_verify_stats',
+    description: 'Get defect escape stats (first-try-green rate, fix-forward rate) if available',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -650,6 +788,12 @@ async function handleToolCall(requestId, params) {
         break;
       case 'fleet_budget':
         result = getFleetBudget();
+        break;
+      case 'fleet_cost_trend':
+        result = getFleetCostTrend(args);
+        break;
+      case 'fleet_verify_stats':
+        result = getFleetVerifyStats();
         break;
       default:
         mcp.writeError(requestId, -32601, `Unknown tool: ${name}`);
