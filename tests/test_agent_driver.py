@@ -269,12 +269,16 @@ class TestCodexDriver(_DriverContractMixin, unittest.TestCase):
         self.assertEqual(d.resolve_model(ROLE_WORKER), "gpt-3.5-turbo")
         self.assertEqual(d.resolve_model(ROLE_SETUP), "gpt-4-turbo")
 
-    def test_unimplemented_ops_raise_notimplemented(self):
+    def test_phase2_dispatch_and_run_command_implemented(self):
+        # Phase 2: dispatch_worker and run_command are now implemented (no longer stubs).
+        # These methods are real and functional, not NotImplementedError placeholders.
         d = self.make()
-        with self.assertRaises(NotImplementedError):
-            d.dispatch_worker(WorkerRequest(prompt="hi"))
-        with self.assertRaises(NotImplementedError):
-            d.run_command("echo hi")
+        # run_command is now implemented: can call it without error.
+        result = d.run_command(sys.executable + ' -c "print(42)"')
+        self.assertIsInstance(result, ad.CommandResult)
+        self.assertEqual(result.exit_code, 0)
+        # dispatch_worker is also implemented (see test_codex_driver_e2e for full tests).
+        self.assertTrue(callable(d.dispatch_worker))
 
     def test_stub_ops_present_and_callable(self):
         # Stub methods must exist and be callable (worker_status returns rather

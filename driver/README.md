@@ -3,10 +3,11 @@
 > Run aesop's wave loop on backends other than Claude Code — Codex, and
 > eventually open models — through one narrow interface.
 
-This directory is **Phase 1** of the multi-model portability effort described in
-a design spike. It defines the abstraction seam and ships a reference adapter
-plus an honest Codex stub. No wave-loop code is rewired yet; that is the next
-step (see roadmap below).
+This directory contains the **AgentDriver seam** (Phase 1) and a working Codex
+implementation (Phase 2). The phase-1 abstraction seam is the interface; the
+phase-2 Codex driver proves a non-Claude backend can execute a real coding task
+end-to-end and produce orchestrator-verified results, entirely offline (no API
+key, no network in CI tests).
 
 ---
 
@@ -67,14 +68,14 @@ Encoded honestly in each driver's `probe_capabilities()` — the numbers are the
 spike's findings as data, so the orchestrator can plan **before** any CLI wiring
 exists:
 
-| Capability             | **claude-code** | **codex** (stub)          | open-model (future)        |
+| Capability             | **claude-code** | **codex** (Phase 2)       | open-model (future)        |
 |------------------------|:---------------:|:-------------------------:|:--------------------------:|
 | parallel_dispatch      | native          | no — external event loop  | no — external event loop   |
 | worker filesystem I/O  | yes (tools)     | no — orchestrator injects | no — orchestrator injects  |
 | worker shell           | yes (Bash tool) | no — orchestrator runs    | no — orchestrator runs     |
-| structured output      | yes (~perfect)  | yes (function-calling)    | partial — regex recovery   |
+| structured output      | yes (~perfect)  | yes (JSON schema)         | partial — regex recovery   |
 | worktree isolation     | git-worktree    | no — temp-dir             | no — temp-dir              |
-| native cost tracking   | `budget.spent()`| usage metadata (opaque)   | manual (len/4 estimate)    |
+| native cost tracking   | `budget.spent()`| usage metadata (real)     | manual (len/4 estimate)    |
 | tool-use accuracy      | ~0.99           | ~0.90–0.95                | ~0.70–0.85                 |
 | **verification tier**  | **1**           | **2**                     | **4**                      |
 
@@ -117,11 +118,11 @@ high-confidence subagents **plus** strong orchestration).
 
 | Phase | Scope                                      | Status                     |
 |-------|--------------------------------------------|----------------------------|
-| **1** | Driver interface + Claude Code parity      | **this directory**         |
-|       | Reference adapter, honest Codex stub, tests| shipped                    |
+| **1** | Driver interface + Claude Code parity      | **shipped**                |
+|       | Reference adapter, honest Codex stub, tests| in this directory          |
 |       | Refactor wave-flat-dispatch onto the driver| next (harness handoff pts) |
-| **2** | Codex reference adapter                     | stub only today            |
-|       | Wire `codex` CLI / OpenAI API, JSON-schema validation, external Node/Python harness (parallel, file I/O, run_command), message-shape adapter | TODO in `codex_driver.py` |
+| **2** | Codex OpenAI Chat Completions HTTP backend | **shipped (Phase 2)**      |
+|       | Transport seam (urllib, injectable); dispatch_worker (file injection, JSON validation with retry, full-file replacement); run_command (subprocess); worker_status (in-memory registry); verification_policy mapping; offline test suite with FakeTransport + gated live test | implemented in `codex_driver.py` + `openai_transport.py` + `verification_policy.py` + tests |
 | **3** | Open-model runner library                   | future                     |
 |       | Ollama/OpenRouter/Together adapters, per-model prompt tuning, error-recovery protocol, Tier-4 enforcement, `bench/` accuracy benchmark | future |
 

@@ -16,9 +16,24 @@ Run: `bash tests/test_pre_push_policy.sh && bash tests/test-run-watchdog.sh && b
 buildsystem-template.test.mjs, cli-config.test.mjs, collect-signals.test.mjs, config-doc-drift.test.mjs, dash-agents-panel.test.mjs, dash-extra.test.mjs, domain-map-drift.test.mjs, fleet-cli.test.mjs, force-model-policy.test.mjs, lock.test.mjs, mcp-fleet.test.mjs, packaging-portability.test.mjs, proposals.test.mjs, scaffold-hook-install.test.mjs, scaffold-onboarding.test.mjs, test_orchestration_core.test.mjs, wizard.test.mjs.
 Run: `npm run test:node` or `node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
 
-**Python (66 suites)**:
-Organized by category: API state/tracker (test_api_state, test_api_tracker, test_tracker_*), UI/SSE (test_serve*, test_sse_*, test_ui_*, test_wave13_ui_correctness, test_wave_*), Bench (test_bench_*), Security (test_csrf_https_origins, test_secret_scan, test_secret_scan_gaps, test_symlink_guard), State store (test_state_store*), Tools (test_tools_*, test_defect_escape, test_test_hygiene), Agents/Monitoring (test_agent*, test_alert_bridge, test_collectors, test_orchestration_core, test_stall_check, test_reconcile, test_healthcheck, test_halt, test_ci_merge_wait), Config/Launch (test_launch_tui, test_render, test_rotate_logs, test_metrics_gate, test_no_bare_test_functions, test_git_identity_check, test_self_stats).
+**Python (67 suites)**:
+Organized by category: API state/tracker (test_api_state, test_api_tracker, test_tracker_*), UI/SSE (test_serve*, test_sse_*, test_ui_*, test_wave13_ui_correctness, test_wave_*), Bench (test_bench_*), Security (test_csrf_https_origins, test_secret_scan, test_secret_scan_gaps, test_symlink_guard), State store (test_state_store*), Tools (test_tools_*, test_defect_escape, test_test_hygiene), AgentDriver/Codex (test_agent_driver, test_codex_driver_e2e — offline + gated live tests), Agents/Monitoring (test_alert_bridge, test_collectors, test_orchestration_core, test_stall_check, test_reconcile, test_healthcheck, test_halt, test_ci_merge_wait), Config/Launch (test_launch_tui, test_render, test_rotate_logs, test_metrics_gate, test_no_bare_test_functions, test_git_identity_check, test_self_stats).
 Run: `npm run test:py` or `python -m unittest discover -s tests`
+
+### Phase 2 AgentDriver Codex Tests (test_codex_driver_e2e.py)
+- **Offline tests** (all run in CI, no OPENAI_API_KEY needed):
+  - Happy path: FakeTransport returns valid schema → file written, ok=True, tokens_spent tracked.
+  - Retry: malformed-then-valid JSON triggers bounded retry (<=2 attempts).
+  - Fail-safe: always-malformed JSON → WORKER_FAILED, no files written (never green).
+  - Ownership enforcement: out-of-scope paths rejected wholesale, no partial writes.
+  - Oversized files: pre-dispatch max_owned_bytes guard fails safe (no truncation).
+  - True e2e: RED stub + FakeTransport-supplied fix + run_command → GREEN (offline proof).
+  - run_command: real subprocess execution (not mock).
+  - worker_status: in-memory registry tracking.
+  - verification_policy: tier->policy mapping (tier 1/2/3/4 return correct dicts; codex probe → tier 2 policy).
+  - Probe unchanged: codex probe still returns honest Tier-2 (fs=False, shell=False, structured=True).
+- **Live test** (gated by AESOP_CODEX_LIVE env var, skipped in CI):
+  - Real end-to-end with OpenAI API (requires OPENAI_API_KEY + AESOP_CODEX_LIVE=1 to run).
 
 ## Hygiene Rules (Permanent)
 
