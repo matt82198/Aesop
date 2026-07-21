@@ -30,7 +30,13 @@
 //   items:      [ { slug, ownsFiles:[string], prompt:string, selfCheckCmd?: string, workDir?: string } ]
 //                // selfCheckCmd: optional per-item verification (exits 0 = pass, non-0 = fail)
 //                // workDir: optional override for selfCheckCmd execution (defaults to args.workDir)
-//   repairCap:   number  // default 1
+//   repairCap:   number  // default 1; OVERRIDDEN by verificationTier if tier >= 2
+//   verificationTier: number | null  // optional: backend verification tier (1=light spot-check, 2+=heavier)
+//              // When present and >= 2, forces adversarialReview=true and sets repairCap from policy
+//              // (mirrors driver/verification_policy.py — source of truth is Python, JS must match exactly).
+//              // Tier 1 (or absent): uses repairCap and adversarialReview values as-is (backward-compatible).
+//              // Tier 2: repair_cap=2, require_adversarial_review=true (Codex/weaker backends).
+//              // Absent => defaults to 1 (Claude Code, high-accuracy path).
 //   brake:      { checkCmd: string, cwd?: string } | null  // optional kill-switch/cost-ceiling
 //              // gate run BEFORE any worker spawns (wave-26 critique fix — wires .HALT/cost_ceiling
 //              // into DISPATCH, not just the backup daemon). Aborts the whole wave if engaged.
@@ -49,7 +55,8 @@
 //                                       // (reads actual code, constructs breaking scenarios).
 //                                       // Returns {holds:boolean, breakingScenario:string} per item;
 //                                       // items where holds=false are collected as contractFindings.
-//                                       // Absent => unchanged behavior (backward-compatible).
+//                                       // OVERRIDDEN to true if verificationTier >= 2.
+//                                       // Absent => unchanged behavior (backward-compatible, unless verificationTier overrides).
 //   adversarialReviewMode: 'blocking' | 'concurrent-note' | null  // optional (LEVER 2, wall-clock)
 //                                       // 'blocking' (default): run the refutation INLINE before return (current behavior).
 //                                       // 'concurrent-note': do NOT await adversarialReview before signaling merge-readiness —
@@ -86,15 +93,39 @@ if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = {} } }  /
 const WORK = A.workDir
 const TEST = A.testCmd
 const ITEMS = Array.isArray(A.items) ? A.items : []
-const CAP = typeof A.repairCap === 'number' ? A.repairCap : 1
 const HINT = A.contractHint || `Read the shared contract/spec files in ${WORK} before implementing.`
 const CEILING = A.ceiling ? { tokens: A.ceiling.tokens, recheckBrake: A.ceiling.recheckBrake } : null
-const ADVERSARIAL_REVIEW = !!A.adversarialReview
+const TIMEBOX_MINUTES = typeof A.agentTimeboxNote === 'number' ? A.agentTimeboxNote : null
+
+// Verification tier policy: pure function mapping tier -> {repair_cap, require_adversarial_review}.
+// source of truth: driver/verification_policy.py — JS numbers MUST match Python exactly.
+// See spike-multitool-portability.md Section 4.3 for the design rationale.
+function tierPolicy(tier) {
+  tier = typeof tier === 'number' ? tier : 1
+  if (tier === 1) {
+    return { repair_cap: 1, require_adversarial_review: false }
+  } else if (tier === 2) {
+    return { repair_cap: 2, require_adversarial_review: true }
+  } else if (tier === 3) {
+    return { repair_cap: 2, require_adversarial_review: true }
+  } else if (tier === 4) {
+    return { repair_cap: 3, require_adversarial_review: true }
+  } else {
+    log(`WARNING: unknown verification tier ${tier}, defaulting to tier 1`)
+    return { repair_cap: 1, require_adversarial_review: false }
+  }
+}
+
+// Parse verification tier (default 1). When tier >= 2, override manifest knobs with tier policy.
+const VERIFICATION_TIER = typeof A.verificationTier === 'number' ? A.verificationTier : 1
+const tierPolicySetting = tierPolicy(VERIFICATION_TIER)
+const CAP = VERIFICATION_TIER >= 2 ? tierPolicySetting.repair_cap : (typeof A.repairCap === 'number' ? A.repairCap : 1)
+const ADVERSARIAL_REVIEW = VERIFICATION_TIER >= 2 ? true : !!A.adversarialReview
 // LEVER 2 (wall-clock): adversarialReview blocking vs concurrent-note. Default 'blocking' = current inline
 // behavior (findings produced before return). 'concurrent-note' defers the refutation so the orchestrator
 // can kick CI immediately and run adversarialReview in parallel, gating MERGE (not CI) on contractFindings.
 const ADVERSARIAL_REVIEW_MODE = A.adversarialReviewMode === 'concurrent-note' ? 'concurrent-note' : 'blocking'
-const TIMEBOX_MINUTES = typeof A.agentTimeboxNote === 'number' ? A.agentTimeboxNote : null
+
 // Helper to build timebox line for agent prompts (latency fix #2).
 function timeboxLine() {
   if (!TIMEBOX_MINUTES) return ''
