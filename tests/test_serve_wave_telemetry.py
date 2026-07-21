@@ -15,6 +15,7 @@ tests/test_api_state.py).
 Run: python -m unittest tests.test_serve_wave_telemetry
 """
 import http.client
+from datetime import datetime, timezone, timedelta
 import importlib.util
 import json
 import os
@@ -66,25 +67,29 @@ FIXTURE_LEDGER = """| timestamp | agent_type | model | duration | tokens_in | to
 | 2026-07-17T10:10:00 | Agent | claude-sonnet-4-5 | 15 | 800 | 600 | FAILED |
 """
 
+# Clock-derived so fixtures never rot (the >24h staleness gate would reject a hardcoded old ts)
+_FRESH_TS = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+_STALE_TS = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 # Fixture orchestrator-status.json (fresh, <24h)
-FIXTURE_ORCH_STATUS_FRESH = """{
+FIXTURE_ORCH_STATUS_FRESH = ("""{
   "id": "main",
   "role": "orchestrator",
   "parent_id": null,
   "activity": "dispatching wave-rc.3",
   "phase": "wave-rc.3: dispatch",
-  "updated_at": "2026-07-17T10:00:00Z"
-}"""
+  "updated_at": "__TS__"
+}""".replace("__TS__", _FRESH_TS))
 
 # Fixture orchestrator-status.json (stale, >24h)
-FIXTURE_ORCH_STATUS_STALE = """{
+FIXTURE_ORCH_STATUS_STALE = ("""{
   "id": "main",
   "role": "orchestrator",
   "parent_id": null,
   "activity": "old activity",
   "phase": "wave-rc.2",
-  "updated_at": "2026-07-16T09:00:00Z"
-}"""
+  "updated_at": "__TS__"
+}""".replace("__TS__", _STALE_TS))
 
 
 def load_serve(fixture_root, extra_env=None):
@@ -419,8 +424,8 @@ class OrchestratorStatusSource(WaveTelemetryFixtureCase):
   "role": "orchestrator",
   "activity": "verifying wave-26",
   "phase": "wave-26-verify",
-  "updated_at": "2026-07-17T10:00:00Z"
-}"""
+  "updated_at": "%s"
+}""" % _FRESH_TS
         (self.fixture_root / "state" / "orchestrator-status.json").write_text(
             orch_status, encoding="utf-8")
 
