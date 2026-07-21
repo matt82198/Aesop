@@ -140,12 +140,43 @@ sys.path.insert(0, "driver")           # bare imports within the domain
 
 from claude_code_driver import ClaudeCodeDriver
 from codex_driver import CodexDriver
+from verification_policy import verification_policy
 
 for driver in (ClaudeCodeDriver(), CodexDriver()):
     caps = driver.probe_capabilities()
     print(caps.summary())              # ASCII one-liner for logs/dashboards
     print("worker model ->", driver.resolve_model("worker"))
+    
+    # Map the backend's verification tier to wave manifest settings.
+    # The wave template mirrors this mapping exactly (JS function tierPolicy).
+    policy = verification_policy(caps)
+    print("verification tier:", caps.recommended_verification_tier)
+    print("  repair_cap:", policy['repair_cap'])
+    print("  require_adversarial_review:", policy['require_adversarial_review'])
 ```
+
+### Wiring verification tier into a wave manifest
+
+When building a manifest for `wave-flat-dispatch.template.mjs`, include the
+backend's `verificationTier` to enforce its policy:
+
+```python
+caps = driver.probe_capabilities()
+policy = verification_policy(caps)
+
+manifest = {
+    "verificationTier": caps.recommended_verification_tier,
+    # ... other manifest fields
+    # When verificationTier >= 2, the template will:
+    #   - Force adversarialReview=true (overrides manifest setting)
+    #   - Set repairCap from tier policy (overrides manifest repairCap)
+    # Tier 1 (or absent) uses manifest knobs as-is (backward-compatible).
+}
+```
+
+The wave template enforces the same `tierPolicy()` mapping (in pure JS) so the
+Python driver and JS wave always agree. See `skills/buildsystem/wave-flat-dispatch.template.mjs`
+for the complete mapping and template arguments.
 
 Run the contract tests:
 
