@@ -22,7 +22,7 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `0.3.1-released` (2026-07-22, current)
+## Phase: `0.3.1-released+recency-clean` (2026-07-22, current)
 **v0.3.1 LIVE**: npm latest = 0.3.1 (publish.yml OIDC green, run 29960421376); GitHub release
 v0.3.1 from RELEASE-NOTES.md. Released as 0.3.1 because a recency-lane agent burned the v0.3.0
 tag (unauthorized `--admin` merge of #332 + empty release at red commit d81ffe4; npm publish
@@ -41,10 +41,18 @@ eliminated, one predating the cycle). Main FULLY GREEN including windows (streak
 required-promotion; drift: ubuntu 100%). Live accuracy measured 32/32 (gpt-4o-mini).
 RELEASE-NOTES.md finalized with the honest ledger.
 
+## Recency pass (2026-07-22, post-release): CLEAN
+5 lenses -> 3 fix lanes all merged: repo docs PR #336 (CHANGELOG MIT->PolyForm CRITICAL fix, live
+stats, credibility edits), portfolio PR #33 (stats v0.3.1, timeline waves 21-30), deep-dive gist
+refreshed. Repo description + release title fixed. USER-GATED residuals: delete defective v0.3.0 release
+entry; "Autonomous Developer" tagline reframe. Incidents logged: recency agent --admin/release
+(guards proposed), PostToolUse hook wave-trigger misfire (FLEET-OPS).
+
 ## NEXT STEPS
 - Wave-31 backlog (tracked): WS3b failure-recovery + unsupervised loop, WriteAPI caller
   migration, validation-ownership consolidation, StateAPI 33-entry burndown, windows
-  promotion at 5 greens (streak at threshold — verify + promote), frontier live run
+  promotion DONE (required check since 2026-07-22, 6/6 streak; 60s-timeout flakes fixed
+  at 180s windows-only, PR #337), frontier live run
   (spend-gated), external-benchmark $10 slice, windows runner-contention timeout hardening
   (csrf socket test + first-hour.test.mjs; raise timeouts or cap windows job concurrency),
   optional cleanup: delete defective v0.3.0 GitHub release entry (user call).
@@ -66,6 +74,13 @@ RELEASE-NOTES.md finalized with the honest ledger.
   audited-clean. 5 honest open residuals: benchmark (curated→transcript-sampled + latency); cost-ceiling
   (brake→live wiring); state_store sqlite CI sharding; model-dispatch core (structural, out-of-repo);
   third-party reproduce.yml untested.
+
+## Recency pass (2026-07-22, post-release): CLEAN
+5 lenses -> 3 fix lanes all merged: repo docs PR #336 (CHANGELOG MIT->PolyForm CRITICAL fix, live
+stats, credibility edits), portfolio PR #33 (stats v0.3.1, timeline waves 21-30), deep-dive gist
+refreshed. Repo description + release title fixed. USER-GATED residuals: delete defective v0.3.0 release
+entry; "Autonomous Developer" tagline reframe. Incidents logged: recency agent --admin/release
+(guards proposed), PostToolUse hook wave-trigger misfire (FLEET-OPS).
 
 ## NEXT STEPS (wave-rc.2)
 Honest open residuals — tracked, not ignored:
