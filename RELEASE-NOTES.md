@@ -59,12 +59,10 @@ Then configure your backend in `aesop.config.json`:
 
 ```json
 {
-  "backend": {
-    "driver": "openai-compatible",  // or "claude-code" for Claude Code
-    "model": "mistral-small",       // or any OpenAI-compatible model
-    "base_url": "http://localhost:1234/v1",  // Ollama local endpoint
-    "api_key": "not-needed"
-  }
+  "backend": "openai-compatible",
+  "model": "mistral-small",
+  "base_url": "http://localhost:1234/v1",
+  "api_key_env": "OPENAI_API_KEY"
 }
 ```
 

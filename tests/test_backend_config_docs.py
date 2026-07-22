@@ -105,6 +105,16 @@ class TestBackendConfigDocs(unittest.TestCase):
         # (the general aesop.config.json example and backend examples)
         self.assertGreaterEqual(len(blocks), 2, f"Expected at least 2 JSON blocks, found {len(blocks)}")
 
+    def _get_doc_files(self) -> list[Path]:
+        """Return list of documentation files to validate config snippets from."""
+        repo_root = Path(__file__).parent.parent
+        docs = [
+            repo_root / "docs" / "INSTALL.md",
+            repo_root / "RELEASE-NOTES.md",
+            repo_root / "CHANGELOG.md",
+        ]
+        return [d for d in docs if d.exists()]
+
     def test_backend_config_snippets_from_install_md(self):
         """Load and validate every JSON config snippet from INSTALL.md.
 
@@ -140,6 +150,60 @@ class TestBackendConfigDocs(unittest.TestCase):
                     self.fail(
                         f"Backend config snippet at line {block['line_num']} failed validation:\n"
                         f"Config: {json.dumps(block['json_obj'], indent=2)}\n"
+                        f"Error: {e}"
+                    )
+
+    def test_backend_config_snippets_from_all_docs(self):
+        """Extract and validate backend config snippets from INSTALL.md, RELEASE-NOTES.md, and CHANGELOG.md.
+
+        This test ensures that all documentation that mentions backend configuration
+        has valid, round-trippable examples that match the implementation schema.
+        Prevents future doc/code schema drift.
+        """
+        doc_files = self._get_doc_files()
+        self.assertGreater(len(doc_files), 0, "No documentation files found to validate")
+
+        found_configs = []
+
+        # Collect backend configs from all doc files
+        for doc_path in doc_files:
+            md_content = doc_path.read_text(encoding='utf-8')
+            blocks = extract_json_blocks_from_markdown(md_content)
+
+            # Filter to blocks with 'backend' key
+            backend_blocks = [b for b in blocks if isinstance(b['json_obj'], dict)
+                              and 'backend' in b['json_obj']]
+
+            for block in backend_blocks:
+                found_configs.append({
+                    'file': doc_path.name,
+                    'line': block['line_num'],
+                    'config': block['json_obj']
+                })
+
+        self.assertGreater(len(found_configs), 0,
+                          "No backend configuration examples found in documentation files")
+
+        # Validate each config can be loaded and is correct
+        for item in found_configs:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config_path = Path(tmpdir) / "aesop.config.json"
+                config_path.write_text(json.dumps(item['config']), encoding='utf-8')
+
+                try:
+                    loaded = load_backend_config(str(config_path))
+
+                    # Verify backend field
+                    self.assertIn('backend', loaded,
+                        f"Loaded config from {item['file']}:{item['line']} missing 'backend' field")
+                    self.assertIsInstance(loaded['backend'], str,
+                        f"'backend' must be string in {item['file']}:{item['line']}")
+                    self.assertIn(loaded['backend'], ('claude', 'codex', 'openai-compatible'),
+                        f"Invalid backend '{loaded['backend']}' in {item['file']}:{item['line']}")
+                except Exception as e:
+                    self.fail(
+                        f"Backend config in {item['file']}:{item['line']} failed round-trip validation:\n"
+                        f"Config: {json.dumps(item['config'], indent=2)}\n"
                         f"Error: {e}"
                     )
 
