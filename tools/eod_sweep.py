@@ -179,12 +179,23 @@ def append_to_buildlog(buildlog_path, verdict_line, timestamp_str=None):
         verdict_line: The verdict line to append (e.g., "EOD-SWEEP: SAFE").
         timestamp_str: Optional timestamp string (format: YYYY-MM-DD HH:MM).
                       If None, timestamp is omitted from the entry.
+
+    Raises:
+        OSError: If file operations fail (permission denied, locked file, etc.).
     """
-    buildlog_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        buildlog_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # Parent directory creation failed; re-raise with context
+        raise OSError(f"Failed to create parent directory for BUILDLOG: {e}") from e
 
     # Create header if file doesn't exist
-    if not buildlog_path.exists():
-        buildlog_path.write_text("# Build Log (append-only)\n")
+    try:
+        if not buildlog_path.exists():
+            buildlog_path.write_text("# Build Log (append-only)\n")
+    except OSError as e:
+        # File creation failed; re-raise with context
+        raise OSError(f"Failed to create BUILDLOG file: {e}") from e
 
     # Build entry line with optional timestamp
     if timestamp_str:
@@ -192,9 +203,23 @@ def append_to_buildlog(buildlog_path, verdict_line, timestamp_str=None):
     else:
         entry_line = f"### {verdict_line}"
 
-    # Append to BUILDLOG
-    with open(buildlog_path, "a", encoding="utf-8") as f:
-        f.write(entry_line + "\n")
+    # Append to BUILDLOG with retry logic for Windows file locking
+    max_retries = 3
+    retry_delay = 0.1  # seconds
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            with open(buildlog_path, "a", encoding="utf-8") as f:
+                f.write(entry_line + "\n")
+            return
+        except OSError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+
+    # All retries failed
+    raise OSError(f"Failed to append to BUILDLOG after {max_retries} attempts: {last_error}") from last_error
 
 
 def main():
@@ -296,7 +321,11 @@ def main():
         buildlog_path = state_dir / "BUILDLOG.md"
 
     if buildlog_path:
-        append_to_buildlog(buildlog_path, verdict_line, args.timestamp)
+        try:
+            append_to_buildlog(buildlog_path, verdict_line, args.timestamp)
+        except OSError as e:
+            # Log error but don't fail the verdict — exit code depends on findings, not BUILDLOG
+            print(f"WARNING: Failed to append to BUILDLOG: {e}", file=sys.stderr)
 
     sys.exit(exit_code)
 

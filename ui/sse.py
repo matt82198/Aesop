@@ -165,14 +165,14 @@ def collector_loop(stop_event):
             # Wave-19: Gate data section on mtimes+sizes to avoid expensive file reads every tick.
             # Only regenerate the snapshot if one of the underlying log files changed.
             try:
-                backup_log_stat = config.BACKUP_LOG.stat() if config.BACKUP_LOG.exists() else None
+                backup_log_stat = config.BACKUP_LOG.stat() if config.BACKUP_LOG and config.BACKUP_LOG.exists() else None
                 backup_log_mtime = backup_log_stat.st_mtime if backup_log_stat else None
                 backup_log_size = backup_log_stat.st_size if backup_log_stat else None
             except OSError:
                 backup_log_mtime = None
                 backup_log_size = None
             try:
-                alerts_log_stat = config.ALERTS_LOG.stat() if config.ALERTS_LOG.exists() else None
+                alerts_log_stat = config.ALERTS_LOG.stat() if config.ALERTS_LOG and config.ALERTS_LOG.exists() else None
                 alerts_log_mtime = alerts_log_stat.st_mtime if alerts_log_stat else None
                 alerts_log_size = alerts_log_stat.st_size if alerts_log_stat else None
             except OSError:
@@ -236,7 +236,7 @@ def collector_loop(stop_event):
 
             # Emit cost section (mtime+size-gated on the outcomes ledger)
             try:
-                cost_stat = config.LEDGER_FILE.stat() if config.LEDGER_FILE.exists() else None
+                cost_stat = config.LEDGER_FILE.stat() if config.LEDGER_FILE and config.LEDGER_FILE.exists() else None
                 cost_mtime = cost_stat.st_mtime if cost_stat else None
                 cost_size = cost_stat.st_size if cost_stat else None
             except OSError:
