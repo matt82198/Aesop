@@ -43,9 +43,8 @@ import unittest
 import sys
 from pathlib import Path
 
-# Add fixture module to path
-FIXTURE_DIR = Path(__file__).parent.parent / "fixture_weak_target"
-sys.path.insert(0, str(FIXTURE_DIR))
+# Add current directory to path (target is in same dir)
+sys.path.insert(0, str(Path(__file__).parent))
 
 import fixture_weak_target as target
 
@@ -89,9 +88,8 @@ import unittest
 import sys
 from pathlib import Path
 
-# Add fixture module to path
-FIXTURE_DIR = Path(__file__).parent.parent / "fixture_strong_target"
-sys.path.insert(0, str(FIXTURE_DIR))
+# Add current directory to path (target is in same dir)
+sys.path.insert(0, str(Path(__file__).parent))
 
 import fixture_strong_target as target
 
@@ -240,8 +238,8 @@ class TestMutationTestCLI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
 
-            target_file = tmpdir / "fixture_test_target.py"
-            test_file = tmpdir / "test_fixture_test.py"
+            target_file = tmpdir / "fixture_strong_target.py"
+            test_file = tmpdir / "test_fixture_strong.py"
 
             target_file.write_text(STRONG_TARGET_SOURCE, encoding="utf-8")
             test_file.write_text(STRONG_TEST_SOURCE, encoding="utf-8")
@@ -274,8 +272,8 @@ class TestMutationTestCLI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
 
-            target_file = tmpdir / "fixture_cli_target.py"
-            test_file = tmpdir / "test_fixture_cli.py"
+            target_file = tmpdir / "fixture_weak_target.py"
+            test_file = tmpdir / "test_fixture_weak.py"
 
             target_file.write_text(WEAK_TARGET_SOURCE, encoding="utf-8")
             test_file.write_text(WEAK_TEST_SOURCE, encoding="utf-8")
@@ -337,6 +335,101 @@ class TestMutationExtraction(unittest.TestCase):
         source = "x = ("
         mutations = mutation_test.extract_mutations(source)
         self.assertEqual(len(mutations), 0)
+
+
+# Fixture: A target with a function that always fails its test
+BROKEN_BASELINE_TARGET_SOURCE = '''
+def broken_function():
+    """This function has logic that doesn't match its test."""
+    return True
+'''
+
+# Fixture: A test that fails even on the original unmutated code (baseline fails)
+BROKEN_BASELINE_TEST_SOURCE = '''
+import unittest
+import sys
+from pathlib import Path
+
+# Add current directory to path (target is in same dir)
+sys.path.insert(0, str(Path(__file__).parent))
+
+import fixture_broken_baseline as target
+
+class TestBrokenBaseline(unittest.TestCase):
+    """Tests that fail at baseline (test suite is broken)."""
+
+    def test_broken_function_fails(self):
+        """This test fails even on unmutated code."""
+        # The function returns True but test expects False
+        # This simulates a broken test suite that doesn't work in sandbox
+        self.assertFalse(target.broken_function())
+
+if __name__ == "__main__":
+    unittest.main()
+'''
+
+
+class TestMutationTestBrokenBaseline(unittest.TestCase):
+    """Test mutation_test handles broken baseline (test fails on unmutated code)."""
+
+    def test_baseline_fails_returns_error_result(self):
+        """When baseline test fails, tool should return error result with killed=0 and survived=0."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            target_file = tmpdir / "fixture_broken_baseline.py"
+            test_file = tmpdir / "test_fixture_broken_baseline.py"
+
+            target_file.write_text(BROKEN_BASELINE_TARGET_SOURCE, encoding="utf-8")
+            test_file.write_text(BROKEN_BASELINE_TEST_SOURCE, encoding="utf-8")
+
+            # Run mutation test
+            result = mutation_test.run(str(target_file), str(test_file))
+
+            # Should have error field
+            self.assertIn("error", result, "Expected error field in result when baseline fails")
+
+            # Should report baseline failure
+            self.assertIn("baseline", result.get("error", "").lower(),
+                         "Expected error message to mention baseline")
+
+            # killed and survived should be zeroed
+            self.assertEqual(result["killed"], 0,
+                           "Expected killed=0 when baseline fails")
+            self.assertEqual(result["survived"], 0,
+                           "Expected survived=0 when baseline fails")
+
+            # mutations should be empty
+            self.assertEqual(result["mutations"], [],
+                           "Expected empty mutations when baseline fails")
+
+    def test_baseline_fails_cli_returns_nonzero(self):
+        """When baseline test fails, CLI should return nonzero exit code."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            target_file = tmpdir / "fixture_broken_baseline.py"
+            test_file = tmpdir / "test_fixture_broken_baseline.py"
+
+            target_file.write_text(BROKEN_BASELINE_TARGET_SOURCE, encoding="utf-8")
+            test_file.write_text(BROKEN_BASELINE_TEST_SOURCE, encoding="utf-8")
+
+            # Run CLI
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "tools" / "mutation_test.py"),
+                    "--target", str(target_file),
+                    "--test", str(test_file),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            # Should exit nonzero when baseline fails
+            self.assertNotEqual(result.returncode, 0,
+                              "Expected nonzero exit code when baseline fails")
 
 
 if __name__ == "__main__":

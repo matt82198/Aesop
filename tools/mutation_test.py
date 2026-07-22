@@ -314,6 +314,16 @@ def run(target_module_path: str, test_module_path: str) -> Dict[str, Any]:
         baseline_exit, _ = run_tests(str(temp_test), str(tmpdir))
         baseline_passes = (baseline_exit == 0)
 
+        # Guard: if baseline tests fail, the results are invalid.
+        # Every mutation would also fail, giving a false-perfect kill rate.
+        if not baseline_passes:
+            return {
+                "killed": 0,
+                "survived": 0,
+                "mutations": [],
+                "error": "baseline tests fail in sandbox — results invalid",
+            }
+
         killed = 0
         survived = 0
         survived_mutations = []
@@ -380,7 +390,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if "error" in result:
             print(f"\nError: {result['error']}", file=sys.stderr)
 
-    return 0  # Exit 0 always (advisory)
+    # Exit nonzero if there's a baseline error (tool/setup failure).
+    # Normal results (mutations/survivors) exit 0 (advisory).
+    if "error" in result:
+        return 1
+    return 0  # Exit 0 always (advisory) for normal results
 
 
 if __name__ == "__main__":
