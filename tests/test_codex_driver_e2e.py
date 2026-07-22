@@ -249,6 +249,42 @@ class TestCodexDriverOversizedFiles(unittest.TestCase):
             self.assertEqual(result.status, WORKER_FAILED)
             self.assertIn("exceed context budget", result.error)
 
+    def test_escape_overhead_accounting(self):
+        """Raw bytes < budget, but post-escape bytes > budget (accounting fix).
+
+        File content with many control characters (newlines, quotes) expands
+        significantly when JSON-escaped. The accounting must measure POST-ESCAPE
+        bytes, not raw bytes, to fail safe.
+        """
+        # File: 100 x's + 20 newlines = 120 bytes raw.
+        # In JSON, each newline (\n in source) becomes \\n (2 bytes in JSON),
+        # plus JSON structure overhead: {"path":"file.py","contents":"..."}.
+        # Post-escape total: approximately 120 + 20 (extra from escape) + 26 (structure) = 166 bytes.
+        # Budget of 150 should reject this (raw 120 passes old code, escaped 166 should fail).
+        content = "x" * 100 + "\n" * 20  # 120 bytes raw
+
+        fake_transport = FakeTransport(response=make_response({"files": [], "summary": "", "done": False}))
+        # Budget is between raw size (120) and post-escape size (~166).
+        driver = CodexDriver(transport=fake_transport, max_owned_bytes=150)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir).joinpath("file.py").write_text(content)
+
+            request = WorkerRequest(
+                prompt="Fix it",
+                owned_files=("file.py",),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+
+            # Should fail pre-dispatch because post-escape size exceeds budget.
+            # Transport should never be called (fail-safe check).
+            self.assertFalse(result.ok, "Should fail due to escape overhead")
+            self.assertEqual(result.status, WORKER_FAILED)
+            self.assertIn("exceed context budget", result.error)
+            # Verify error mentions post-escape accounting.
+            self.assertIn("post-escape", result.error)
+
 
 class TestCodexDriverE2E(unittest.TestCase):
     """The core Phase-2 thesis: RED stub + model fix + orchestrator verification."""
