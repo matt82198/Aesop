@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawn } from 'node:child_process';
+import { acquireLock, releaseLock } from '../tools/lock.mjs';
 
 // Helper: create temporary directory for each test
 function createTempDir() {
@@ -326,7 +327,17 @@ test('concurrent race: emitProposal append + accept move do not lose data (real 
 
     // Small delay to ensure accept starts reading
     await new Promise(r => setTimeout(r, 50));
-    fs.appendFileSync(proposalsFile, proposal2, 'utf8');
+    // Serialize the append through the SAME lock the real emitProposal uses
+    // (collect-signals.mjs emitProposal acquires lock.mjs before writing). A
+    // raw append can land inside accept's read->rewrite window and be clobbered
+    // by its rename on ANY OS — that is a lost update the lock exists to
+    // prevent, and unlocked writers are outside the serialization contract.
+    const appendLock = acquireLock(proposalsFile);
+    try {
+      fs.appendFileSync(proposalsFile, proposal2, 'utf8');
+    } finally {
+      releaseLock(appendLock);
+    }
 
     // Wait for accept to terminate (listener already attached above).
     await acceptDone;
