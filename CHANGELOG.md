@@ -51,7 +51,7 @@ Critical hardening round integrated after 0.2.0 release-artifact preparation (fe
 **Pre-Push & CI Hardening:**
 - **Pre-push delete-refspec hardening** (fix/prepush-delete-refspecs): Enforce branch-protection policy on force-delete and fast-forward-only mutations; prevent refspec conflicts from stalling the merge train.
 - **Empty-stdin handling** (fix/prepush-delete-refspecs): Guard pre-push hook against stalled CI merge-wait (empty stdin → timeout → fail-closed block).
-- **Cost-ceiling fail-closed** (fix/cost_ceiling): Per-wave spend ceiling now enforced at dispatch time; fails CLOSED on file/git read errors. **Caveat:** enforced for backends reporting live token spend via `AgentDriver.get_tokens_spent()`; the Claude Code reference driver's ledger integration is in progress (currently returns None, limiting enforcement to pre-dispatch budget checks only).
+- **Cost-ceiling fail-closed** (fix/cost_ceiling): Per-wave spend ceiling now enforced at dispatch time; fails CLOSED on file/git read errors. **Caveat:** Enforced at every dispatch gate on ALL backends: drivers reporting live token spend are metered directly; drivers that cannot observe per-instance spend (the Claude Code reference driver, by honest contract) return None and the ceiling reads the outcomes ledger itself with proper period windowing.
 
 ### Documentation
 - **Multi-model configuration guide** (wave-32): docs/INSTALL.md now includes "Using Non-Claude Backends" section with Ollama example, verification-tier table, and troubleshooting.

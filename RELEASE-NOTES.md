@@ -39,7 +39,7 @@ Hardening round integrated after release-artifact preparation (fe6bb04):
 
 **System & Daemon Hardening:**
 - **Daemon fail-closed on lock errors** (fix/daemons-lock-portability): Pre-push and coordination daemons now fail CLOSED on file-write errors or lock-acquisition timeouts, preventing silently-skipped enforcements; portability fixes for CONDUCTOR_ROOT.
-- **Cost-ceiling fail-closed** (fix/cost_ceiling): Enforced at dispatch for backends reporting live token spend; the Claude Code reference driver's ledger integration is in progress (currently returns None, limiting enforcement scope to pre-dispatch budget checks).
+- **Cost-ceiling fail-closed** (fix/cost_ceiling): Enforced at every dispatch gate on ALL backends: drivers reporting live token spend are metered directly; drivers that cannot observe per-instance spend (the Claude Code reference driver, by honest contract) return None and the ceiling reads the outcomes ledger itself with proper period windowing.
 
 **Data & Audit Security:**
 - **Audit log JSON escaping** (fix/audit-log-repo-escape): Escape repo_name and other fields in audit-log JSON to block injection attacks on durable audit trail.
