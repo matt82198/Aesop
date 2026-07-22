@@ -363,92 +363,18 @@ class TestVerificationThesisEncoded(unittest.TestCase):
 
 
 class TestClaudeCodeDriverGetTokensSpent(unittest.TestCase):
-    """Test ClaudeCodeDriver.get_tokens_spent() reads from fleet ledger.
+    """Test ClaudeCodeDriver.get_tokens_spent() contract: returns None.
 
-    This is a TDD test for the cost-ceiling fix: get_tokens_spent() should
-    read OUTCOMES-LEDGER.md and return the sum of tokens_in+tokens_out,
-    returning None only when the ledger is truly absent.
+    The driver does not observe per-instance spend; cost enforcement is delivered
+    by cost_ceiling.check() performing its own windowed ledger fallback when
+    driver returns None.
     """
 
-    def setUp(self):
-        """Create a temporary state directory for each test."""
-        self.fixture_root = Path(tempfile.mkdtemp(prefix="aesop-get-tokens-test-"))
-        self.state_dir = self.fixture_root / "state"
-        self.state_dir.mkdir(parents=True)
-        self._saved_env_state_root = os.environ.get("AESOP_STATE_ROOT")
-        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
-
-    def tearDown(self):
-        """Restore environment and clean up temporary directory."""
-        if self._saved_env_state_root is not None:
-            os.environ["AESOP_STATE_ROOT"] = self._saved_env_state_root
-        else:
-            os.environ.pop("AESOP_STATE_ROOT", None)
-        shutil.rmtree(self.fixture_root, ignore_errors=True)
-
-    def _write_ledger(self, rows):
-        """Write a fixture OUTCOMES-LEDGER.md file.
-
-        Args:
-            rows: list of (tokens_in, tokens_out) tuples
-
-        Returns:
-            Path to the ledger file
-        """
-        ledger_dir = self.state_dir / "ledger"
-        ledger_dir.mkdir(parents=True, exist_ok=True)
-        ledger_file = ledger_dir / "OUTCOMES-LEDGER.md"
-        header = (
-            "| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n"
-            "|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n"
-        )
-        lines = [header]
-        for ti, to in rows:
-            lines.append(
-                f"| 2026-07-16T00:00:00Z | build | haiku | 10 | {ti} | {to} | OK | build | 26 |\n"
-            )
-        ledger_file.write_text("".join(lines), encoding="utf-8")
-        return ledger_file
-
-    def test_get_tokens_spent_with_empty_ledger_returns_none(self):
-        """When ledger doesn't exist, get_tokens_spent() returns None."""
+    def test_get_tokens_spent_returns_none(self):
+        """Contract: get_tokens_spent() always returns None."""
         driver = ClaudeCodeDriver()
         result = driver.get_tokens_spent()
         self.assertIsNone(result)
-
-    def test_get_tokens_spent_with_single_row_ledger(self):
-        """With a single row (1000 in, 2000 out), returns 3000."""
-        self._write_ledger([(1000, 2000)])
-        driver = ClaudeCodeDriver()
-        result = driver.get_tokens_spent()
-        self.assertEqual(result, 3000)
-
-    def test_get_tokens_spent_with_multiple_rows(self):
-        """With multiple rows, sums all tokens_in+tokens_out."""
-        # Row 1: 100 in, 200 out = 300 total
-        # Row 2: 150 in, 250 out = 400 total
-        # Row 3: 50 in, 100 out = 150 total
-        # Total: 850
-        self._write_ledger([(100, 200), (150, 250), (50, 100)])
-        driver = ClaudeCodeDriver()
-        result = driver.get_tokens_spent()
-        self.assertEqual(result, 850)
-
-    def test_get_tokens_spent_with_zero_spend_rows(self):
-        """Rows with zero tokens return 0 (not None)."""
-        self._write_ledger([(0, 0), (0, 0)])
-        driver = ClaudeCodeDriver()
-        result = driver.get_tokens_spent()
-        self.assertEqual(result, 0)
-
-    def test_get_tokens_spent_returns_int_not_none_for_existing_ledger(self):
-        """The key invariant: return value is int (0 or positive), never None,
-        when ledger exists — even if spend is 0."""
-        self._write_ledger([(10, 20)])
-        driver = ClaudeCodeDriver()
-        result = driver.get_tokens_spent()
-        self.assertIsInstance(result, int)
-        self.assertIsNotNone(result)
 
 
 if __name__ == "__main__":
