@@ -5,9 +5,14 @@ This module provides get_cost_summary() which parses the outcomes ledger
 markdown table and returns per-model, per-day, and overall cost/token aggregations
 with optional pricing estimates.
 
-Ledger format (markdown table):
-  | ISO timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict |
-  | 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+Ledger format (markdown table, supports both 7-column and 9-column):
+  Legacy 7-column:
+    | ISO timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict |
+    | 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+
+  Extended 9-column (phase/wave optional):
+    | ISO timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict | phase | wave |
+    | 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK | build | 7 |
 
 CostSummary JSON shape (returned by get_cost_summary()):
   {
@@ -69,10 +74,11 @@ def _validate_ledger_format(lines):
     Checks the first non-empty, non-separator, non-header line to ensure it looks like a data row
     (has ISO timestamp, agent type, model, numeric fields, verdict). Returns (is_valid, error_message).
 
-    Expected format:
-      | ISO timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict |
-      |---|---|---|---|---|---|---|
-      | 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+    Accepts two formats:
+      - Legacy 7-column: | timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict |
+      - Extended 9-column: | timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict | phase | wave |
+
+    Optional trailing columns (phase, wave) are ignored during validation.
     """
     for line in lines:
         line = line.strip()
@@ -91,11 +97,13 @@ def _validate_ledger_format(lines):
 
         parts = [p.strip() for p in line.split('|')]
 
-        # Should have 9 parts: [empty, col1, col2, col3, col4, col5, col6, col7, empty]
-        if len(parts) != 9:
-            return False, f"Expected 7 columns, got {len(parts) - 2}"
+        # Accept both 7-column (9 parts) and 9-column (11 parts) formats
+        # 7 columns: ['', col1, col2, col3, col4, col5, col6, col7, '']
+        # 9 columns: ['', col1, col2, col3, col4, col5, col6, col7, col8, col9, '']
+        if len(parts) < 9:
+            return False, f"Too few columns, got {len(parts) - 2} (expected at least 7)"
 
-        # Extract columns and validate types
+        # Extract core columns (first 7 required columns)
         try:
             timestamp = parts[1]
             agent_type = parts[2]
