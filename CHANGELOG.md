@@ -5,6 +5,8 @@ All notable changes to Aesop are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+**Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
+
 ## [0.3.1] - 2026-07-22 - Waves 28-31
 
 ### Added
@@ -373,6 +375,6 @@ This is the first public release of Aesop, a clean-room source-available impleme
 - Legacy TUI interface (bash + jq)
 - Configuration framework and examples
 - Comprehensive documentation and guides
-- MIT License (© 2026 Matt Culliton)
+- PolyForm Strict License 1.0.0 (source-available, © 2026 Matt Culliton)
 
 Aesop is production-ready and implements the complete cardinal rules for cost-optimized, durable multi-agent coordination.

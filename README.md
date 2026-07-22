@@ -48,7 +48,7 @@ python tools/health_score.py
 ```
 Outputs a scorecard of system readiness; --json for parsing.
 
-**Self-healing daemon** — Runs every 150s: backs up work, scans secrets, detects drift:
+**Self-monitoring daemon** — Runs every 150s: backs up work, scans secrets, detects drift:
 ```bash
 npx @matt82198/aesop watch
 ```
@@ -59,6 +59,10 @@ Pre-push hook blocks leaks. Heartbeat signals liveness; monitor auto-detects sta
 python tools/secret_scan.py --staged   # Blocks push if leak detected
 ```
 Exits with failure on file-read errors (not silently passing). CI validates every merge.
+
+**Parallel test battery** — Run all four test harnesses concurrently with isolated logs and enforced timeouts (`tools/test_battery.py` — ~5.4 min vs ~10 serial).
+
+**Windows CI green** — Full parity support on Windows-latest GitHub Actions: promoted to a required check after 6 consecutive green main runs.
 
 ## Proof Numbers
 
@@ -82,15 +86,18 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 223 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 880 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 10 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 244 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1065 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 11 days <!-- metrics-verified: self_stats.py (git log) --> |
 | Waves | 30 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 161,064 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 500 <!-- metrics-verified: self_stats.py (git log) --> |
-| Distinct Co-authors | 9 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 185,174 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 541 <!-- metrics-verified: self_stats.py (git log) --> |
+| Distinct Co-authors | 11 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
+
+*Wave: one complete build cycle (intake → dispatch → verify → ship) run by the orchestration engine.*
+
 
 
 
@@ -101,7 +108,7 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 ## Why Haiku-First Works
 
-The benchmark proves it: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). Honest caveat: curated set (N=39), not real-transcript sampled; the benchmark found no task where Opus beats Haiku, proving sufficiency for this workload, not parity at the reasoning frontier.
+The benchmark proves it: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). **Curated set, N=39** — Haiku 39/39 vs Opus 38/39; proves sufficiency for this workload, not frontier parity.
 
 ## Learn More
 
@@ -111,7 +118,7 @@ The benchmark proves it: across 39 judgment tasks (code review, severity calibra
 - **[docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)** — Cost analysis and scaling  
 - **[docs/CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles  
 - **[docs/autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means (and doesn't), evidence for all claims, honest limits  
-- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.3.0: non-Claude core proof (Codex wave), refinement-loop convergence, Windows-green CI
+- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.3.1 (the 0.3.0 milestone): non-Claude core proof (Codex wave), refinement-loop convergence, Windows-green CI
 
 ## Contributing
 
