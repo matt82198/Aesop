@@ -60,6 +60,16 @@ Run from repo root:
 - `python -m unittest tests.test_state_store_snapshots` — Snapshot read/write and tail-replay.
 - `npm run test:py` — All Python test suites (includes state_store).
 
+## Agent Lifecycle Events (Wave-29)
+
+**New event types** (additive, appended by UI collectors on agent phase changes):
+- `agent_dispatched` — payload `{agent_id, timestamp}` — marks agent dispatch start
+- `agent_working` — payload `{agent_id, timestamp}` — marks work in progress (thinking/tool-use)
+- `agent_done` — payload `{agent_id, timestamp}` — marks completion
+- `agent_stalled` — payload `{agent_id, timestamp}` — marks stall/error detected
+
+**Projection**: `project_agent_lifecycle(events)` folds these into per-agent lifecycle state with transition history (state + timestamp). Enables Activity view to show agents entering/leaving states over time.
+
 ## Next (cutover, follow-up — NOT this increment)
 **Phase 1 (early)**: Add `orchestrator_status` stream (orchestrator_status → `append("orchestrator_status", "phase_changed", ...)`, read from `project("orchestrator_status")` on recovery).
 **Phase 2 (middle)**: Tracker dual-read (StateAPI for CRUD, export job keeps `tracker.json` rendered).
