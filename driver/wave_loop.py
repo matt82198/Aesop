@@ -151,6 +151,36 @@ def _validate_repo_path(repo: str) -> str:
     return str(repo_path)
 
 
+def _validate_file_path(file_path: str, repo_root: str) -> None:
+    """Validate a file path for safety before git operations.
+
+    Ensures the path is:
+    1. Relative (not absolute)
+    2. After joining with repo root and resolving, still inside that repo root (no traversal)
+
+    Args:
+        file_path: the path to validate (should be repo-relative)
+        repo_root: the absolute repo root path
+
+    Raises:
+        ValueError: if path is absolute or escapes the repo root
+    """
+    # Check if path is absolute (reject).
+    if Path(file_path).is_absolute():
+        raise ValueError(f"file path must be relative, got absolute: {file_path}")
+
+    # Join with repo root and resolve to get the absolute path.
+    repo_root_path = Path(repo_root).resolve()
+    full_path = (repo_root_path / file_path).resolve()
+
+    # Verify the resolved path is still inside the repo root (reject traversal).
+    try:
+        # This will raise ValueError if full_path is not relative to repo_root_path
+        full_path.relative_to(repo_root_path)
+    except ValueError:
+        raise ValueError(f"file path escapes repo root: {file_path} (resolved to {full_path}, outside {repo_root_path})")
+
+
 def _safe_slug(slug: str) -> str:
     """Sanitize a slug to prevent path traversal attacks and enforce filesystem limits.
 
@@ -479,23 +509,58 @@ def run_wave(
     # PHASE 1: Preflight ownership guard (with per-repo validation)
     # ========================================================================
 
-    # First, validate that all repos are absolute and exist (if repo field is specified).
+    # IMPORTANT: When git is configured (ship phase enabled), all items MUST have an
+    # absolute resolved `repo` field after preflight. This ensures manifests behave
+    # identically regardless of process cwd.
+    #
+    # Default for items without explicit `repo`:
+    # - If git config has expectTopLevel, use that (legacy behavior anchor)
+    # - If git config NOT present: no repo validation needed (non-ship-phase wave)
+    # - If git config present but NO expectTopLevel: error (can't default repo for shipping)
+
+    # Determine the default repo from git config (legacy anchor for byte-identical behavior).
+    # Only used when git config is present (i.e., shipping is enabled).
+    default_repo = None
+    if git is not None:
+        default_repo = git.get("expectTopLevel")
+
+    # Validate and resolve all repos; populate default for missing items (only if shipping).
     repo_paths = set()
+
     for item in items:
         repo = item.get("repo")
-        if repo:
-            try:
-                repo_resolved = _validate_repo_path(repo)
-                repo_paths.add(repo_resolved)
-                # Update item with resolved path for later use.
-                item["repo"] = repo_resolved
-            except ValueError as e:
-                result["aborted"] = True
-                result["abort_reason"] = "invalid_repo_path"
-                result["invalid_repo"] = repo
-                result["error"] = str(e)
-                return result
-            # Future: also validate is_git_worktree, has_secret_scan_gate
+
+        if not repo:
+            # No explicit repo field.
+            if git is not None:
+                # Ship phase is configured; must have a default or explicit repo.
+                if default_repo:
+                    repo = default_repo
+                else:
+                    # Shipping enabled but can't default repo for this item.
+                    result["aborted"] = True
+                    result["abort_reason"] = "repo_field_missing_no_default"
+                    result["error"] = "item requires 'repo' field when git shipping is configured (set expectTopLevel or add repo field)"
+                    result["item_slug"] = item.get("slug", "unknown")
+                    return result
+            else:
+                # No shipping phase; skip repo validation for this item.
+                # This allows backward-compatible non-shipping waves without repo fields.
+                continue
+
+        # Validate and resolve the repo path to absolute.
+        try:
+            repo_resolved = _validate_repo_path(repo)
+            repo_paths.add(repo_resolved)
+            # Update item with resolved path for later use (ensures byte-identical cwd).
+            item["repo"] = repo_resolved
+        except ValueError as e:
+            result["aborted"] = True
+            result["abort_reason"] = "invalid_repo_path"
+            result["invalid_repo"] = repo
+            result["error"] = str(e)
+            return result
+        # Future: also validate is_git_worktree, has_secret_scan_gate
 
     # Per-repo ownership guard: track ownership within each repo separately.
     # Structure: {repo: {normalized_file: slug}}
@@ -1008,6 +1073,29 @@ def run_wave(
                     files_to_add.extend(item_result.get("filesWritten", []))
 
                 if files_to_add:
+                    # VALIDATION P2: Validate all filesWritten paths before git operations.
+                    # Ensure they are relative and don't escape the repo root.
+                    invalid_files = []
+                    for file_path in files_to_add:
+                        try:
+                            _validate_file_path(file_path, repo_path)
+                        except ValueError as e:
+                            invalid_files.append((file_path, str(e)))
+
+                    if invalid_files:
+                        # Path validation failed; fail this item explicitly.
+                        repo_ship_results.append({
+                            "repo": repo_path,
+                            "committed": False,
+                            "error": "invalid_file_paths",
+                            "files_count": len(repo_items),
+                            "invalid_files": invalid_files,
+                        })
+                        # Mark items from this repo as shipped_error.
+                        for _, _, item_result in repo_items:
+                            item_result["ship_error"] = f"invalid file paths: {invalid_files}"
+                        continue
+
                     # Add files. Escape each filename to prevent shell injection.
                     escaped_files = [_quote_arg(f) for f in files_to_add]
                     add_cmd = "git add " + " ".join(escaped_files)
@@ -1030,12 +1118,18 @@ def run_wave(
                     commit_cmd = f"git commit -m {_quote_arg(commit_msg)}"
                     commit_result = driver.run_command(commit_cmd, cwd=repo_path)
                     if commit_result.exit_code != 0:
-                        # "nothing to commit" or other error; skip this repo but continue others.
+                        # UNSTAGE P3: Commit failed; run git reset to unstage the files.
+                        # This prevents staged-files residue on partial failure.
+                        reset_result = driver.run_command("git reset", cwd=repo_path)
+                        unstage_ok = reset_result.exit_code == 0
+
                         repo_ship_results.append({
                             "repo": repo_path,
                             "committed": False,
                             "error": "git_commit_failed",
                             "files_count": len(repo_items),
+                            "files_unstaged": unstage_ok,
+                            "unstage_error": None if unstage_ok else reset_result.stderr,
                         })
                         # Mark items from this repo as shipped_error.
                         for _, _, item_result in repo_items:

@@ -1023,11 +1023,11 @@ class TestGitToplevelGuard(unittest.TestCase):
 
         result = run_wave(driver, manifest, git=git_config)
 
-        # Should abort before running any git commands.
+        # Should abort at preflight: can't default repo for shipping when expectTopLevel is empty.
         self.assertTrue(result["aborted"])
-        self.assertEqual(result["abort_reason"], "git_toplevel_missing_or_empty")
-        # No git commands should have been run (no toplevel check).
-        # FakeDriver doesn't track git commands, so just verify the result structure.
+        self.assertEqual(result["abort_reason"], "repo_field_missing_no_default")
+        # Abort occurs at preflight validation, before any git commands.
+        # This is more robust than checking at ship phase.
 
     def test_git_config_with_none_expectTopLevel_aborts(self):
         """Git config with None expectTopLevel -> abort."""
@@ -1052,9 +1052,9 @@ class TestGitToplevelGuard(unittest.TestCase):
 
         result = run_wave(driver, manifest, git=git_config)
 
-        # Should abort.
+        # Should abort at preflight: can't default repo for shipping when expectTopLevel is None.
         self.assertTrue(result["aborted"])
-        self.assertEqual(result["abort_reason"], "git_toplevel_missing_or_empty")
+        self.assertEqual(result["abort_reason"], "repo_field_missing_no_default")
 
 
 class TestAdversarialReviewHonesty(unittest.TestCase):

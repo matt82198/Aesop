@@ -462,6 +462,47 @@ class TestPerRepoShip(unittest.TestCase):
         # Item verifies, but no files to ship, so commit is skipped.
         # This should NOT error out.
 
+    def test_legacy_manifest_without_repo_field_uses_expectTopLevel(self):
+        """Legacy manifest items without repo field default to git config expectTopLevel.
+
+        Regression test: Ensure that a manifest without repo fields uses the
+        expectTopLevel from git config as the default repo. This ensures that
+        manifests behave consistently regardless of process cwd.
+        """
+        driver = FakeDriverForShip()
+
+        # Manifest WITHOUT repo fields (legacy style).
+        manifest = {
+            "items": [
+                {
+                    "slug": "legacy-item-1",
+                    "ownsFiles": ["legacy-file.py"],
+                    "prompt": "Fix legacy file",
+                    "testCmd": "python -m unittest",
+                    "workDir": str(_FIXTURE_REPO_A),
+                },
+            ]
+        }
+
+        # Git config specifies the repo to use as default.
+        git_config = {"expectTopLevel": str(_FIXTURE_REPO_A)}
+
+        result = run_wave(driver, manifest, git=git_config)
+
+        # Wave should complete successfully.
+        self.assertTrue(result["preflight_ok"])
+        self.assertEqual(len(result["built"]), 1)
+        self.assertTrue(result["built"][0]["verified"], "Legacy item should verify")
+
+        # Verify item was shipped into the repo specified by expectTopLevel.
+        self.assertIsNotNone(result["shipped"])
+        self.assertEqual(len(result["shipped"]), 1)
+
+        # Verify the file was committed to the expected repo.
+        os.chdir(str(_FIXTURE_REPO_A))
+        exists = (Path(_FIXTURE_REPO_A) / "legacy-file.py").exists()
+        self.assertTrue(exists, "legacy-file.py should be in repo A")
+
 
 if __name__ == "__main__":
     unittest.main()
