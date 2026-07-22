@@ -60,6 +60,9 @@ def sanitize_agents_for_broadcast(agents):
 def get_fleet_agents():
     """Detect running subagents by calling dash-extra.mjs --json.
 
+    Falls back to reading fixture agents from _collector.json if dash-extra.mjs
+    returns no agents (used by browser proofs that don't have running agents).
+
     dash-extra.mjs truncates agent ids to 13 characters for display. With enough
     concurrently-active agents, two distinct agents can share the same 13-char
     prefix and collide onto the same id. The dashboard keys DOM rows (and the
@@ -72,22 +75,33 @@ def get_fleet_agents():
     try:
         # Call the working detector (dash-extra.mjs) with --json flag
         dash_extra_path = config.AESOP_ROOT / "dash" / "dash-extra.mjs"
-        if not dash_extra_path.exists():
-            return agents
-        result = subprocess.run(
-            ["node", str(dash_extra_path), "--json"],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=5
-        )
-        if result.returncode == 0 and result.stdout:
-            agents = json.loads(result.stdout.strip())
+        if dash_extra_path.exists():
+            result = subprocess.run(
+                ["node", str(dash_extra_path), "--json"],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout:
+                agents = json.loads(result.stdout.strip())
     except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
         pass
     except Exception:
         pass
+
+    # Fallback: if no agents detected by dash-extra.mjs, try reading from _collector.json
+    # (used by browser proofs that create fixture agents in state/_collector.json)
+    if not agents:
+        try:
+            collector_json = config.STATE_DIR / "_collector.json"
+            if collector_json.exists():
+                with open(collector_json, encoding='utf-8') as f:
+                    data = json.load(f)
+                    agents = data.get("agents", [])
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass
 
     seen = {}
     for a in agents:
