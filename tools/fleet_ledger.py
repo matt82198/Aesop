@@ -620,7 +620,10 @@ def main():
             sys.exit(1)
 
         success, message = append_wave(args.report_file, args.wave, args.phase, args.timestamp)
-        print(message)
+        if success:
+            print(message)
+        else:
+            print(message, file=sys.stderr)
         sys.exit(0 if success else 1)
 
     elif cmd == 'harvest':

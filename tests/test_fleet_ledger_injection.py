@@ -115,6 +115,11 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, "Invalid timestamp should be rejected")
         self.assertIn("Timestamp contains forbidden characters", result.stdout + result.stderr,
                       "Should indicate timestamp validation failed")
+        # Verify error goes to stderr, not stdout (shell-scripting semantics)
+        self.assertIn("Timestamp contains forbidden characters", result.stderr,
+                      "Error message must be on stderr")
+        self.assertNotIn("Timestamp contains forbidden characters", result.stdout,
+                      "Error message should not be on stdout")
 
         # Verify no rows were created
         sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
