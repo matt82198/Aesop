@@ -65,8 +65,13 @@ def check_heartbeat_staleness(hb_file, threshold_s):
           age_s (int): Age in seconds (0 if file missing/unreadable)
           info (str or None): Descriptive message if stale/missing, None if fresh
     """
-    if not hb_file.exists():
-        return True, 0, "Heartbeat file missing"
+    try:
+        if not hb_file.exists():
+            return True, 0, "Heartbeat file missing"
+    except OSError:
+        # Parent dir unreadable (permissions) — cannot verify, report stale
+        # (fail-closed, per the documented contract: unreadable => stale)
+        return True, 0, "Heartbeat file unreadable"
 
     try:
         content = hb_file.read_text(encoding="utf-8").strip()
