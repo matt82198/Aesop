@@ -352,6 +352,42 @@ export interface WaveDispatchData {
 }
 
 /**
+ * One agent specialty quality metric from GET /api/wave/quality-scorecards.
+ * Shows per-specialty success rate and retry/repair frequency.
+ */
+export interface QualityScorecardSpecialty {
+  total_runs: number;
+  success_count: number;
+  failed_count: number;
+  empty_count: number;
+  hung_count: number;
+  success_rate: number; // 0.0-1.0
+  repair_count: number;
+  retry_frequency: number; // 0.0-1.0
+}
+
+/**
+ * One ranked entry in quality scorecard rankings.
+ */
+export interface QualityScorecardRanking {
+  agent_type: string;
+  success_rate?: number; // present in top_by_success
+  retry_frequency?: number; // present in top_by_retry
+  total_runs: number;
+}
+
+/**
+ * GET /api/wave/quality-scorecards response.
+ * Per-agent-specialty quality: success rates and retry/repair frequencies.
+ */
+export interface QualityScorecardData {
+  specialties: Record<string, QualityScorecardSpecialty>; // keyed by agent_type
+  top_by_success: QualityScorecardRanking[];
+  top_by_retry: QualityScorecardRanking[];
+  skipped_lines: number;
+}
+
+/**
  * SSE event sections emitted by GET /events.
  * Initial sections: data, backlog, agents, tracker, status
  * Added in U3: cost
