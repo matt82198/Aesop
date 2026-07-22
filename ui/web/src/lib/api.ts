@@ -17,6 +17,7 @@ import type {
   WavePRBoardData,
   WaveFailureData,
   WaveDispatchData,
+  WaveGanttData,
 } from './types';
 
 let _csrfTokenCache: string | null = null;
@@ -186,6 +187,13 @@ export async function fetchWaveFailure(prNumber: number): Promise<WaveFailureDat
  */
 export async function fetchWaveDispatch(): Promise<WaveDispatchData> {
   return typedFetch('/api/wave/dispatch', { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/gantt — Gantt timeline data for agent phase spans
+ */
+export async function fetchWaveGantt(): Promise<WaveGanttData> {
+  return typedFetch('/api/wave/gantt', { method: 'GET', requireCSRF: false });
 }
 
 /**

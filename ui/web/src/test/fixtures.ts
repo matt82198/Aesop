@@ -33,6 +33,8 @@ import type {
   WaveFailureRun,
   WaveDispatchData,
   WaveDispatchAgent,
+  WaveGanttData,
+  WaveGanttAgent,
 } from '../lib/types';
 
 /* ------------------------------------------------------------------ */
@@ -99,6 +101,9 @@ export const TESTIDS = {
   dispatchAgentPhase: 'dispatch-agent-phase',
   dispatchAgentAge: 'dispatch-agent-age',
   dispatchAgentTokens: 'dispatch-agent-tokens',
+  ganttTimeline: 'gantt-timeline',
+  ganttRow: 'gantt-row',
+  ganttPhaseBar: 'gantt-phase-bar',
 
   // Cost view
   viewCost: 'view-cost',
@@ -751,6 +756,86 @@ export const fixtureWaveDispatch: WaveDispatchData = {
 export const fixtureWaveDispatchUnavailable: WaveDispatchData = {
   available: false,
   wave_phase: null,
+  agents: [],
+  at: '2026-07-17T20:24:50Z',
+};
+
+export const fixtureWaveGanttAgent: WaveGanttAgent = {
+  id: 'fleet-fix-0',
+  phases: [
+    {
+      phase: 'dispatch',
+      start: '2026-07-17T20:24:00Z',
+      end: '2026-07-17T20:24:15Z',
+      duration_sec: 15,
+      token_estimate: 5000,
+    },
+    {
+      phase: 'thinking',
+      start: '2026-07-17T20:24:15Z',
+      end: '2026-07-17T20:24:45Z',
+      duration_sec: 30,
+      token_estimate: 25000,
+    },
+    {
+      phase: 'tool-use',
+      start: '2026-07-17T20:24:45Z',
+      end: '2026-07-17T20:24:50Z',
+      duration_sec: 5,
+      token_estimate: 3000,
+    },
+  ],
+  total_duration_sec: 50,
+  status: 'running',
+};
+
+export const fixtureWaveGantt: WaveGanttData = {
+  available: true,
+  wave_phase: 'wave-rc.7: verify',
+  agents: [
+    fixtureWaveGanttAgent,
+    {
+      id: 'fleet-fix-1',
+      phases: [
+        {
+          phase: 'dispatch',
+          start: '2026-07-17T20:24:05Z',
+          end: '2026-07-17T20:24:20Z',
+          duration_sec: 15,
+          token_estimate: 4000,
+        },
+        {
+          phase: 'stall',
+          start: '2026-07-17T20:24:20Z',
+          end: '2026-07-17T20:24:50Z',
+          duration_sec: 30,
+          token_estimate: 0,
+        },
+      ],
+      total_duration_sec: 45,
+      status: 'stalled',
+    },
+    {
+      id: 'fleet-review-0',
+      phases: [
+        {
+          phase: 'thinking',
+          start: '2026-07-17T20:24:10Z',
+          end: '2026-07-17T20:24:38Z',
+          duration_sec: 28,
+          token_estimate: 20000,
+        },
+      ],
+      total_duration_sec: 28,
+      status: 'done',
+    },
+  ],
+  at: '2026-07-17T20:24:50Z',
+};
+
+export const fixtureWaveGanttUnavailable: WaveGanttData = {
+  available: false,
+  wave_phase: undefined,
   agents: [],
   at: '2026-07-17T20:24:50Z',
 };

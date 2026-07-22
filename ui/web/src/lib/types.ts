@@ -352,6 +352,39 @@ export interface WaveDispatchData {
 }
 
 /**
+ * One phase span in a Gantt row (GET /api/wave/gantt).
+ */
+export interface WaveGanttPhase {
+  phase: string; // 'dispatch' | 'thinking' | 'tool-use' | 'stall' | 'done'
+  start: string; // ISO 8601 UTC
+  end: string; // ISO 8601 UTC
+  duration_sec: number;
+  token_estimate?: number;
+}
+
+/**
+ * One agent row in Gantt chart (GET /api/wave/gantt).
+ */
+export interface WaveGanttAgent {
+  id: string;
+  phases: WaveGanttPhase[];
+  total_duration_sec: number;
+  status: 'running' | 'done' | 'stalled' | 'inactive';
+}
+
+/**
+ * GET /api/wave/gantt — Gantt timeline data per-agent phase spans.
+ * Shows agents as rows with phase timing bars for execution visibility.
+ */
+export interface WaveGanttData {
+  available: boolean;
+  wave_phase?: string; // e.g., "wave-rc.7: verify"
+  agents: WaveGanttAgent[];
+  at: string; // ISO 8601 UTC
+  error?: string; // optional error message if available=false
+}
+
+/**
  * One agent specialty quality metric from GET /api/wave/quality-scorecards.
  * Shows per-specialty success rate and retry/repair frequency.
  */
