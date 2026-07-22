@@ -603,19 +603,24 @@ else
   test_failed=$((test_failed + 1))
 fi
 
-printf '\n=== Test 19: delete-only push skips secret scan (rc 0, nothing pushed) ===\n'
+printf '\n=== Test 19: delete-only push skips secret scan (rc 0, even with NO scanner available) ===\n'
 (
   zeros="0000000000000000000000000000000000000000"
   old_sha=$(git rev-parse HEAD 2>/dev/null || echo "1234567890123456789012345678901234567890")
+  # Point AESOP_ROOT at an empty dir: no scanner exists (reproduces CI). A
+  # delete-only push carries no content, so it must pass without a scanner.
+  scannerless_root=$(mktemp -d)
   printf '(delete) %s refs/heads/some-old-branch %s\n' "$zeros" "$old_sha" | {
-    check_secret_scan
+    AESOP_ROOT="$scannerless_root" check_secret_scan
     exit_code=$?
     if [ "$exit_code" -ne 0 ]; then
       printf 'FAIL: delete-only push should skip secret scan (rc 0), got %d\n' "$exit_code"
+      rm -rf "$scannerless_root"
       exit 1
     fi
-  } || exit 1
-  printf 'PASS: delete-only push skips secret scan cleanly\n'
+  } || { rm -rf "$scannerless_root"; exit 1; }
+  rm -rf "$scannerless_root"
+  printf 'PASS: delete-only push skips secret scan cleanly (scannerless env)\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

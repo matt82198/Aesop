@@ -375,17 +375,10 @@ check_secret_scan() {
     scan_bin="python"
   fi
 
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
-  local scan_script="$aesop_root/tools/secret_scan.py"
-
-  if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
-    # Scanner not found or not executable: fail-closed (cannot verify => deny)
-    log_block "secret_scan_unavailable"
-    printf 'FATAL: secret_scan.py not found or not executable at %s\n' "$scan_script" >&2
-    return 1
-  fi
-
-  # Parse pre-push stdin to get commit range(s), then scan files in each range.
+  # Parse pre-push stdin FIRST: a delete-only push carries no content, so it
+  # needs no scanner at all — the availability check below only applies when
+  # there is actually content to scan (ordering matters: in scanner-less
+  # environments a branch deletion must still be possible).
   # A multi-ref push (git push --all, or multiple branches/tags in one
   # invocation) yields one range per line from get_commit_range(); scan EVERY
   # one and fail if ANY range is dirty (P3 wave-25 fix: previously only the
@@ -400,6 +393,16 @@ check_secret_scan() {
     # unparseable/empty stdin still fails closed below.
     log_event "secret_scan_skipped_delete_only_push"
     return 0
+  fi
+
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local scan_script="$aesop_root/tools/secret_scan.py"
+
+  if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
+    # Scanner not found or not executable: fail-closed (cannot verify => deny)
+    log_block "secret_scan_unavailable"
+    printf 'FATAL: secret_scan.py not found or not executable at %s\n' "$scan_script" >&2
+    return 1
   fi
 
   if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
