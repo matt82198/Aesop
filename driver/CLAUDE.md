@@ -87,7 +87,7 @@ Optional (non-abstract): `get_tokens_spent()`.
 
 The Codex driver proves a non-Claude backend can take a real coding task
 end-to-end through the AgentDriver and produce orchestrator-verified results,
-entirely offline (no API key, no network in CI).
+entirely offline (no API key, no network in CI). The probe's `tool_use_accuracy` 0.92 assertion is evidence-backed as conservative by the 2026-07-22 live run (gpt-4o-mini 32/32 composite, `bench/results/accuracy-live-2026-07-22.json`); single-run, N=32 curated — not a transfer claim.
 
 **dispatch_worker**: Orchestrator-managed worker (Tier 2):
 - Injects owned-file contents into the prompt (worker has no filesystem access).
