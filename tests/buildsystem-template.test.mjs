@@ -173,8 +173,8 @@ test('adversarialReview parameter documented in args', () => {
 });
 
 test('adversarialReview block exists and is gated on args', () => {
-  // ADVERSARIAL_REVIEW now checks both tier policy and manifest setting (tier override if >= 2)
-  assert.ok(src.includes('const ADVERSARIAL_REVIEW = VERIFICATION_TIER >= 2 ? true : !!A.adversarialReview'), 'ADVERSARIAL_REVIEW constant with tier override missing');
+  // ADVERSARIAL_REVIEW now consumes manifest-provided A.requireAdversarialReview (resolved in Python)
+  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false"), 'ADVERSARIAL_REVIEW constant with manifest consumption missing');
   assert.ok(src.includes("if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green)"), 'gate condition missing');
   assert.ok(src.includes("phase('AdversarialReview')"), 'AdversarialReview phase missing');
 });
@@ -226,11 +226,12 @@ test('contractFindings added to all early-return paths (ceiling/brake aborts)', 
   assert.ok(ceilingReturns && ceilingReturns.length >= 3, 'contractFindings not in all return paths (expected >=3 occurrences)');
 });
 
-test('adversarialReview gated: absent args.adversarialReview => no review phase (unless tier forces it)', () => {
-  // Static check: when adversarialReview is absent/falsy AND tier < 2, the phase should not run
+test('adversarialReview gated: absent args.adversarialReview => no review phase (uses manifest/defaults)', () => {
+  // Static check: when adversarialReview is absent/falsy AND A.requireAdversarialReview is not set,
+  // the phase should not run (defaults to false, tier-1 behavior).
   assert.ok(src.includes("if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green)"), 'gating condition missing');
-  // Verify the gate uses the ADVERSARIAL_REVIEW constant (now with tier override logic)
-  assert.ok(src.includes('const ADVERSARIAL_REVIEW = VERIFICATION_TIER >= 2 ? true : !!A.adversarialReview'), 'ADVERSARIAL_REVIEW constant with tier override not found');
+  // Verify the gate uses the ADVERSARIAL_REVIEW constant (now consuming manifest field)
+  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false"), 'ADVERSARIAL_REVIEW constant consuming manifest field not found');
 });
 
 test('adversarialReview backward-compatible: all existing assertions still pass', () => {
@@ -322,7 +323,7 @@ test('LEVER 2: mergeReady still reflects integration-green only (unchanged)', ()
 });
 
 // ============================================================================
-// VERIFICATION TIER POLICY: wire backend tier to verification knobs
+// VERIFICATION POLICY: resolved by Python, consumed by JS (no recomputation)
 // ============================================================================
 test('verificationTier parameter documented in args', () => {
   assert.ok(src.includes('verificationTier: number | null'), 'verificationTier parameter not documented');
@@ -330,28 +331,32 @@ test('verificationTier parameter documented in args', () => {
   assert.ok(src.includes('driver/verification_policy.py'), 'source-of-truth reference missing');
 });
 
-test('tierPolicy function exists and maps tiers to repair_cap + require_adversarial_review', () => {
-  assert.ok(src.includes('function tierPolicy(tier)'), 'tierPolicy function missing');
-  assert.ok(src.includes('repair_cap:'), 'repair_cap in tier policy missing');
-  assert.ok(src.includes('require_adversarial_review:'), 'require_adversarial_review in tier policy missing');
+test('policy is resolved in Python and consumed in JS (no JS recomputation)', () => {
+  // The tierPolicy function has been DELETED. Policy is resolved in Python
+  // (build_manifest_item) and carried as literal manifest fields (repairCap,
+  // requireAdversarialReview, spotCheckFrac, validateAllJson). JS consumes them.
+  assert.ok(!src.includes('function tierPolicy(tier)'), 'tierPolicy function should be DELETED (policy resolved in Python)');
+  assert.ok(src.includes('source of truth: driver/verification_policy.py'), 'Python source reference missing');
+  assert.ok(src.includes('JS consumes them directly'), 'consumption note missing');
 });
 
-test('tierPolicy has correct tier 1 mapping (repair_cap=1, require_adversarial_review=false)', () => {
-  // Check that tier 1 returns the low-verification policy
-  const tierPolicySection = src.substring(src.indexOf('function tierPolicy(tier)'), src.indexOf('function timeboxLine()'));
-  assert.ok(tierPolicySection.includes('if (tier === 1)'), 'tier 1 check missing');
-  const tier1Section = tierPolicySection.substring(tierPolicySection.indexOf('if (tier === 1)'), tierPolicySection.indexOf('} else if (tier === 2)'));
-  assert.ok(tier1Section.includes('repair_cap: 1'), 'tier 1 repair_cap should be 1');
-  assert.ok(tier1Section.includes('require_adversarial_review: false'), 'tier 1 require_adversarial_review should be false');
+test('manifest field consumption: CAP reads A.repairCap with fallback', () => {
+  assert.ok(src.includes("const CAP = typeof A.repairCap === 'number' ? A.repairCap : 1"),
+    'CAP should consume A.repairCap with tier-1 default 1');
 });
 
-test('tierPolicy has correct tier 2 mapping (repair_cap=2, require_adversarial_review=true)', () => {
-  // Tier 2 is for weaker backends like Codex
-  const tierPolicySection = src.substring(src.indexOf('function tierPolicy(tier)'), src.indexOf('function timeboxLine()'));
-  assert.ok(tierPolicySection.includes('} else if (tier === 2)'), 'tier 2 check missing');
-  const tier2Section = tierPolicySection.substring(tierPolicySection.indexOf('} else if (tier === 2)'), tierPolicySection.indexOf('} else if (tier === 3)'));
-  assert.ok(tier2Section.includes('repair_cap: 2'), 'tier 2 repair_cap should be 2');
-  assert.ok(tier2Section.includes('require_adversarial_review: true'), 'tier 2 require_adversarial_review should be true');
+test('manifest field consumption: ADVERSARIAL_REVIEW reads A.requireAdversarialReview with fallback', () => {
+  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false"),
+    'ADVERSARIAL_REVIEW should consume A.requireAdversarialReview with tier-1 default false');
+});
+
+test('tier-1/absent manifest fields yield tier-1 defaults (backward compat)', () => {
+  // When the manifest does NOT include repairCap/requireAdversarialReview (legacy),
+  // the template defaults to tier-1 behavior: CAP=1, ADVERSARIAL_REVIEW=false.
+  // This keeps the tier-1/Claude path byte-identical to before the change.
+  const tierLogic = src.substring(src.indexOf('const VERIFICATION_TIER'), src.indexOf('const ADVERSARIAL_REVIEW_MODE'));
+  assert.ok(tierLogic.includes("typeof A.repairCap === 'number' ? A.repairCap : 1"), 'CAP fallback to 1 missing');
+  assert.ok(tierLogic.includes("typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false"), 'ADVERSARIAL_REVIEW fallback missing');
 });
 
 test('verificationTier parsed from args with default 1', () => {
@@ -359,25 +364,8 @@ test('verificationTier parsed from args with default 1', () => {
     'VERIFICATION_TIER parsing missing or default not 1');
 });
 
-test('tier >= 2 forces adversarialReview=true (overrides manifest)', () => {
-  assert.ok(src.includes('const ADVERSARIAL_REVIEW = VERIFICATION_TIER >= 2 ? true : !!A.adversarialReview'),
-    'tier override for ADVERSARIAL_REVIEW missing');
-});
-
-test('tier >= 2 forces CAP from tier policy (overrides manifest repairCap)', () => {
-  assert.ok(src.includes('const CAP = VERIFICATION_TIER >= 2 ? tierPolicySetting.repair_cap : (typeof A.repairCap === \'number\' ? A.repairCap : 1)'),
-    'tier override for CAP missing');
-});
-
-test('tier 1 (or absent) preserves backward compatibility: uses manifest knobs', () => {
-  // Tier 1 should leave manifest values intact
-  const tierLogic = src.substring(src.indexOf('const VERIFICATION_TIER'), src.indexOf('const ADVERSARIAL_REVIEW_MODE'));
-  assert.ok(tierLogic.includes('VERIFICATION_TIER >= 2 ? true : !!A.adversarialReview'), 'fallback to manifest adversarialReview missing');
-  assert.ok(tierLogic.includes('VERIFICATION_TIER >= 2 ? tierPolicySetting.repair_cap : (typeof A.repairCap === \'number\' ? A.repairCap : 1)'),
-    'fallback to manifest repairCap missing');
-});
-
-test('tierPolicy comment references driver/verification_policy.py source of truth', () => {
-  assert.ok(src.includes('source of truth: driver/verification_policy.py'), 'source-of-truth comment missing');
-  assert.ok(src.includes('JS numbers MUST match Python exactly'), 'parity requirement comment missing');
+test('policy comment documents that JS no longer recomputes (no drift trap)', () => {
+  assert.ok(src.includes('no recomputation'), 'recomputation statement missing');
+  assert.ok(src.includes('no drift'), 'drift trap reference missing');
+  assert.ok(src.includes('literal manifest fields'), 'manifest field reference missing');
 });
