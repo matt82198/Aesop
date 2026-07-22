@@ -23,6 +23,10 @@ from backend_config import load_backend_config
 def extract_json_blocks_from_markdown(md_content: str) -> list[dict]:
     """Extract all JSON code blocks from markdown content.
 
+    Includes:
+    - Direct ```json fenced blocks
+    - JSON within bash heredocs (<<EOF ... EOF) that contain a "backend" key
+
     Returns list of dicts with 'line_num' and 'json_obj' keys.
     """
     blocks = []
@@ -50,7 +54,40 @@ def extract_json_blocks_from_markdown(md_content: str) -> list[dict]:
                     raise AssertionError(
                         f"Invalid JSON in INSTALL.md at line {start_line + 1}: {e}"
                     )
-        i += 1
+        elif lines[i].strip().startswith('```bash'):
+            # Found a bash code fence; look for heredocs inside
+            start_fence = i
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith('```'):
+                # Look for heredoc pattern: <<EOF or <<'EOF' ... EOF
+                if re.search(r'<<[\'"]?EOF[\'"]?', lines[i]):
+                    heredoc_start_line = i
+                    heredoc_lines = []
+                    i += 1
+                    # Collect lines until we hit EOF on its own line
+                    while i < len(lines) and not re.match(r'^\s*EOF\s*$', lines[i]):
+                        heredoc_lines.append(lines[i])
+                        i += 1
+                    if i < len(lines) and re.match(r'^\s*EOF\s*$', lines[i]):
+                        # Found closing EOF; try to parse as JSON
+                        json_text = '\n'.join(heredoc_lines).strip()
+                        try:
+                            json_obj = json.loads(json_text)
+                            # Only include if it has a 'backend' key (backend config example)
+                            if isinstance(json_obj, dict) and 'backend' in json_obj:
+                                blocks.append({
+                                    'line_num': heredoc_start_line + 1,
+                                    'json_obj': json_obj,
+                                    'raw': json_text
+                                })
+                        except json.JSONDecodeError:
+                            # Not JSON, skip
+                            pass
+                    # Continue from after the EOF
+                else:
+                    i += 1
+        else:
+            i += 1
     return blocks
 
 
