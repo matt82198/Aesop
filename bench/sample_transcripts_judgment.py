@@ -41,21 +41,12 @@ logger = logging.getLogger(__name__)
 
 
 # Patterns for aggressive redaction of PII/credentials
-# Assemble URL credential patterns at runtime to avoid static secret detection
-# Use chr() to break up :// pattern to evade static analysis
-_url_scheme = "(?:https" + "?|ftp" + ")"
-_slash = chr(47)  # /
-_colon = chr(58)  # :
-_url_cred_pattern = "(" + _url_scheme + _colon + _slash + _slash + ")[a-zA-Z0-9_.-]+:[^@\\s]+@"
-_url_cred_repl = r"\1[REDACTED]@"
-_bare_cred_pattern = "\\b[a-zA-Z0-9_.-]+:" + "(?!//)([^@\\s]+)@[a-zA-Z0-9.-]+\\b"
-
 REDACTION_PATTERNS = [
     (r'\b(?:[a-zA-Z0-9_-]{32,}|sk-[a-zA-Z0-9]{20,})\b', '<api_key>'),
-    # URL credentials: scheme+colon+slashes+user+password at host
-    (_url_cred_pattern, _url_cred_repl),
-    # Bare credentials without scheme: user+password at host (but not scheme+colon+slashes)
-    (_bare_cred_pattern, '<credentials>'),
+    # URL userinfo credentials: scheme://user:password@host -> scheme://[REDACTED]@host
+    (r'((?:https?|ftp)://)[a-zA-Z0-9_.-]+:[^@\s]+@', r'\1[REDACTED]@'),
+    # Bare user:password@host (no scheme; negative lookahead so URLs above win)
+    (r'[a-zA-Z0-9_.-]+:(?!//)[^@\s]+@[a-zA-Z0-9.-]+', '<credentials>'),
     (r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b', '<email>'),
     (r'[A-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*', '<path>'),
     (r'(?:/(?:home|root|var|etc|tmp|usr|Users|opt)/[^\s"\'<>]+)', '<path>'),
