@@ -440,7 +440,7 @@ def run_wave(
     # ========================================================================
     if cost_ceiling is not None and state_dir is not None:
         ceiling_result = cost_ceiling.check(
-            spent=driver.get_tokens_spent() or 0,
+            spent=driver.get_tokens_spent(),
             trip=True,
             state_dir=state_dir,
         )
@@ -678,7 +678,7 @@ def run_wave(
         # Cost-ceiling check before repair round.
         if cost_ceiling is not None and state_dir is not None:
             ceiling_result = cost_ceiling.check(
-                spent=driver.get_tokens_spent() or 0,
+                spent=driver.get_tokens_spent(),
                 trip=True,
                 state_dir=state_dir,
             )
