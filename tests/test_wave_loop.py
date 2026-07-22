@@ -1023,11 +1023,11 @@ class TestGitToplevelGuard(unittest.TestCase):
 
         result = run_wave(driver, manifest, git=git_config)
 
-        # Should abort before running any git commands.
+        # Should abort at preflight: can't default repo for shipping when expectTopLevel is empty.
         self.assertTrue(result["aborted"])
-        self.assertEqual(result["abort_reason"], "git_toplevel_missing_or_empty")
-        # No git commands should have been run (no toplevel check).
-        # FakeDriver doesn't track git commands, so just verify the result structure.
+        self.assertEqual(result["abort_reason"], "repo_field_missing_no_default")
+        # Abort occurs at preflight validation, before any git commands.
+        # This is more robust than checking at ship phase.
 
     def test_git_config_with_none_expectTopLevel_aborts(self):
         """Git config with None expectTopLevel -> abort."""
@@ -1052,9 +1052,9 @@ class TestGitToplevelGuard(unittest.TestCase):
 
         result = run_wave(driver, manifest, git=git_config)
 
-        # Should abort.
+        # Should abort at preflight: can't default repo for shipping when expectTopLevel is None.
         self.assertTrue(result["aborted"])
-        self.assertEqual(result["abort_reason"], "git_toplevel_missing_or_empty")
+        self.assertEqual(result["abort_reason"], "repo_field_missing_no_default")
 
 
 class TestAdversarialReviewHonesty(unittest.TestCase):
@@ -1415,19 +1415,19 @@ class TestWaveRecoveryJournal(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as state_dir:
             # Write journal entries.
-            _write_journal_entry(state_dir, "item-1", "dispatched", {"verified": True, "testExit": 0})
-            _write_journal_entry(state_dir, "item-2", "dispatched", {"verified": False, "testExit": 1})
+            _write_journal_entry(state_dir, "item-1", "dispatched", {"verified": True, "testExit": 0}, repo=None)
+            _write_journal_entry(state_dir, "item-2", "dispatched", {"verified": False, "testExit": 1}, repo=None)
 
             # Load journal.
             journal = _load_journal_state(state_dir)
 
-            # Verify entries.
-            self.assertIn("item-1", journal)
-            self.assertIn("item-2", journal)
-            self.assertTrue(journal["item-1"]["verified"])
-            self.assertFalse(journal["item-2"]["verified"])
-            self.assertEqual(journal["item-1"]["testExit"], 0)
-            self.assertEqual(journal["item-2"]["testExit"], 1)
+            # Verify entries. Journal uses (repo, slug) tuple as key.
+            self.assertIn((None, "item-1"), journal)
+            self.assertIn((None, "item-2"), journal)
+            self.assertTrue(journal[(None, "item-1")]["verified"])
+            self.assertFalse(journal[(None, "item-2")]["verified"])
+            self.assertEqual(journal[(None, "item-1")]["testExit"], 0)
+            self.assertEqual(journal[(None, "item-2")]["testExit"], 1)
 
     def test_journal_empty_dir(self):
         """Loading journal from empty state_dir should return empty dict."""
@@ -1483,7 +1483,7 @@ class TestWaveRecoveryResume(unittest.TestCase):
             self.assertTrue(result1["preflight_ok"])
 
             # Save journal: mark item-1 as verified.
-            _write_journal_entry(state_dir, "item-1", "verified", {"verified": True, "testExit": 0})
+            _write_journal_entry(state_dir, "item-1", "verified", {"verified": True, "testExit": 0}, repo=None)
 
             # Reset driver and do a resume.
             driver2 = ResumingDriver()
@@ -1491,7 +1491,8 @@ class TestWaveRecoveryResume(unittest.TestCase):
             # Note: We need to implement resume_wave() or run_wave() with resume support.
             # For now, we test that the journal read works.
             journal = _load_journal_state(state_dir)
-            self.assertEqual(journal["item-1"]["verified"], True)
+            # Journal now uses (repo, slug) as key, so look up with (None, "item-1")
+            self.assertEqual(journal[(None, "item-1")]["verified"], True)
 
 
 class TestWaveRecoveryTrustButVerify(unittest.TestCase):

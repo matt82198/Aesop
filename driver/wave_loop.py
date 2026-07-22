@@ -6,7 +6,7 @@ that mirrors the phase sequence from wave-flat-dispatch.template.mjs but runs
 offline against AgentDriver backends (Claude Code, Codex, open-model, etc.).
 
 Phases (mirror the template):
-  1. Preflight ownership guard: check no two items share an ownsFiles path
+  1. Preflight ownership guard: check no two items share an ownsFiles path (per-repo)
   2. Resolve policy ONCE: call verification_policy(caps) and use the returned
      knobs for repair_cap, spot_check_frac, require_adversarial_review
   3. Cost-ceiling gate (fail-closed): before build and before each repair round,
@@ -16,7 +16,18 @@ Phases (mirror the template):
   5. Bounded repair: for failed items, retry with test output appended to prompt,
      up to policy's repair_cap rounds
   6. Adversarial review: if required, dispatch a review per item or mark deferred
-  7. Batched ship: if git config given, add/commit/push the verified items
+  7. Per-repo ship: if git config given, group items by repo and run the git
+     sequence (add [repo-relative files], commit, push) separately for each repo,
+     with expectTopLevel guard verified PER REPO before any write
+
+PHASE 1 (CROSS-REPO) SCOPE:
+  - Manifest items support optional `repo` field (absolute path, must exist, resolved)
+  - Preflight validates repo exists and rejects non-absolute paths (fail-closed)
+  - Ownership disjointness is per-repo (same file in different repos is NOT a conflict)
+  - Ship phase respects repo boundaries: one commit per repo, each repo's cwd
+  - Journal keys include repo context (safe-slug of repo basename + item slug)
+  - Shipped items reported per-repo in the Report JSON
+  - Phase-2 (future): per-repo secret-scan gate, per-repo branch rules, multi-box state
 
 HONESTY GUARANTEE:
   - Verified = True ONLY if the item's test passed (exit code 0 from run_command).
@@ -28,6 +39,7 @@ FAIL-SAFE:
   - Cost-ceiling check: if exceeded, ABORT the wave immediately (return early).
   - Disjoint ownership: any overlap -> ABORT with structured error, no dispatch.
   - Repair cap bounded: never infinite retry loop.
+  - Ship phase: per-repo expectTopLevel guard aborts THAT REPO's ship without corrupting others.
 
 stdlib-only, ASCII-only, Windows + Linux safe.
 """
@@ -111,6 +123,64 @@ def _quote_arg(s: str) -> str:
         return shlex.quote(s)
 
 
+def _validate_repo_path(repo: str) -> str:
+    """Validate and normalize a repo path to absolute.
+
+    Rejects relative paths, symlink escapes, and non-existent paths (fail-closed).
+    Returns the absolute, normalized path if valid.
+
+    Args:
+        repo: the repo path to validate
+
+    Returns:
+        str: absolute, normalized repo path
+
+    Raises:
+        ValueError: if repo is relative, contains .. escape, or path issues
+    """
+    repo_path = Path(repo).resolve()
+
+    # Ensure the resolved path is absolute (should always be true after resolve())
+    if not repo_path.is_absolute():
+        raise ValueError(f"repo path must be absolute: {repo}")
+
+    # Verify the path exists (fail-closed)
+    if not repo_path.exists():
+        raise ValueError(f"repo path does not exist: {repo}")
+
+    return str(repo_path)
+
+
+def _validate_file_path(file_path: str, repo_root: str) -> None:
+    """Validate a file path for safety before git operations.
+
+    Ensures the path is:
+    1. Relative (not absolute)
+    2. After joining with repo root and resolving, still inside that repo root (no traversal)
+
+    Args:
+        file_path: the path to validate (should be repo-relative)
+        repo_root: the absolute repo root path
+
+    Raises:
+        ValueError: if path is absolute or escapes the repo root
+    """
+    # Check if path is absolute (reject).
+    if Path(file_path).is_absolute():
+        raise ValueError(f"file path must be relative, got absolute: {file_path}")
+
+    # Join with repo root and resolve to get the absolute path.
+    repo_root_path = Path(repo_root).resolve()
+    full_path = (repo_root_path / file_path).resolve()
+
+    # Verify the resolved path is still inside the repo root (reject traversal).
+    try:
+        # This will raise ValueError if full_path is not relative to repo_root_path
+        full_path.relative_to(repo_root_path)
+    except ValueError:
+        raise ValueError(f"file path escapes repo root: {file_path} (resolved to {full_path}, outside {repo_root_path})")
+
+
 def _safe_slug(slug: str) -> str:
     """Sanitize a slug to prevent path traversal attacks and enforce filesystem limits.
 
@@ -170,11 +240,44 @@ def _safe_slug(slug: str) -> str:
     return sanitized
 
 
+def _journal_key_for_item(item: Dict[str, Any]) -> str:
+    """Generate a collision-free journal key for an item, including repo context.
+
+    For items with a `repo` field, the key is:
+      safe-slug(repo-basename) + '--' + safe-slug(item-slug)
+    For items without a repo field, the key is:
+      safe-slug(item-slug)
+
+    This ensures same-slug items across repos don't collide.
+
+    Args:
+        item: dict with slug and optional repo field
+
+    Returns:
+        str: sanitized journal key
+    """
+    slug = item.get("slug", "unknown")
+    repo = item.get("repo")
+
+    if repo:
+        try:
+            # Get the basename of the repo (last component of the path)
+            repo_basename = Path(repo).resolve().name
+            repo_key = _safe_slug(repo_basename)
+        except Exception:
+            # Fallback: use the full repo path hashed
+            repo_key = _safe_slug(Path(repo).name or "repo")
+        item_key = _safe_slug(slug)
+        return f"{repo_key}--{item_key}"
+    else:
+        return _safe_slug(slug)
+
+
 # ========================================================================
 # Wave Recovery: Journal and Resume Support
 # ========================================================================
 
-def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, Any]) -> None:
+def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, Any], repo: str = None) -> None:
     """Write a journal entry for an item's progress.
 
     Args:
@@ -182,24 +285,29 @@ def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, 
         slug: item slug (identifier)
         phase: phase name (e.g., "verified", "failed", "dispatched")
         data: dict with outcome data (verified, testExit, repairs, etc.)
+        repo: optional repo path for repo-aware journal keying
 
-    Journal is stored as: state_dir/journal/<slug>.json with timestamp.
-    Slug is sanitized to prevent path traversal attacks.
+    Journal is stored as: state_dir/journal/<journal-key>.json with timestamp.
+    Journal key includes repo context if provided, to prevent collisions.
     """
     state_path = Path(state_dir)
     journal_dir = state_path / "journal"
     journal_dir.mkdir(parents=True, exist_ok=True)
 
-    # Sanitize slug to prevent path traversal.
+    # Generate repo-aware journal key.
     try:
-        safe_slug = _safe_slug(slug)
+        item_stub = {"slug": slug}
+        if repo:
+            item_stub["repo"] = repo
+        journal_key = _journal_key_for_item(item_stub)
     except ValueError:
-        # Fail-closed: if slug is invalid, skip journaling.
+        # Fail-closed: if key generation fails, skip journaling.
         return
 
-    journal_file = journal_dir / f"{safe_slug}.json"
+    journal_file = journal_dir / f"{journal_key}.json"
     entry = {
         "slug": slug,
+        "repo": repo,
         "phase": phase,
         "timestamp": time.time(),
         **data,
@@ -216,10 +324,12 @@ def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
     """Load journal state from state_dir.
 
     Reads all JSON files from state_dir/journal/ and returns a dict
-    mapping slug -> journal_entry.
+    mapping journal_key (repo--slug or just slug) -> journal_entry.
+
+    The entry is looked up by (repo, slug) tuple for resume matching.
 
     Returns:
-        dict mapping slug -> {phase, verified, testExit, ...}
+        dict mapping journal_key -> {phase, verified, testExit, repo, ...}
         Returns empty dict if journal dir doesn't exist.
     """
     state_path = Path(state_dir)
@@ -235,8 +345,12 @@ def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
             try:
                 entry = json.loads(journal_file.read_text())
                 slug = entry.get("slug")
+                repo = entry.get("repo")
                 if slug:
-                    journal_state[slug] = entry
+                    # Use (repo, slug) as a composite key for lookup.
+                    # If repo is None, key is just slug.
+                    key = (repo, slug)
+                    journal_state[key] = entry
             except Exception:
                 # Skip malformed entries.
                 pass
@@ -392,14 +506,80 @@ def run_wave(
             result["resume_stats"] = resume_stats
 
     # ========================================================================
-    # PHASE 1: Preflight ownership guard
+    # PHASE 1: Preflight ownership guard (with per-repo validation)
     # ========================================================================
-    owner_map = {}  # normalized file -> slug
+
+    # IMPORTANT: When git is configured (ship phase enabled), all items MUST have an
+    # absolute resolved `repo` field after preflight. This ensures manifests behave
+    # identically regardless of process cwd.
+    #
+    # Default for items without explicit `repo`:
+    # - If git config has expectTopLevel, use that (legacy behavior anchor)
+    # - If git config NOT present: no repo validation needed (non-ship-phase wave)
+    # - If git config present but NO expectTopLevel: error (can't default repo for shipping)
+
+    # Determine the default repo from git config (legacy anchor for byte-identical behavior).
+    # Only used when git config is present (i.e., shipping is enabled).
+    default_repo = None
+    if git is not None:
+        default_repo = git.get("expectTopLevel")
+
+    # Validate and resolve all repos; populate default for missing items (only if shipping).
+    repo_paths = set()
+
+    for item in items:
+        repo = item.get("repo")
+
+        if not repo:
+            # No explicit repo field.
+            if git is not None:
+                # Ship phase is configured; must have a default or explicit repo.
+                if default_repo:
+                    repo = default_repo
+                else:
+                    # Shipping enabled but can't default repo for this item.
+                    result["aborted"] = True
+                    result["abort_reason"] = "repo_field_missing_no_default"
+                    result["error"] = "item requires 'repo' field when git shipping is configured (set expectTopLevel or add repo field)"
+                    result["item_slug"] = item.get("slug", "unknown")
+                    return result
+            else:
+                # No shipping phase; skip repo validation for this item.
+                # This allows backward-compatible non-shipping waves without repo fields.
+                continue
+
+        # Validate and resolve the repo path to absolute.
+        try:
+            repo_resolved = _validate_repo_path(repo)
+            repo_paths.add(repo_resolved)
+            # Update item with resolved path for later use (ensures byte-identical cwd).
+            item["repo"] = repo_resolved
+        except ValueError as e:
+            result["aborted"] = True
+            result["abort_reason"] = "invalid_repo_path"
+            result["invalid_repo"] = repo
+            result["error"] = str(e)
+            return result
+        # Future: also validate is_git_worktree, has_secret_scan_gate
+
+    # Per-repo ownership guard: track ownership within each repo separately.
+    # Structure: {repo: {normalized_file: slug}}
+    repo_owner_map = {}  # repo -> (normalized file -> slug)
     conflicts = []
 
     for item in items:
         slug = item.get("slug", "unknown")
         owned_files = item.get("ownsFiles", [])
+        repo = item.get("repo", ".")  # Default to cwd if no repo specified
+
+        # Normalize repo path
+        repo_normalized = str(Path(repo).resolve()).lower()
+
+        if repo_normalized not in repo_owner_map:
+            repo_owner_map[repo_normalized] = {}
+
+        owner_map = repo_owner_map[repo_normalized]
+
         for f in owned_files:
             # Platform-independent path normalization: handle separators and case uniformly.
             # Replace all backslashes with forward slashes, normalize with posixpath,
@@ -410,6 +590,7 @@ def run_wave(
                     {
                         "file": f,
                         "normalized": normalized,
+                        "repo": repo,
                         "items": [owner_map[normalized], slug],
                     }
                 )
@@ -462,11 +643,13 @@ def run_wave(
         """Build one item and return (index, result_dict)."""
         slug = item.get("slug", f"item-{item_index}")
         workdir = item.get("workDir", ".")
+        repo = item.get("repo")
 
         # ====================================================================
         # RESUME CHECK: If in journal and verified, skip dispatch and trust-verify
         # ====================================================================
-        journal_entry = journal_state.get(slug)
+        journal_key = (repo, slug)
+        journal_entry = journal_state.get(journal_key)
         skipped_from_journal = False
         if journal_entry and _should_skip_from_journal(journal_entry):
             skipped_from_journal = True
@@ -608,7 +791,7 @@ def run_wave(
                     "verified": item_result["verified"],
                     "testExit": item_result["testExit"],
                     "instance_id": instance_id,
-                })
+                }, repo=repo)
 
             return (item_index, item_result)
 
@@ -620,7 +803,7 @@ def run_wave(
                     "testExit": None,
                     "instance_id": instance_id,
                     "error": str(exc),
-                })
+                }, repo=repo)
 
             return (
                 item_index,
@@ -721,11 +904,12 @@ def run_wave(
 
                 # Write journal entry for repair outcome.
                 if state_dir:
+                    repo = item.get("repo")
                     _write_journal_entry(state_dir, slug, "repaired", {
                         "verified": item_result["verified"],
                         "testExit": item_result["testExit"],
                         "repairs": item_result["repairs"],
-                    })
+                    }, repo=repo)
 
                 # If still failed, mark for next round.
                 if not item_result["verified"]:
@@ -737,12 +921,13 @@ def run_wave(
 
                 # Write journal entry for repair failure.
                 if state_dir:
+                    repo = item.get("repo")
                     _write_journal_entry(state_dir, slug, "repair_failed", {
                         "verified": False,
                         "testExit": None,
                         "repairs": item_result["repairs"],
                         "error": str(exc),
-                    })
+                    }, repo=repo)
 
                 next_failed.append((item_index, item, item_result))
 
@@ -795,7 +980,7 @@ def run_wave(
         item_result["adversarial_review"] = "deferred"
 
     # ========================================================================
-    # PHASE 7: Batched ship (git operations, if configured)
+    # PHASE 7: Per-repo ship (git operations, if configured)
     # ========================================================================
     if git is not None:
         # Verify expectTopLevel guard: MUST be a non-empty string matching actual toplevel.
@@ -806,59 +991,188 @@ def run_wave(
             result["abort_reason"] = "git_toplevel_missing_or_empty"
             return result
 
-        toplevel_result = driver.run_command("git rev-parse --show-toplevel")
-        if toplevel_result.exit_code != 0:
-            result["aborted"] = True
-            result["abort_reason"] = "git_toplevel_check_failed"
-            return result
-
-        toplevel = toplevel_result.stdout.strip()
-        if toplevel != expect_top_level:
-            result["aborted"] = True
-            result["abort_reason"] = "git_toplevel_mismatch"
-            return result
-
         # Only ship items that verified green.
-        verified_items = [
-            item_result for item_result in result["built"]
-            if item_result.get("verified", False)
-        ]
+        # Build a slug -> original_item mapping for lookup.
+        slug_to_item = {item.get("slug"): (i, item) for i, item in enumerate(items)}
+
+        verified_items = []
+        for item_result in result["built"]:
+            if item_result.get("verified", False):
+                slug = item_result.get("slug")
+                if slug in slug_to_item:
+                    item_index, original_item = slug_to_item[slug]
+                    verified_items.append((item_index, original_item, item_result))
 
         if verified_items:
-            # Stage and commit.
-            files_to_add = []
-            for item_result in verified_items:
-                files_to_add.extend(item_result.get("filesWritten", []))
+            # Group verified items by their resolved repo.
+            repo_to_items = {}  # {repo_path: [(item_index, original_item, item_result), ...]}
+            for item_index, original_item, item_result in verified_items:
+                repo = original_item.get("repo", ".")
+                # Resolve and validate repo path.
+                try:
+                    repo_resolved = _validate_repo_path(repo)
+                except ValueError:
+                    # Fail-closed: this repo is invalid, mark as error but continue.
+                    item_result["ship_error"] = f"invalid repo path: {repo}"
+                    continue
 
-            if files_to_add:
-                # Add files. Escape each filename to prevent shell injection.
-                # Use _quote_arg for platform-safe quoting (Windows + POSIX).
-                escaped_files = [_quote_arg(f) for f in files_to_add]
-                add_cmd = "git add " + " ".join(escaped_files)
-                add_result = driver.run_command(add_cmd)
-                if add_result.exit_code != 0:
-                    result["aborted"] = True
-                    result["abort_reason"] = "git_add_failed"
-                    return result
+                if repo_resolved not in repo_to_items:
+                    repo_to_items[repo_resolved] = []
+                repo_to_items[repo_resolved].append((item_index, original_item, item_result))
 
-                # Commit. Escape the message to prevent shell injection.
-                # Use _quote_arg for platform-safe quoting.
-                commit_msg = f"Wave: {len(verified_items)} items verified"
-                commit_cmd = f"git commit -m {_quote_arg(commit_msg)}"
-                commit_result = driver.run_command(commit_cmd)
-                if commit_result.exit_code != 0:
-                    # Might be "nothing to commit"; not necessarily a failure.
-                    pass
+            # Ship each repo separately.
+            shipped_items = []
+            repo_ship_results = []  # {repo, committed, sha, files_count, error}
 
-                # Push.
-                push_result = driver.run_command("git push")
-                if push_result.exit_code != 0:
-                    result["aborted"] = True
-                    result["abort_reason"] = "git_push_failed"
-                    return result
+            for repo_path, repo_items in repo_to_items.items():
+                # Verify expectTopLevel guard PER REPO:
+                # Each repo's toplevel must equal the global expectTopLevel OR the repo's own root.
+                # First, verify the repo is actually a git repo with the right toplevel.
+                toplevel_result = driver.run_command(
+                    "git rev-parse --show-toplevel",
+                    cwd=repo_path
+                )
+                if toplevel_result.exit_code != 0:
+                    # This repo's git is broken; abort THIS repo's ship but continue others.
+                    repo_ship_results.append({
+                        "repo": repo_path,
+                        "committed": False,
+                        "error": "git_toplevel_check_failed",
+                        "files_count": len(repo_items),
+                    })
+                    # Mark items from this repo as shipped_error.
+                    for _, _, item_result in repo_items:
+                        item_result["ship_error"] = "git_toplevel_check_failed"
+                    continue
 
-                # Record shipped items.
-                result["shipped"] = [item_result["slug"] for item_result in verified_items]
+                toplevel = toplevel_result.stdout.strip()
+                # Normalize paths for comparison (git may return with / on Windows)
+                toplevel_normalized = str(Path(toplevel).resolve())
+                repo_path_normalized = str(Path(repo_path).resolve())
+
+                # Per-repo guard: the repo's toplevel must match that repo's own root.
+                # This ensures we're not operating on a subdirectory or symlink escaping.
+                if toplevel_normalized != repo_path_normalized:
+                    # Top-level mismatch; abort THIS repo's ship but continue others.
+                    repo_ship_results.append({
+                        "repo": repo_path,
+                        "committed": False,
+                        "error": "git_toplevel_mismatch",
+                        "files_count": len(repo_items),
+                        "expected_repo_root": repo_path_normalized,
+                        "actual_toplevel": toplevel_normalized,
+                    })
+                    # Mark items from this repo as shipped_error.
+                    for _, _, item_result in repo_items:
+                        item_result["ship_error"] = "git_toplevel_mismatch"
+                    continue
+
+                # Collect files for this repo (repo-relative).
+                files_to_add = []
+                for _, _, item_result in repo_items:
+                    files_to_add.extend(item_result.get("filesWritten", []))
+
+                if files_to_add:
+                    # VALIDATION P2: Validate all filesWritten paths before git operations.
+                    # Ensure they are relative and don't escape the repo root.
+                    invalid_files = []
+                    for file_path in files_to_add:
+                        try:
+                            _validate_file_path(file_path, repo_path)
+                        except ValueError as e:
+                            invalid_files.append((file_path, str(e)))
+
+                    if invalid_files:
+                        # Path validation failed; fail this item explicitly.
+                        repo_ship_results.append({
+                            "repo": repo_path,
+                            "committed": False,
+                            "error": "invalid_file_paths",
+                            "files_count": len(repo_items),
+                            "invalid_files": invalid_files,
+                        })
+                        # Mark items from this repo as shipped_error.
+                        for _, _, item_result in repo_items:
+                            item_result["ship_error"] = f"invalid file paths: {invalid_files}"
+                        continue
+
+                    # Add files. Escape each filename to prevent shell injection.
+                    escaped_files = [_quote_arg(f) for f in files_to_add]
+                    add_cmd = "git add " + " ".join(escaped_files)
+                    add_result = driver.run_command(add_cmd, cwd=repo_path)
+                    if add_result.exit_code != 0:
+                        # This repo's add failed; abort THIS repo's ship but continue others.
+                        repo_ship_results.append({
+                            "repo": repo_path,
+                            "committed": False,
+                            "error": "git_add_failed",
+                            "files_count": len(repo_items),
+                        })
+                        # Mark items from this repo as shipped_error.
+                        for _, _, item_result in repo_items:
+                            item_result["ship_error"] = "git_add_failed"
+                        continue
+
+                    # Commit. Escape the message to prevent shell injection.
+                    commit_msg = f"Wave: {len(repo_items)} items verified"
+                    commit_cmd = f"git commit -m {_quote_arg(commit_msg)}"
+                    commit_result = driver.run_command(commit_cmd, cwd=repo_path)
+                    if commit_result.exit_code != 0:
+                        # UNSTAGE P3: Commit failed; run git reset to unstage the files.
+                        # This prevents staged-files residue on partial failure.
+                        reset_result = driver.run_command("git reset", cwd=repo_path)
+                        unstage_ok = reset_result.exit_code == 0
+
+                        repo_ship_results.append({
+                            "repo": repo_path,
+                            "committed": False,
+                            "error": "git_commit_failed",
+                            "files_count": len(repo_items),
+                            "files_unstaged": unstage_ok,
+                            "unstage_error": None if unstage_ok else reset_result.stderr,
+                        })
+                        # Mark items from this repo as shipped_error.
+                        for _, _, item_result in repo_items:
+                            item_result["ship_error"] = "git_commit_failed"
+                        continue
+
+                    # Get the commit SHA.
+                    sha_result = driver.run_command("git rev-parse HEAD", cwd=repo_path)
+                    commit_sha = sha_result.stdout.strip() if sha_result.exit_code == 0 else None
+
+                    # Push.
+                    push_result = driver.run_command("git push", cwd=repo_path)
+                    if push_result.exit_code != 0:
+                        # Push failed; abort THIS repo's push but continue others.
+                        repo_ship_results.append({
+                            "repo": repo_path,
+                            "committed": True,
+                            "sha": commit_sha,
+                            "error": "git_push_failed",
+                            "files_count": len(repo_items),
+                        })
+                        # Mark items from this repo as shipped (commit succeeded even if push failed).
+                        for _, _, item_result in repo_items:
+                            item_result["ship_warning"] = "git_push_failed"
+                            shipped_items.append(item_result["slug"])
+                        continue
+
+                    # Success: record this repo's ship.
+                    repo_ship_results.append({
+                        "repo": repo_path,
+                        "committed": True,
+                        "sha": commit_sha,
+                        "files_count": len(repo_items),
+                    })
+                    # Mark items from this repo as shipped.
+                    for _, _, item_result in repo_items:
+                        shipped_items.append(item_result["slug"])
+
+            # Record shipped items and per-repo results.
+            if shipped_items:
+                result["shipped"] = shipped_items
+            if repo_ship_results:
+                result["shipped_repos"] = repo_ship_results
 
     return result
 
