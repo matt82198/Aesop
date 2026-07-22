@@ -98,7 +98,7 @@ async def test():
         page.on('console', on_console)
 
         # Load the dashboard
-        await page.goto('http://127.0.0.1:{port}/', wait_until='networkidle')
+        await page.goto('http://127.0.0.1:{port}/', wait_until='domcontentloaded')
 
         # {test_name}
         try:
@@ -141,7 +141,7 @@ asyncio.run(test())
             capture_output=True,
             text=True,
             timeout=30,
-            env={{**os.environ, 'AESOP_STATE_ROOT': str(state_dir)}}
+            env={**os.environ, 'AESOP_STATE_ROOT': str(state_dir)}
         )
         print(result.stdout)
         if result.stderr and 'warning' not in result.stderr.lower():
