@@ -93,7 +93,8 @@ def _parse_state_md_phase():
 
         # Extract wave name from phase (e.g., "wave-rc.2" from "rc-1-published-source-available")
         # Match patterns like "wave-26", "wave-rc.2", "rc-1", etc.
-        wave_match = re.search(r'(wave[-.]?\w+|rc[-.]?\w+)', phase, re.IGNORECASE)
+        # Use (?:\.\w+)* to capture dot-separated identifiers (e.g., "wave-rc.2")
+        wave_match = re.search(r'(wave[-.]?\w+(?:\.\w+)*|rc[-.]?\w+(?:\.\w+)*)', phase, re.IGNORECASE)
         if wave_match:
             wave_str = wave_match.group(0)  # e.g., "wave-26" or "rc-1"
         else:
@@ -326,7 +327,8 @@ def get_wave_telemetry():
         if orch_phase:
             # Fresh orchestrator-status.json found; use it
             # Extract wave identifier from phase (e.g., "wave-26" from "wave-26-verify", "wave-rc.2" from "wave-rc.2: build")
-            wave_match = re.search(r'(wave[-.]?\w+|rc[-.]?\w+)', orch_phase, re.IGNORECASE)
+            # Use (?:\.\w+)* to capture dot-separated identifiers (e.g., "wave-rc.2")
+            wave_match = re.search(r'(wave[-.]?\w+(?:\.\w+)*|rc[-.]?\w+(?:\.\w+)*)', orch_phase, re.IGNORECASE)
             if wave_match:
                 wave_str = wave_match.group(0)  # e.g., "wave-26", "wave-rc", or "rc-1"
             else:
