@@ -782,7 +782,7 @@ class TestCrossArtifactWithFleetLedger(CostIsolationCase):
     """Cross-artifact test: append via fleet_ledger.py, parse via cost.py."""
 
     def test_cost_parses_fleet_ledger_appended_9_column_rows(self):
-        """Verify cost.get_cost_summary() works with rows appended by fleet_ledger.py."""
+        """Verify cost.get_cost_summary() works with rows appended by fleet_ledger.append_ledger_line()."""
         # This test verifies the bridge between fleet_ledger.py (writer) and cost.py (reader)
         # by using the actual fleet_ledger append function.
         try:
@@ -793,8 +793,61 @@ class TestCrossArtifactWithFleetLedger(CostIsolationCase):
         # Set environment so fleet_ledger uses our isolated state dir
         os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
 
-        # Use fleet_ledger to append 9-column rows (via subprocess or direct import)
-        # We'll directly append rows to simulate what fleet_ledger.py does
+        # Import datetime for valid ISO-8601 timestamps
+        from datetime import datetime, timezone
+
+        # Use fleet_ledger.append_ledger_line to append 9-column rows
+        # This ensures the test truly tests the integration between writer and reader
+        base_time = datetime.fromisoformat("2026-07-11T22:08:17+00:00")
+        ts1 = base_time.isoformat()
+        ts2 = base_time.replace(second=21).isoformat()
+        ts3 = base_time.replace(second=22).isoformat()
+
+        fleet_ledger.append_ledger_line(ts1, "Agent", "claude-haiku-4-5-20251001", 0, 8, 186, "OK", "build", 7)
+        fleet_ledger.append_ledger_line(ts2, "Agent", "claude-opus-4-8", 1, 2, 3, "FAILED", "verify", 7)
+        fleet_ledger.append_ledger_line(ts3, "Agent", "claude-haiku-4-5-20251001", 0, 8, 116, "OK", "repair", 7)
+
+        # Reload config to pick up the ledger
+        config.reload()
+
+        # Now parse with cost.get_cost_summary()
+        summary = cost.get_cost_summary()
+
+        # Verify all rows were parsed successfully
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertIn("claude-haiku-4-5-20251001", summary["models"])
+        self.assertIn("claude-opus-4-8", summary["models"])
+
+        # Verify haiku stats
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 2)
+        self.assertEqual(haiku["tokens_in"], 16)  # 8 + 8
+        self.assertEqual(haiku["tokens_out"], 302)  # 186 + 116
+        self.assertEqual(haiku["verdicts"]["OK"], 2)
+
+        # Verify opus stats
+        opus = summary["models"]["claude-opus-4-8"]
+        self.assertEqual(opus["runs"], 1)
+        self.assertEqual(opus["tokens_in"], 2)
+        self.assertEqual(opus["tokens_out"], 3)
+        self.assertEqual(opus["verdicts"]["FAILED"], 1)
+
+        # Verify overall scorecard
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 3)
+        self.assertEqual(summary["overall_scorecard"]["ok_count"], 2)
+        self.assertEqual(summary["overall_scorecard"]["failed_count"], 1)
+
+        # Verify no errors
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertNotIn("error", summary)
+
+    def test_cost_parses_manually_written_9_column_rows(self):
+        """Verify cost.get_cost_summary() handles manually-written 9-column rows.
+
+        This test ensures the parser handles hand-crafted markdown rows correctly,
+        but it does NOT verify integration with fleet_ledger.py (that's in
+        test_cost_parses_fleet_ledger_appended_9_column_rows).
+        """
         ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
         ledger_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -803,7 +856,7 @@ class TestCrossArtifactWithFleetLedger(CostIsolationCase):
         header += '|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n'
         ledger_file.write_text(header, encoding='utf-8')
 
-        # Append 9-column rows (mimicking fleet_ledger.append_ledger_line behavior)
+        # Append manually-written 9-column rows
         row1 = '| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK | build | 7 |\n'
         row2 = '| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 1 | 2 | 3 | FAILED | verify | 7 |\n'
         row3 = '| 2026-07-11T22:08:22 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK | repair | 7 |\n'
@@ -844,6 +897,57 @@ class TestCrossArtifactWithFleetLedger(CostIsolationCase):
         self.assertEqual(summary["overall_scorecard"]["failed_count"], 1)
 
         # Verify no errors
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertNotIn("error", summary)
+
+    def test_cost_parses_8_column_rows(self):
+        """Verify cost.get_cost_summary() accepts 8-column rows (phase optional, wave omitted).
+
+        8-column format: | timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict | phase |
+        This is an intermediate format between 7-column (legacy) and 9-column (full).
+        """
+        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
+        ledger_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create ledger with header
+        header = '| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase |\n'
+        header += '|--------|------------|-------|--------------|-----------|------------|--------|-------|\n'
+        ledger_file.write_text(header, encoding='utf-8')
+
+        # Append 8-column rows (no wave column)
+        row1 = '| 2026-07-11T22:10:01 | Agent | claude-haiku-4-5-20251001 | 0 | 10 | 200 | OK | build |\n'
+        row2 = '| 2026-07-11T22:10:05 | Agent | claude-opus-4-8 | 2 | 5 | 50 | OK | verify |\n'
+
+        with open(ledger_file, 'a', encoding='utf-8') as f:
+            f.write(row1)
+            f.write(row2)
+
+        # Reload config to pick up the ledger
+        config.reload()
+
+        # Now parse with cost.get_cost_summary()
+        summary = cost.get_cost_summary()
+
+        # Verify both rows were parsed successfully (8-column format is accepted)
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertIn("claude-haiku-4-5-20251001", summary["models"])
+        self.assertIn("claude-opus-4-8", summary["models"])
+
+        # Verify haiku stats
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 1)
+        self.assertEqual(haiku["tokens_in"], 10)
+        self.assertEqual(haiku["tokens_out"], 200)
+
+        # Verify opus stats
+        opus = summary["models"]["claude-opus-4-8"]
+        self.assertEqual(opus["runs"], 1)
+        self.assertEqual(opus["tokens_in"], 5)
+        self.assertEqual(opus["tokens_out"], 50)
+
+        # Verify overall scorecard
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 2)
+        self.assertEqual(summary["overall_scorecard"]["ok_count"], 2)
         self.assertEqual(summary["skipped_lines"], 0)
         self.assertNotIn("error", summary)
 
