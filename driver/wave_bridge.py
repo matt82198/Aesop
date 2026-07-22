@@ -52,6 +52,7 @@ from agent_driver import (
     WorkerRequest,
     ROLE_WORKER,
 )
+from verification_policy import verification_policy
 
 
 def build_manifest_item(driver: AgentDriver, item: Dict[str, Any]) -> Dict[str, Any]:
@@ -59,11 +60,18 @@ def build_manifest_item(driver: AgentDriver, item: Dict[str, Any]) -> Dict[str, 
 
     Takes a backlog item {slug, ownsFiles, prompt, testCmd, workDir, ...} and an
     AgentDriver, and produces a manifest-item dict that the wave expects, with
-    verificationTier and model baked in from the driver's probed capabilities.
+    verificationTier and model baked in from the driver's probed capabilities,
+    PLUS all four resolved policy knobs.
 
     This is the seam that makes tier-driven verification actually driven by the
     backend's honest self-report: a weak backend raises the orchestrator's burden
     via recommended_verification_tier, not config.
+
+    The policy is RESOLVED ONCE here in Python and carried as literal manifest
+    fields, so JS cannot recompute/drift. The template consumes these resolved
+    values; tier-1/Claude path with no verificationTier must behave exactly as
+    before (tier-1 defaults: repairCap=1, requireAdversarialReview=false,
+    spotCheckFrac=0.10, validateAllJson=false).
 
     Args:
         driver: AgentDriver instance (provides probe_capabilities, resolve_model).
@@ -74,16 +82,28 @@ def build_manifest_item(driver: AgentDriver, item: Dict[str, Any]) -> Dict[str, 
         dict with all item fields PLUS:
           - model: concrete model id from driver.resolve_model('worker')
           - verificationTier: recommended tier from driver.probe_capabilities()
+          - repairCap: resolved repair budget for this tier
+          - requireAdversarialReview: resolved adversarial review requirement
+          - spotCheckFrac: resolved spot-check fraction for this tier
+          - validateAllJson: resolved JSON validation strictness for this tier
         The dict is suitable for passing to wave-flat-dispatch.template.mjs as an
-        item in the items[] array.
+        item in the items[] array. All four policy fields are consumed directly
+        by the template; it does NOT recompute them.
     """
     caps = driver.probe_capabilities()
     model = driver.resolve_model(ROLE_WORKER)
 
-    # Copy the input item and enrich with model + tier.
+    # Resolve all four policy knobs from the backend's verification tier.
+    policy = verification_policy(caps)
+
+    # Copy the input item and enrich with model, tier, and all four policy knobs.
     result = dict(item)
     result["model"] = model
     result["verificationTier"] = caps.recommended_verification_tier
+    result["repairCap"] = policy["repair_cap"]
+    result["requireAdversarialReview"] = policy["require_adversarial_review"]
+    result["spotCheckFrac"] = policy["spot_check_frac"]
+    result["validateAllJson"] = policy["validate_all_json"]
 
     return result
 

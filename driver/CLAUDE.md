@@ -117,9 +117,15 @@ items, making verification tier driven by backend capability, not config.
 
 **build_manifest_item(driver, item) -> dict**:
 - Takes a backlog item {slug, ownsFiles, prompt, testCmd, workDir, ...} + driver.
-- Returns manifest-item dict enriched with: model (from driver.resolve_model('worker'))
-  and verificationTier (from driver.probe_capabilities().recommended_verification_tier).
-- Preserves all input fields; adds only model + tier.
+- Returns manifest-item dict enriched with: model (from driver.resolve_model('worker')),
+  verificationTier (from driver.probe_capabilities().recommended_verification_tier),
+  AND all four resolved policy knobs (repairCap, requireAdversarialReview, spotCheckFrac,
+  validateAllJson from verification_policy(caps)).
+- Preserves all input fields; adds model, tier, and all four policy fields.
+- The policy is RESOLVED ONCE in Python and carried as literal manifest fields, so
+  the template cannot recompute/drift. Tier-1/Claude path with no verificationTier
+  maintains byte-identical behavior (tier-1 defaults: repairCap=1, requireAdversarialReview=false,
+  spotCheckFrac=0.10, validateAllJson=false).
 
 **dispatch_item(driver, item) -> dict**:
 - Routes by worker_filesystem_access: True→{route:'harness'}; False→orchestrator-managed
@@ -135,12 +141,8 @@ stub, applies a fix, runs the test, and returns ok=True ONLY because the test pa
 ## Status
 
 - **Phase 1**: shipped. Interface + Claude reference adapter + contract tests.
-- **Phase 2**: shipped. Codex OpenAI Chat Completions implementation wired
-  end-to-end. All offline tests GREEN (no API key, no network). One live test
-  gated by AESOP_CODEX_LIVE + OPENAI_API_KEY (skipped in CI).
-- **Phase 3**: shipped. Wave bridge wiring driver -> manifest + orchestrator-side
-  dispatch. Proves non-Claude backends can drive items end-to-end with verified-honest
-  decisions (green only from test exit 0). All offline tests GREEN. Drivers usable
-  directly; full wave-loop integration in progress.
+- **Phase 2**: shipped. Codex OpenAI Chat Completions implementation. Offline tests GREEN.
+- **Phase 3**: shipped. Wave bridge: driver → manifest, orchestrator-side dispatch.
+  Proves non-Claude backends drive items end-to-end with honest green (test exit 0 only).
 - **Next**: Refactor wave-flat-dispatch onto the driver (Phase 1 handoff).
 - **Future**: Open-model adapter (Tier-4 backend).

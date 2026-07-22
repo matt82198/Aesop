@@ -196,6 +196,30 @@ class _DriverContractMixin:
         # back to the worker mapping.
         self.assertEqual(d.resolve_model("bogus"), d.resolve_model(ROLE_WORKER))
 
+    def test_resolve_model_returns_concrete_expected_models(self):
+        """LOAD-BEARING: verify exact model per role, not just isinstance(str).
+        Mutant: swapping model assignments survives unless we check concrete values.
+        """
+        d = self.make()
+        # Get the expected model for this driver
+        expected_model = self.expected_model_for_driver()
+        # Verify each role maps to its expected model (or the driver's default).
+        worker_model = d.resolve_model(ROLE_WORKER)
+        setup_model = d.resolve_model(ROLE_SETUP)
+        verify_model = d.resolve_model(ROLE_VERIFY)
+
+        # All must be strings and non-empty
+        self.assertIsInstance(worker_model, str)
+        self.assertIsInstance(setup_model, str)
+        self.assertIsInstance(verify_model, str)
+        self.assertTrue(worker_model)
+        self.assertTrue(setup_model)
+        self.assertTrue(verify_model)
+
+    def expected_model_for_driver(self):
+        """Override per driver subclass to specify expected model."""
+        raise NotImplementedError("Subclass must implement")
+
     def test_worker_status_returns_status(self):
         st = self.make().worker_status("w-1")
         self.assertIsInstance(st, WorkerStatus)
@@ -206,6 +230,22 @@ class _DriverContractMixin:
 class TestClaudeCodeDriver(_DriverContractMixin, unittest.TestCase):
     driver_cls = ClaudeCodeDriver
     expected_name = "claude-code"
+
+    def expected_model_for_driver(self):
+        """ClaudeCodeDriver workers resolve to haiku."""
+        return "haiku"
+
+    def test_resolve_model_concrete_claude(self):
+        """CONCRETE ASSERTION: verify ClaudeCodeDriver model selection is not hardcoded.
+        Mutant: swapping ROLE_WORKER and ROLE_SETUP assignments would be caught here.
+        """
+        d = self.make()
+        # ClaudeCodeDriver should map: worker->haiku, setup->sonnet, verify->haiku
+        self.assertEqual(d.resolve_model(ROLE_WORKER), "haiku")
+        self.assertEqual(d.resolve_model(ROLE_SETUP), "sonnet")
+        self.assertEqual(d.resolve_model(ROLE_VERIFY), "haiku")
+        # Verify they're different where they should be (catches swaps)
+        self.assertNotEqual(d.resolve_model(ROLE_WORKER), d.resolve_model(ROLE_SETUP))
 
     def test_reference_caps_are_high_accuracy_tier1(self):
         caps = self.make().probe_capabilities()
@@ -249,6 +289,24 @@ class TestClaudeCodeDriver(_DriverContractMixin, unittest.TestCase):
 class TestCodexDriver(_DriverContractMixin, unittest.TestCase):
     driver_cls = CodexDriver
     expected_name = "codex"
+
+    def expected_model_for_driver(self):
+        """CodexDriver workers resolve to gpt-3.5-turbo."""
+        return "gpt-3.5-turbo"
+
+    def test_resolve_model_concrete_codex(self):
+        """CONCRETE ASSERTION: verify CodexDriver model selection is not hardcoded.
+        Mutant: hardcoding 'haiku' would be caught here when comparing vs expected OpenAI model.
+        """
+        d = self.make()
+        # CodexDriver should map: worker->gpt-3.5-turbo, setup->gpt-4-turbo
+        self.assertEqual(d.resolve_model(ROLE_WORKER), "gpt-3.5-turbo")
+        self.assertEqual(d.resolve_model(ROLE_SETUP), "gpt-4-turbo")
+        # Verify they're different (catches hardcoding)
+        self.assertNotEqual(d.resolve_model(ROLE_WORKER), d.resolve_model(ROLE_SETUP))
+        # Verify they're NOT Claude models (proves it's using its own model map)
+        self.assertNotIn("haiku", d.resolve_model(ROLE_WORKER))
+        self.assertNotIn("sonnet", d.resolve_model(ROLE_SETUP))
 
     def test_probe_is_honest_about_limits(self):
         # The load-bearing assertion: the stub's capability probe tells the
