@@ -48,15 +48,27 @@ class Finding:
 
 
 def get_git_status(repo_path):
-    """Return (is_clean, dirty_files_list) for a repo."""
+    """Return (is_clean, dirty_files_list) for a repo.
+
+    Returns:
+      (True, []): Repo is clean
+      (False, list): Repo is dirty with file list
+      (None, error_msg): Git command failed (FAIL-CLOSED: treat as AT-RISK)
+    """
     try:
         # Resolve path to normalize 8.3 short names on Windows
         resolved_path = Path(repo_path).resolve()
-        output = subprocess.run(
+        result = subprocess.run(
             ['git', '-C', str(resolved_path), 'status', '--porcelain'],
             capture_output=True, text=True, timeout=5
-        ).stdout.strip()
+        )
 
+        # FAIL-CLOSED: Check return code before processing output
+        if result.returncode != 0:
+            error_msg = result.stderr.strip() if result.stderr.strip() else f"exit code {result.returncode}"
+            return (None, f"git status check failed: {error_msg}")
+
+        output = result.stdout.strip()
         if not output:
             return (True, [])
         else:
@@ -67,23 +79,56 @@ def get_git_status(repo_path):
 
 
 def get_ahead_count(repo_path):
-    """Return count of commits ahead of origin/HEAD (or None on error)."""
+    """Return count of commits ahead of origin/HEAD (or None on error).
+
+    Returns:
+      int >= 0: Number of commits ahead (0 = all pushed or no remote)
+      None: Git command failed unexpectedly (FAIL-CLOSED: treat as AT-RISK)
+    """
     try:
         # Resolve path to normalize 8.3 short names on Windows
         resolved_path = Path(repo_path).resolve()
         # First check if there's a tracking branch
-        try:
-            output = subprocess.run(
-                ['git', '-C', str(resolved_path), 'rev-list', '--left-only', '--count', 'HEAD...@{u}'],
-                capture_output=True, text=True, timeout=5
-            ).stdout.strip()
-        except:
-            # Fallback to origin/HEAD if no upstream
-            output = subprocess.run(
+        result = subprocess.run(
+            ['git', '-C', str(resolved_path), 'rev-list', '--left-only', '--count', 'HEAD...@{u}'],
+            capture_output=True, text=True, timeout=5
+        )
+
+        # If upstream tracking exists, use that result
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            try:
+                return int(output) if output else 0
+            except:
+                return None
+
+        # If no upstream tracking, try origin/HEAD (fallback for single-branch or no-remote repos)
+        # Expected error for local-only repos: "fatal: no upstream configured"
+        stderr_lower = result.stderr.lower()
+        if 'no upstream configured' in stderr_lower:
+            # Local-only repo (no tracking branch), try origin/HEAD as fallback
+            result = subprocess.run(
                 ['git', '-C', str(resolved_path), 'rev-list', '--left-only', '--count', 'HEAD...origin/HEAD'],
                 capture_output=True, text=True, timeout=5
-            ).stdout.strip()
+            )
 
+        # Check return code; if fails, determine if it's an expected "no remote" error or a real error
+        if result.returncode != 0:
+            stderr_lower = result.stderr.lower()
+            # Expected errors for local-only repos (no remote configured)
+            expected_errors = [
+                'no upstream configured',
+                'ambiguous argument',
+                'unknown revision',
+                'not a valid object name',
+                'no such ref'
+            ]
+            if any(err in stderr_lower for err in expected_errors):
+                return 0  # No remote/tracking, treat as "all pushed"
+            else:
+                return None  # Real error, fail-closed
+
+        output = result.stdout.strip()
         try:
             return int(output) if output else 0
         except:
@@ -93,15 +138,26 @@ def get_ahead_count(repo_path):
 
 
 def check_untracked_files(repo_path):
-    """Return list of untracked files not in .gitignore."""
+    """Return list of untracked files not in .gitignore.
+
+    Returns:
+      []: No untracked files
+      [list]: Untracked files found
+      None: Git command failed (FAIL-CLOSED: treat as AT-RISK)
+    """
     try:
         # Resolve path to normalize 8.3 short names on Windows
         resolved_path = Path(repo_path).resolve()
-        output = subprocess.run(
+        result = subprocess.run(
             ['git', '-C', str(resolved_path), 'ls-files', '--others', '--exclude-standard'],
             capture_output=True, text=True, timeout=5
-        ).stdout.strip()
+        )
 
+        # FAIL-CLOSED: Check return code before processing output
+        if result.returncode != 0:
+            return None
+
+        output = result.stdout.strip()
         if output:
             return output.split('\n')
         return []
