@@ -460,9 +460,11 @@ class TestPerRepoShip(unittest.TestCase):
         repo_results = result["shipped_repos"]
 
         # Find results for each repo.
-        result_a = next((r for r in repo_results if r["repo"] == str(_FIXTURE_REPO_A)), None)
-        result_sub = next((r for r in repo_results if r["repo"] == str(subdir)), None)
-        result_b = next((r for r in repo_results if r["repo"] == str(_FIXTURE_REPO_B)), None)
+        # Note: ship phase normalizes repo paths via Path.resolve(), so we must
+        # resolve the fixture paths for comparison (critical for short TMPDIR on Windows).
+        result_a = next((r for r in repo_results if r["repo"] == str(Path(_FIXTURE_REPO_A).resolve())), None)
+        result_sub = next((r for r in repo_results if r["repo"] == str(Path(subdir).resolve())), None)
+        result_b = next((r for r in repo_results if r["repo"] == str(Path(_FIXTURE_REPO_B).resolve())), None)
 
         self.assertIsNotNone(result_a, "Repo A should have a result")
         self.assertIsNotNone(result_sub, "Subdir should have a result")

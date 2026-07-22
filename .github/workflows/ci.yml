@@ -242,6 +242,8 @@ jobs:
         run: pip install pyyaml
 
       - name: Run Node.js tests
+        env:
+          AESOP_TEST_CHILD_TIMEOUT_MS: '120000'
         run: npm run test:node
 
       - name: Run Python tests (PYTHONUTF8=1 for Windows encoding)
