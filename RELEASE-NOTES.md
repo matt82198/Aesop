@@ -29,6 +29,26 @@ A source-available, portable orchestration harness for any coding-capable backen
 - CI/publish Node version parity (PR #225): Unified Node.js version across CI and npm publish workflows for reproducible builds.
 - Adversarial-review safety fixes (wave-32): Multiple orchestration loop hardening fixes identified and validated by external review.
 
+## Security & Hardening (Post-Release Fixes)
+
+Hardening round integrated after release-artifact preparation (fe6bb04):
+
+**AI & Prompt Security:**
+- **Codex prompt-injection hardening** (fix/codex-prompt-injection, fix/codex-frame-integrity): JSON-wrapped framing to prevent prompt injection attacks in orchestration context; SHA-256 digest + retry nudge for frame integrity verification across API boundaries.
+- **Codex path containment** (fix/codex-driver-path-containment): Cross-platform path normalization (Windows/Unix) with `resolve()` + `commonpath()` to block directory traversal in task execution.
+
+**System & Daemon Hardening:**
+- **Daemon fail-closed on lock errors** (fix/daemons-lock-portability): Pre-push and coordination daemons now fail CLOSED on file-write errors or lock-acquisition timeouts, preventing silently-skipped enforcements; portability fixes for CONDUCTOR_ROOT.
+- **Cost-ceiling fail-closed** (fix/cost_ceiling): Enforced at dispatch for backends reporting live token spend; the Claude Code reference driver's ledger integration is in progress (currently returns None, limiting enforcement scope to pre-dispatch budget checks).
+
+**Data & Audit Security:**
+- **Audit log JSON escaping** (fix/audit-log-repo-escape): Escape repo_name and other fields in audit-log JSON to block injection attacks on durable audit trail.
+- **Audit-tail verdict fix** (fix/audit-tail-verdict): Correct column index and validation whitelist in wave_audit_tail.py to prevent misclassified verdicts.
+- **Redaction-proof transcript hardening** (verify_ui_trio.py): Single-source redaction patterns in transcript digest to ensure sensitive data is consistently masked across all observability paths.
+
+**Pre-Push & CI Hardening:**
+- **Pre-push delete-refspec handling** (fix/prepush-delete-refspecs): Enforce branch-protection on force-delete operations; empty-stdin handling to block stalled CI merge-waits.
+
 ## Install
 
 ```bash

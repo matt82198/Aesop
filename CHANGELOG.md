@@ -28,6 +28,31 @@ Minor release shipping multi-model orchestration portability and adaptive verifi
 - **CI/publish Node version parity** (PR #225): Unified Node.js version across CI and npm publish workflows for reproducible builds.
 - **Adversarial-review safety fixes** (wave-32): Multiple orchestration loop hardening fixes identified and validated by external review (agent-grading-agent risks eliminated).
 
+### Security & Hardening (Post-Release Fixes)
+
+Critical hardening round integrated after 0.2.0 release-artifact preparation (fe6bb04, 2026-07-21):
+
+**AI & Prompt Security:**
+- **Codex prompt-injection hardening** (fix/codex-prompt-injection): JSON-wrapped framing prevents prompt injection in orchestration context; multi-layer escaping for task/dispatch boundaries (P1 AI-security).
+- **Codex frame integrity** (fix/codex-frame-integrity): SHA-256 digest + retry nudge for frame integrity verification across API boundaries; prevents frame corruption from in-flight mutations.
+- **Codex path containment** (fix/codex-driver-path-containment): Cross-platform path normalization (Windows: `resolve()` + `commonpath()`, Unix: realpath) blocks directory traversal in task file operations (P2 security).
+- **Codex escape-accounting** (fix/codex-prompt-injection): Measure `max_owned_bytes` post-escape to detect prompt-injection breakout payloads (P1 AI-security).
+
+**System & Daemon Hardening:**
+- **Daemon fail-closed on lock errors** (fix/daemons-lock-portability): Pre-push and coordination daemons now fail CLOSED on file-write errors, lock-acquisition timeout, or heartbeat stalls; prevents silently-skipped enforcements. CONDUCTOR_ROOT portability (Windows/Unix path handling).
+
+**Data & Audit Security:**
+- **Audit log JSON escaping** (fix/audit-log-repo-escape): Escape `repo_name` and payload fields in audit-log JSON emits to prevent injection attacks on durable audit trail (P1 security).
+- **Audit-tail verdict fix** (fix/audit-tail-verdict): Correct column index in wave_audit_tail.py verdict parsing and add validation whitelist to prevent misclassified wave outcomes.
+
+**Transcript & Observability Hardening:**
+- **Redaction-proof transcript digest** (verify_ui_trio.py): Single-source redaction patterns (`transcript_digest.py`) ensure sensitive data (API keys, internal tokens, paths) are consistently masked across all observability exports — dashboard, audit, and external integrations.
+
+**Pre-Push & CI Hardening:**
+- **Pre-push delete-refspec hardening** (fix/prepush-delete-refspecs): Enforce branch-protection policy on force-delete and fast-forward-only mutations; prevent refspec conflicts from stalling the merge train.
+- **Empty-stdin handling** (fix/prepush-delete-refspecs): Guard pre-push hook against stalled CI merge-wait (empty stdin → timeout → fail-closed block).
+- **Cost-ceiling fail-closed** (fix/cost_ceiling): Per-wave spend ceiling now enforced at dispatch time; fails CLOSED on file/git read errors. **Caveat:** enforced for backends reporting live token spend via `AgentDriver.get_tokens_spent()`; the Claude Code reference driver's ledger integration is in progress (currently returns None, limiting enforcement to pre-dispatch budget checks only).
+
 ### Documentation
 - **Multi-model configuration guide** (wave-32): docs/INSTALL.md now includes "Using Non-Claude Backends" section with Ollama example, verification-tier table, and troubleshooting.
 - **Driver domain map complete** (wave-32): driver/CLAUDE.md now lists all Files (openai_compatible_driver.py, backend_config.py) with descriptions for one-file-per-domain rule.
