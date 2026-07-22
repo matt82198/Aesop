@@ -625,6 +625,13 @@ run_test_mode() {
   (
     export AESOP_ROOT="$tmpdir/aesop"
     mkdir -p "$AESOP_ROOT/state"
+    # SCOPED (identity-polluter class): quoted-name check runs inside an
+    # isolated fixture repo; must NEVER touch the live repo config.
+    SELFTEST_REPO="$tmpdir/selftest_identity_repo"
+    mkdir -p "$SELFTEST_REPO"
+    cd "$SELFTEST_REPO" || exit 1
+    git init -q
+    git config user.email "test@example.com"
     git config user.name 'John "Jack" Doe'
     log_block "reason_with_backslash\\test"
 

@@ -323,13 +323,17 @@ class TestShellIdentityHygiene(unittest.TestCase):
     def test_shell_git_identity_writes_are_scoped(self):
         tests_dir = Path(__file__).parent
         violations = []
-        for sh in tests_dir.glob("*.sh"):
+        hook_dir = tests_dir.parent / "hooks"
+        shell_files = list(tests_dir.glob("*.sh")) + list(hook_dir.glob("*.sh"))
+        for sh in shell_files:
             lines = sh.read_text(encoding="utf-8", errors="replace").split(chr(10))
             for i, line in enumerate(lines):
                 stripped = line.strip()
                 if stripped.startswith("#"):
                     continue
-                if "git config user." in stripped and "--file" not in stripped and " -C " not in stripped:
+                is_read = "$(git config" in stripped or stripped.rstrip().endswith("user.name") or stripped.rstrip().endswith("user.email")
+                if ("git config user." in stripped and "--file" not in stripped
+                        and " -C " not in stripped and not is_read):
                     window = lines[max(0, i - 12):i]
                     file_has_set_e = any(
                         w.strip().startswith("set -e") or w.strip().startswith("set -euo")
