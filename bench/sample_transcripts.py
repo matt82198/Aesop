@@ -184,24 +184,37 @@ def extract_text_from_message(msg: Any) -> str:
     """Extract text content from a message object.
 
     Handles both dict (with 'content' key) and list (array of parts) formats.
+    The content field can be:
+      - A string (direct text)
+      - A list of dicts with 'text' or 'content' fields
+      - A list of strings or objects (nested)
     """
+    def extract_from_obj(obj: Any) -> str:
+        """Recursively extract text from an object."""
+        if isinstance(obj, str):
+            return obj
+        if isinstance(obj, dict):
+            text = obj.get('text', '')
+            if text:
+                return str(text)
+            content = obj.get('content', '')
+            if content:
+                return str(content)
+        if isinstance(obj, list):
+            texts = []
+            for item in obj:
+                t = extract_from_obj(item)
+                if t:
+                    texts.append(t)
+            return ' '.join(texts)
+        return ''
+
     if isinstance(msg, dict):
-        content = msg.get('content', '')
-        return content if isinstance(content, str) else ''
-
-    if isinstance(msg, list):
-        parts = []
-        for part in msg:
-            if isinstance(part, dict):
-                parts.append(part.get('text', ''))
-            elif isinstance(part, str):
-                parts.append(part)
-        return ' '.join(parts)
-
-    if isinstance(msg, str):
-        return msg
-
-    return ''
+        return extract_from_obj(msg)
+    elif isinstance(msg, (list, str)):
+        return extract_from_obj(msg)
+    else:
+        return ''
 
 
 def extract_coding_task_from_turns(

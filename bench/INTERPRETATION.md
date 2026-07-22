@@ -41,9 +41,29 @@
 
 ---
 
+## Transcript-sampled benchmark roadmap (wave-27 onward)
+
+**Wave-27 (Current):** Sampled task set production.
+
+- **Tasks sampled:** 150 judgment/analysis tasks extracted from real aesop fleet transcripts
+- **Strata:** extraction (25%), classification (16%), verdict_judgment (54%), repair_triage (5%)
+- **Measurement of strata:** Reflected actual fleet workload by analyzing 1249 transcript files from 89 sessions; verdict/judgment work dominates (54%), extraction common (25%); distribution cited in task set metadata
+- **Ground truth status:** 81 tasks (54%) have clear checkable specs; 69 (46%) marked `needs_grader_authoring` (no ground truth yet)
+- **Grader-validity check:** All 81 graded tasks pass through bench_runner's exact-match scorer; infrastructure verified; offline mock runner produces 0% accuracy (expected for unseen judgment tasks; real verdict deferred to model runs)
+- **Redaction:** Sanitizer removes paths, emails, API keys; all tasks ASCII-safe; passes secret_scan --staged gate
+
+Next steps (wave-28+):
+1. Provide expected outputs / hidden test cases for the 69 tasks marked `needs_grader_authoring` (human authoring or reference model generation)
+2. Run live model benchmark (Haiku, Sonnet, Opus) against full set of 150 tasks
+3. Compare accuracy on sampled tasks vs. original 12-task curated set; measure whether strata distribution affects model ranking
+
+**Difference from curated set:** Sampled tasks are from real fleet operations (infrastructure audits, code review, defect triage) not handpicked scenarios. Task distribution reflects what Haiku actually spends cycles on, not what's "representative" in theory.
+
+---
+
 ## Open work
 
-- **Larger N + real-transcript sampling (wave-32+).** Grow from 39 curated tasks to transcript-sampled tasks (see `bench/sample_transcripts.py`). Only with N in the hundreds can deltas of a few percentage points be claimed as signal.
+- **Larger N + real-transcript sampling (wave-28+).** Grow from 39 curated + 150 sampled (189 total) to 300+ for tighter confidence intervals. Only with N in the hundreds can deltas of a few percentage points be claimed as signal.
 - **Opus CLI anomaly inspection.** 2026-07-18 Opus 6/12 result is reproducible in this run but unverified for the model itself vs. system-prompt/CLI interaction. Re-run with Opus variant + system-prompt sweep to isolate root cause.
 - **Discriminating frontier tasks.** Benchmark converged identically on all hardest judgment shapes (v3). Probe deeper: adversarial cases, multi-step reasoning with partial-credit rubrics, open-ended quality judgment where rubric doesn't apply.
 - **Cost axis completeness.** Haiku ~1/3 per-token cost of Opus (pricing). Wall-clock latency measured; need multiple runs from varied environments to separate model property from measurement variance.

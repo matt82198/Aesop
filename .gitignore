@@ -19,6 +19,10 @@ ledger/
 *-BACKUP.log
 *.jsonl
 
+# Exceptions: committed benchmark ground truth and sampled task sets
+!bench/tasks_sampled_judgment.jsonl
+!bench/ground_truth_sampled.jsonl
+
 # System artifacts
 .git/
 .DS_Store
