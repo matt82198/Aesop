@@ -177,5 +177,22 @@ class ClaudeCodeDriver(AgentDriver):
 
     # -- Optional: cost tracking -------------------------------------------
     def get_tokens_spent(self) -> Optional[int]:
-        """Live waves read budget.spent(); out of harness spend is unobservable."""
+        """Return None: per-instance spend is not observable from the harness-serviced driver.
+
+        CONTRACT:
+          The orchestrator-side driver cannot directly observe driver instance spend
+          because dispatch happens inside the harness's Workflow context (agent()/Task
+          tool), not in this Python process. In a live wave the harness-side budget.spent()
+          API is not exposed to this adapter.
+
+        DESIGN:
+          Cost enforcement is delivered by the wave loop passing None here, which causes
+          cost_ceiling.check() to perform its own windowed ledger fallback. This ensures
+          that period windowing (e.g., daily caps) is respected: cost_ceiling reads the
+          ledger directly and filters rows by the requested period. Returning a lifetime
+          sum would bypass that windowing logic and cause false trips after wave 2+.
+
+        See cost_ceiling.py:read_ledger_total_tokens() for the authoritative windowing
+        implementation.
+        """
         return None
