@@ -49,36 +49,38 @@ _FIXTURE_REPO_A = None
 _FIXTURE_REPO_B = None
 
 
+def _init_repo(repo_path: Path, repo_name: str) -> None:
+    """Initialize a git repo with proper git config scoped to subprocess.
+
+    Git config mutations are scoped to subprocess calls (no global state).
+    This satisfies wave-25 test hygiene requirements.
+
+    Args:
+        repo_path: absolute path to repo directory
+        repo_name: human-readable repo name for content
+    """
+    repo_path.mkdir(parents=True, exist_ok=True)
+    subprocess.run("git init", cwd=str(repo_path), shell=True, capture_output=True)
+    subprocess.run("git config user.email 'test@example.com'", cwd=str(repo_path), shell=True, capture_output=True)
+    subprocess.run("git config user.name 'Test User'", cwd=str(repo_path), shell=True, capture_output=True)
+    (repo_path / "README.md").write_text(f"Fixture {repo_name}\n")
+    subprocess.run("git add README.md", cwd=str(repo_path), shell=True, capture_output=True)
+    subprocess.run("git commit -m 'Initial commit'", cwd=str(repo_path), shell=True, capture_output=True)
+
+
 def setUpModule():
     """Set up two fixture git repos in tmpdirs."""
     global _MODULE_TMP, _MODULE_SAVED_CWD, _FIXTURE_REPO_A, _FIXTURE_REPO_B
     _MODULE_SAVED_CWD = os.getcwd()
     _MODULE_TMP = tempfile.mkdtemp(prefix="wave-cross-repo-ship-tests-")
-    os.chdir(_MODULE_TMP)
 
     # Create fixture repo A
     _FIXTURE_REPO_A = Path(_MODULE_TMP) / "repo-a"
-    _FIXTURE_REPO_A.mkdir()
-    os.chdir(str(_FIXTURE_REPO_A))
-    os.system("git init")
-    os.system("git config user.email 'test@example.com'")
-    os.system("git config user.name 'Test User'")
-    (_FIXTURE_REPO_A / "README.md").write_text("Fixture repo A\n")
-    os.system("git add README.md")
-    os.system("git commit -m 'Initial commit'")
+    _init_repo(_FIXTURE_REPO_A, "repo A")
 
     # Create fixture repo B
     _FIXTURE_REPO_B = Path(_MODULE_TMP) / "repo-b"
-    _FIXTURE_REPO_B.mkdir()
-    os.chdir(str(_FIXTURE_REPO_B))
-    os.system("git init")
-    os.system("git config user.email 'test@example.com'")
-    os.system("git config user.name 'Test User'")
-    (_FIXTURE_REPO_B / "README.md").write_text("Fixture repo B\n")
-    os.system("git add README.md")
-    os.system("git commit -m 'Initial commit'")
-
-    os.chdir(_MODULE_SAVED_CWD)
+    _init_repo(_FIXTURE_REPO_B, "repo B")
 
 
 def tearDownModule():
@@ -277,9 +279,9 @@ class TestPerRepoShip(unittest.TestCase):
 
         # Check that each repo has a commit with only its files.
         # Repo A should have file-a.py
-        os.chdir(str(_FIXTURE_REPO_A))
         result_a = subprocess.run(
             "git log --pretty=format:%B -n 1",
+            cwd=str(_FIXTURE_REPO_A),
             shell=True,
             capture_output=True,
             text=True,
@@ -291,9 +293,9 @@ class TestPerRepoShip(unittest.TestCase):
         self.assertTrue(exists_a, "file-a.py should exist in repo A")
 
         # Repo B should have file-b.py
-        os.chdir(str(_FIXTURE_REPO_B))
         result_b = subprocess.run(
             "git log --pretty=format:%B -n 1",
+            cwd=str(_FIXTURE_REPO_B),
             shell=True,
             capture_output=True,
             text=True,
@@ -344,7 +346,6 @@ class TestPerRepoShip(unittest.TestCase):
         self.assertEqual(len(result["shipped"]), 1)
 
         # Verify file was committed to the repo.
-        os.chdir(str(_FIXTURE_REPO_A))
         exists = (Path(_FIXTURE_REPO_A) / "single-file.py").exists()
         self.assertTrue(exists, "single-file.py should be in repo A")
 
@@ -499,7 +500,6 @@ class TestPerRepoShip(unittest.TestCase):
         self.assertEqual(len(result["shipped"]), 1)
 
         # Verify the file was committed to the expected repo.
-        os.chdir(str(_FIXTURE_REPO_A))
         exists = (Path(_FIXTURE_REPO_A) / "legacy-file.py").exists()
         self.assertTrue(exists, "legacy-file.py should be in repo A")
 
