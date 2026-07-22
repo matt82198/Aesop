@@ -253,7 +253,9 @@ class CodexDriver(AgentDriver):
             workdir_resolved = Path(request.workdir).resolve()
 
             for path_str in request.owned_files:
-                path = Path(path_str)
+                # Cross-platform manifest policy (matches wave_loop preflight): backslashes
+                # are separators on every OS, so Windows-authored ownsFiles resolve on Linux.
+                path = Path(path_str.replace("\\", "/"))
                 # Resolve the path (strict=False allows symlinks; normalization is primary goal).
                 try:
                     full_path = (Path(request.workdir) / path).resolve()
@@ -276,7 +278,7 @@ class CodexDriver(AgentDriver):
                             worker_id=worker_id,
                             status=WORKER_FAILED,
                             ok=False,
-                            error=f"owned file path escapes containment: {path_str}",
+                            error=f"owned file path is absolute or escapes containment: {path_str}",
                         )
                 except ValueError:
                     # os.path.commonpath raises ValueError if paths are on different drives (Windows).
@@ -284,7 +286,7 @@ class CodexDriver(AgentDriver):
                         worker_id=worker_id,
                         status=WORKER_FAILED,
                         ok=False,
-                        error=f"owned file path escapes containment (different drive): {path_str}",
+                        error=f"owned file path is absolute or escapes containment (different drive): {path_str}",
                     )
                 try:
                     contents = full_path.read_text(encoding="utf-8")
