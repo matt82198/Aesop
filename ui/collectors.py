@@ -371,61 +371,6 @@ def save_tracker(tracker):
             print(f"[tracker] Failed to unlink temp file: {ue}", file=sys.stderr)
         raise
 
-def migrate_tracker_from_backlog():
-    """One-time idempotent migration: AUDIT-BACKLOG.md -> tracker.json."""
-    if config.TRACKER_FILE.exists():
-        return load_tracker()
-
-    backlog_data = parse_audit_backlog()
-    if not backlog_data.get("tiers"):
-        return {"version": 1, "items": []}
-
-    items = []
-    for tier_data in backlog_data["tiers"]:
-        priority = tier_data["tier"]
-
-        for backlog_item in tier_data.get("items", []):
-            status_glyph = backlog_item["status"]
-
-            if status_glyph == "✅":
-                status, lane = "done", "done"
-                tags = []
-            elif status_glyph == "🔵":
-                status, lane = "in-progress", "in-progress"
-                tags = []
-            elif status_glyph == "⏸":
-                status, lane = "todo", "proposed"
-                tags = ["needs-decision"]
-            else:
-                status, lane = "todo", "ranked"
-                tags = []
-
-            title = backlog_item.get("title", "")
-            tag_prefix = backlog_item.get("tag", "")
-            if tag_prefix:
-                tag_value = tag_prefix.strip("[]")
-                if tag_value and tag_value not in tags:
-                    tags.insert(0, tag_value)
-
-            item = {
-                "id": secrets.token_hex(6),
-                "title": title,
-                "priority": priority,
-                "status": status,
-                "lane": lane,
-                "source": "audit-backlog-migration",
-                "tags": tags,
-                "notes": None,
-                "pr_link": None,
-                "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "completed_at": None
-            }
-            items.append(item)
-
-    tracker = {"version": 1, "items": items}
-    save_tracker(tracker)
-    return tracker
-
 def get_tracker_items(status=None, priority=None):
     """Retrieve tracker items with optional filters."""
     tracker = load_tracker()

@@ -262,7 +262,7 @@ else
   test_failed=$((test_failed + 1))
 fi
 
-printf '\n=== Test 7 (existing): Secret scan unavailable logs audit event ===\n'
+printf '\n=== Test 7 (existing): Secret scan unavailable fails-CLOSED ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_no_scanner"
   mkdir -p "$AESOP_ROOT/state"
@@ -270,8 +270,8 @@ printf '\n=== Test 7 (existing): Secret scan unavailable logs audit event ===\n'
   stderr_output=$( { check_secret_scan; } 2>&1 1>/dev/null )
   exit_code=$?
 
-  if [ "$exit_code" -ne 0 ]; then
-    printf 'FAIL: check_secret_scan should return 0 when scanner missing (fail-open)\n'
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: check_secret_scan should return 1 when scanner missing (fail-closed)\n'
     exit 1
   fi
 
@@ -287,12 +287,17 @@ printf '\n=== Test 7 (existing): Secret scan unavailable logs audit event ===\n'
     exit 1
   fi
 
-  if ! printf '%s' "$audit_line" | grep -q '"event":"secret_scan_unavailable"'; then
-    printf 'FAIL: Audit log entry missing correct event type\n'
+  if ! printf '%s' "$audit_line" | grep -q '"event":"push_blocked"'; then
+    printf 'FAIL: Audit log entry missing "push_blocked" event type\n'
     exit 1
   fi
 
-  printf 'PASS: Secret scan unavailable logged with event and stderr warning\n'
+  if ! printf '%s' "$audit_line" | grep -q 'secret_scan_unavailable'; then
+    printf 'FAIL: Audit log entry missing "secret_scan_unavailable" reason\n'
+    exit 1
+  fi
+
+  printf 'PASS: Secret scan unavailable fails-closed and logged as push_blocked\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
@@ -547,6 +552,50 @@ SCANNER
   fi
 
   printf 'PASS: check_secret_scan correctly blocks push when stdin is malformed\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: Scanner missing should fail-closed ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_no_scanner"
+  mkdir -p "$AESOP_ROOT/state"
+
+  cd "$TEST_ROOT" || exit 1
+  git init -q
+  git config user.email "test@example.com"
+  git config user.name "Test User"
+  echo "dummy" > file.txt
+  git add file.txt
+  git commit -q -m "initial"
+  git checkout -q -b feature/test 2>/dev/null || git branch -M feature/test
+
+  local_sha=$(git rev-parse HEAD 2>/dev/null || echo "0000000")
+
+  # Simulate git pre-push stdin with feature branch
+  stdin_input="refs/heads/feature/test $local_sha refs/heads/feature/test 0000000000000000000000000000000000000000"
+
+  # Run check_secret_scan with missing scanner (scanner path doesn't exist)
+  stderr_output=$( { printf '%s\n' "$stdin_input" | check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  # Should return 1 (fail-closed)
+  if [ "$exit_code" -ne 1 ]; then
+    printf 'FAIL: check_secret_scan should return 1 when scanner is missing (fail-closed), got %d\n' "$exit_code"
+    exit 1
+  fi
+
+  # Should print FATAL to stderr
+  if ! printf '%s' "$stderr_output" | grep -q -i 'FATAL\|not found\|not executable'; then
+    printf 'FAIL: check_secret_scan should print FATAL/error message to stderr\n'
+    printf 'stderr was: %s\n' "$stderr_output"
+    exit 1
+  fi
+
+  printf 'PASS: check_secret_scan correctly fails-closed (exit 1) when scanner is missing\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
