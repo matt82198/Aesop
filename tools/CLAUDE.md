@@ -61,6 +61,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `stall_check.py` — Automated agent transcript stall detector; optional --active-from flag refines STALLED verdict to require both stale mtime AND active task file; --emit-recovery emits JSON advisories; --recovery-dir writes recovery-<agent>.json files (idempotent)
 - `status.js` — One-shot fleet status snapshot (watchdog/monitor heartbeat age, dashboard port reachability, git branch and working tree state)
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
+- `test_battery.py` — Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
 - `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged; --json (guards one-file-per-domain)
 - `audit_report.py` — Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
