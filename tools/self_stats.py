@@ -502,6 +502,26 @@ class StatsCounter:
         data = json.loads(self.json())
         data["generated_at"] = datetime.now(timezone.utc).isoformat()
         data["loc"] = self.git.lines_of_code
+
+        # Add cost economics metrics (requires cost_econ module)
+        try:
+            from cost_econ import calculate_economics, get_metric_honesty_caveats
+            # Infer state directory from repo root or config
+            repo_path = Path(self.git.repo_root)
+            state_dir = repo_path / "state"
+
+            economics = calculate_economics(
+                repo_root=str(repo_path),
+                state_dir=str(state_dir) if state_dir.exists() else None,
+                config_file=None
+            )
+
+            data["economics"] = economics
+            data["economics_caveats"] = get_metric_honesty_caveats()
+        except Exception:
+            # Graceful fallback: if cost_econ unavailable, skip economics metrics
+            pass
+
         return data
 
     def save_stats(self, output_file: str = "stats.json") -> None:
