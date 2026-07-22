@@ -422,6 +422,13 @@ class TestLiveBenchmarkPipeline(unittest.TestCase):
         for payload in calls:
             self.assertEqual(len(payload["messages"]), 2)
             self.assertEqual(payload["messages"][0]["role"], "system")
+            # Fidelity to CodexDriver.dispatch_worker (drift guard): the model
+            # must be TOLD the schema — its omission produced the 4% 2026-07-22
+            # run — and the structured-output contract must be requested.
+            self.assertIn("Return valid JSON matching the schema", payload["messages"][0]["content"])
+            self.assertEqual(payload["temperature"], 0)
+            self.assertEqual(payload["response_format"]["type"], "json_schema")
+            self.assertTrue(payload["response_format"]["json_schema"]["strict"])
         # Correct canned answers must score perfect composite (proves the raw
         # response reaches the scorer, not a driver-mediated empty result)
         self.assertEqual(overall, 1.0, msg=f"scores: {[(s.task_id, s.composite_accuracy) for s in scores]}")
