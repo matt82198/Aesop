@@ -463,7 +463,7 @@ log_event() {
   local seq
   seq=$(get_next_seq "$audit_log")
 
-  printf '{"seq":%d,"prev_hash":"%s","ts":"%s","repo":"%s","event":"%s","user":"%s"}\n' "$seq" "$prev_hash" "$ts" "$repo_name" "$(json_escape "$event_type")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
+  printf '{"seq":%d,"prev_hash":"%s","ts":"%s","repo":"%s","event":"%s","user":"%s"}\n' "$seq" "$prev_hash" "$ts" "$(json_escape "$repo_name")" "$(json_escape "$event_type")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
 
   # Update tail hash sidecar
   if [ -s "$audit_log" ]; then
@@ -500,7 +500,7 @@ log_block() {
   local seq
   seq=$(get_next_seq "$audit_log")
 
-  printf '{"seq":%d,"prev_hash":"%s","ts":"%s","repo":"%s","event":"push_blocked","reason":"%s","user":"%s"}\n' "$seq" "$prev_hash" "$ts" "$repo_name" "$(json_escape "$reason")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
+  printf '{"seq":%d,"prev_hash":"%s","ts":"%s","repo":"%s","event":"push_blocked","reason":"%s","user":"%s"}\n' "$seq" "$prev_hash" "$ts" "$(json_escape "$repo_name")" "$(json_escape "$reason")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
 
   # Update tail hash sidecar
   if [ -s "$audit_log" ]; then

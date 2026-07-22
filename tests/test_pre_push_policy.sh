@@ -669,6 +669,80 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== P1 Security: repo_name with quotes/backslashes escapes properly in audit JSON ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_repo_escape"
+  mkdir -p "$AESOP_ROOT/state"
+
+  # Test 1: Direct json_escape test with problematic repo names
+  # Repo name with double quotes (path separator on Windows would be backslash)
+  repo_with_quotes='my"repo"dir'
+  escaped_quotes=$(json_escape "$repo_with_quotes")
+
+  # Build a JSON object with the escaped repo name to verify it's valid JSON
+  json_obj=$(printf '{"repo":"%s"}' "$escaped_quotes")
+
+  if ! printf '%s' "$json_obj" | python3 -m json.tool >/dev/null 2>&1; then
+    printf 'FAIL: Repo name with quotes did not escape properly. JSON: %s\n' "$json_obj"
+    exit 1
+  fi
+
+  # Repo name with backslashes
+  repo_with_backslash='my\repo\dir'
+  escaped_backslash=$(json_escape "$repo_with_backslash")
+  json_obj2=$(printf '{"repo":"%s"}' "$escaped_backslash")
+
+  if ! printf '%s' "$json_obj2" | python3 -m json.tool >/dev/null 2>&1; then
+    printf 'FAIL: Repo name with backslashes did not escape properly. JSON: %s\n' "$json_obj2"
+    exit 1
+  fi
+
+  # Test 2: Verify actual log_block/log_event with escaped repo name in context
+  # by mocking the git repo name via function override and checking the audit log
+  git_repo_name='test"repo"name'
+  (
+    # Override git output to return our problematic repo name
+    git() {
+      if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then
+        printf '/path/to/%s\n' "$git_repo_name"
+      else
+        command git "$@"
+      fi
+    }
+    export -f git
+
+    log_block "test_with_quoted_repo_name" >/dev/null 2>&1
+  )
+
+  # Verify the audit log was created and is valid JSON
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created when repo name contains quotes\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+
+  # The JSON must parse correctly
+  if ! printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
+    printf 'FAIL: Audit log entry with escaped repo name is not valid JSON\n'
+    printf 'Entry: %s\n' "$audit_line"
+    exit 1
+  fi
+
+  # Verify the repo field exists and contains the escaped name
+  if ! printf '%s' "$audit_line" | python3 -c "import sys, json; data = json.load(sys.stdin); r = data.get('repo', ''); print(r if 'repo' in r or len(r) > 0 else sys.exit(1))" >/dev/null 2>&1; then
+    printf 'FAIL: Audit log entry missing valid repo field\n'
+    exit 1
+  fi
+
+  printf 'PASS: repo_name with quotes and backslashes properly escaped in audit log JSON\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"
