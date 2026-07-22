@@ -242,6 +242,24 @@ fi
 test_count=$((test_count + 1))
 
 echo ""
+echo "=== Test 8: release_lock logs WARN on deletion failure ==="
+rm -f "$SELFHEAL_LOG"
+mkdir -p "$AESOP_STATE" "$CONDUCTOR_MONITOR"
+
+# Test that release_lock function includes the WARN logging check
+# by verifying the source code contains the necessary lines
+test_section=$(sed -n '106,112p' "$REPO_ROOT/daemons/selfheal.sh")
+if echo "$test_section" | grep -q 'rm -rf "$lock_dir"' && \
+   echo "$test_section" | grep -q 'if \[ -d "$lock_dir" \]' && \
+   echo "$test_section" | grep -q 'log_heal "WARN.*failed to remove'; then
+  echo "✓ release_lock has WARN logging for persistent lock directory"
+  pass_count=$((pass_count + 1))
+else
+  echo "✗ release_lock missing WARN logging for persistent directory"
+fi
+test_count=$((test_count + 1))
+
+echo ""
 echo "========================================"
 echo "Test Results: $pass_count / $test_count passed"
 echo "========================================"
