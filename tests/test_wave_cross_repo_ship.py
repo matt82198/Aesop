@@ -562,6 +562,113 @@ class TestPerRepoShip(unittest.TestCase):
         exists = (Path(_FIXTURE_REPO_A) / "legacy-file.py").exists()
         self.assertTrue(exists, "legacy-file.py should be in repo A")
 
+    def test_git_add_failure_with_partial_staging_cleanup(self):
+        """git add failure with partial staging is cleaned up (files_unstaged recorded).
+
+        Regression test for P1: when git add fails after partial staging, the code
+        must run git reset to unstage staged residue and record files_unstaged + unstage_error.
+        This test verifies that even if git add fails, the index is left clean.
+        """
+        # Create a custom driver that makes git add fail AFTER partial staging
+        class FakeDriverWithAddFailure(FakeDriverForShip):
+            def run_command(self, command: str, cwd=None, shell=None) -> ad.CommandResult:
+                # For git add, stage the files then fail
+                if command.startswith("git add "):
+                    try:
+                        # Extract filenames from the git add command.
+                        # Command is: git add "file1.py" "file2.py"
+                        # We need to actually stage them, then return failure.
+                        add_parts = command.split()  # Split by whitespace
+                        # Remove 'git', 'add' and unescape the filenames
+                        files_to_stage = []
+                        for part in add_parts[2:]:
+                            # Unescape quoted filenames
+                            if part.startswith('"') and part.endswith('"'):
+                                files_to_stage.append(part[1:-1])
+                            elif part.startswith("'") and part.endswith("'"):
+                                files_to_stage.append(part[1:-1])
+                            else:
+                                files_to_stage.append(part)
+
+                        # Actually run git add to stage the files
+                        stage_cmd = ["git", "add"] + files_to_stage
+                        stage_result = subprocess.run(
+                            stage_cmd,
+                            cwd=cwd,
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        # Verify the stage succeeded
+                        if stage_result.returncode == 0:
+                            # Now return failure to simulate git add failure AFTER staging
+                            return ad.CommandResult(
+                                exit_code=1,
+                                stdout="",
+                                stderr="Simulated git add failure after partial staging",
+                            )
+                        else:
+                            # Unexpected: actual git add failed
+                            return ad.CommandResult(
+                                exit_code=1,
+                                stdout="",
+                                stderr=stage_result.stderr,
+                            )
+                    except Exception as e:
+                        return ad.CommandResult(exit_code=1, stdout="", stderr=str(e))
+
+                # For other git commands, use parent behavior
+                return super().run_command(command, cwd, shell)
+
+        driver = FakeDriverWithAddFailure()
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-add-fail",
+                    "repo": str(_FIXTURE_REPO_A),
+                    "ownsFiles": ["add-fail-file.py"],
+                    "prompt": "Fix file that will stage then fail add",
+                    "testCmd": "python -m unittest",
+                    "workDir": str(_FIXTURE_REPO_A),
+                },
+            ]
+        }
+
+        git_config = {"expectTopLevel": str(_FIXTURE_REPO_A)}
+        result = run_wave(driver, manifest, git=git_config)
+
+        # Wave should complete (preflight OK, item verified, but ship fails on add).
+        self.assertTrue(result["preflight_ok"])
+        self.assertEqual(len(result["built"]), 1)
+        self.assertTrue(result["built"][0]["verified"], "Item should verify")
+
+        # Check shipped_repos for add failure.
+        self.assertIn("shipped_repos", result)
+        repo_results = result["shipped_repos"]
+        self.assertEqual(len(repo_results), 1)
+
+        repo_result = repo_results[0]
+        self.assertEqual(repo_result.get("error"), "git_add_failed",
+                        f"Should fail with git_add_failed: {repo_result}")
+        # The key assertion: files_unstaged and unstage_error should be recorded
+        self.assertTrue(repo_result.get("files_unstaged", False),
+                       f"files_unstaged should be True (git reset succeeded): {repo_result}")
+        # unstage_error should be None if reset succeeded
+        if repo_result.get("files_unstaged"):
+            self.assertIsNone(repo_result.get("unstage_error"),
+                            "unstage_error should be None if reset succeeded")
+
+        # Verify the index is clean (no staged files left)
+        status_result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=str(_FIXTURE_REPO_A),
+            capture_output=True,
+            timeout=5,
+        )
+        self.assertEqual(status_result.returncode, 0,
+                        "Git index should be clean after git add failure and reset")
+
 
 if __name__ == "__main__":
     unittest.main()
