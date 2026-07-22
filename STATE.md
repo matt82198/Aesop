@@ -22,15 +22,17 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `wave-27-complete` (2026-07-22, current)
-**Wave-27 SHIPPED at main @ 3a62d95 (PR #317 train)**: 10 lanes merged — reproduce subcommand, windows CI
-job (non-required), transcript-sampled bench N=150 + accuracy harness, StateAPI read facade + ratchet lint,
-cross-repo phase-1 per-repo ship, cost projection, mutation sandbox validation, PORTING.md, windows-runner
-parity. Required CI green on main post-merge (windows job = tracked python-parity surface). Union verification
-caught + fixed: cmd.exe single-quote fixture corruption (the shipped=1 flake, 3-bounce root-cause), 17
-never-collected bench tests (gate strengthened: baseless Test* classes now fail), wave_telemetry sys.path
-server death, npm-ci-without-lockfile (workflow linter). Delta hardening (4 lenses, orchestrator-verified):
-4 P1s + P2s filed to tracker as wave-28 backlog (source: wave-27-delta-hardening, 12 items).
+## Phase: `wave-28-round1-built` (2026-07-22, current)
+**v0.2.0 RELEASED by user** (npm latest; publish.yml OIDC green). **0.3.0 gates locked (user)**: (1) a
+non-Claude core runs a full wave cycle, (2) a fresh /refinesystem clean pass immediately pre-release.
+Wave-28 round 1: 12 lanes built+pushed (4 verified P1 fixes; WS3a wave_scheduler pilot — survived a
+6-P1 NO-GO break-it review, all fixed fail-closed; windows parity; stateapi CI ratchet gate live;
+docs/templates/preflight/transport lanes; merge_wait helper in ~/scripts). Scanner episode resolved by
+USER DECISION: narrow REDACTION_SOURCE_FILES exemption (PR #322) — single file, single rule, findings
+still reported; obfuscation removed. Live accuracy measured: gpt-4o-mini 32/32 (PR #321).
+/refinesystem skill created (the hardening loop, separate from /buildsystem); round-1 lens fleet
+(adversarial-on-fixes, scanner-exemption review, security expert, regression sweep, analyst, delta
+audit) dispatched over the wave-28 surface. Train-28 assembling.
 
 ## NEXT STEPS (wave-28)
 - Lead: verified P1 fixes (wave_loop add-residue unstage; cost_projection fired_alert honesty; reproduce.js

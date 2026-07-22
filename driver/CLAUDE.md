@@ -1,11 +1,8 @@
 # driver/ — AgentDriver backend-portability seam
 
-**What**: The one-file domain contract that lets aesop's wave loop run on
-backends other than Claude Code (Codex, open models). The wave loop dispatches
-through the `AgentDriver` interface and nothing else; each backend is a subclass.
-
-Grounded in a multi-model portability design spike.
-**Phase 1 (interface + reference adapter, shipped)** + **Phase 2 (Codex OpenAI Chat Completions, shipped)** + **Phase 3 (wave-manifest bridge, shipped)**.
+**What**: the domain contract letting aesop's wave loop run on non-Claude backends
+(Codex, open models); the loop dispatches only through the `AgentDriver` interface.
+**Phases 1-3 shipped** (interface + reference adapter; Codex Chat Completions; wave bridge).
 
 ## Files
 
@@ -102,9 +99,8 @@ entirely offline (no API key, no network in CI). The probe's `tool_use_accuracy`
 - CRITICAL: Green is NOT decided by the model's done:true; it is decided by
   the orchestrator running run_command and getting exit 0 (center verification).
 
-**Transport seam**: The injectable transport callable keeps CI offline. Tests
-pass FakeTransport with canned responses; production code reads OPENAI_API_KEY
-from environment and uses default_openai_transport (stdlib urllib, hard timeout).
+**Transport seam**: injectable transport callable keeps CI offline (FakeTransport
+in tests; production reads OPENAI_API_KEY, default_openai_transport, hard timeout).
 
 **Verification policy**: verification_policy(caps) maps tier 2 -> {
 validate_all_json: True, spot_check_frac: 0.50, repair_cap: 2,
@@ -112,20 +108,14 @@ require_adversarial_review: True }. Feeds the wave's integration verifier.
 
 ## Phase 3 Bridge Implementation Details
 
-The wave bridge connects AgentDriver backends to wave-flat-dispatch manifest
-items, making verification tier driven by backend capability, not config.
+Connects AgentDriver backends to wave-flat-dispatch manifest items; verification
+tier is driven by backend capability, not config.
 
-**build_manifest_item(driver, item) -> dict**:
-- Takes a backlog item {slug, ownsFiles, prompt, testCmd, workDir, ...} + driver.
-- Returns manifest-item dict enriched with: model (from driver.resolve_model('worker')),
-  verificationTier (from driver.probe_capabilities().recommended_verification_tier),
-  AND all four resolved policy knobs (repairCap, requireAdversarialReview, spotCheckFrac,
-  validateAllJson from verification_policy(caps)).
-- Preserves all input fields; adds model, tier, and all four policy fields.
-- The policy is RESOLVED ONCE in Python and carried as literal manifest fields, so
-  the template cannot recompute/drift. Tier-1/Claude path with no verificationTier
-  maintains byte-identical behavior (tier-1 defaults: repairCap=1, requireAdversarialReview=false,
-  spotCheckFrac=0.10, validateAllJson=false).
+**build_manifest_item(driver, item) -> dict**: enriches a backlog item with model
+(driver.resolve_model), verificationTier (probe), and the four policy knobs from
+verification_policy(caps) — RESOLVED ONCE, carried as literal manifest fields so the
+template cannot recompute/drift; tier-1/Claude path stays byte-identical (repairCap=1,
+requireAdversarialReview=false, spotCheckFrac=0.10, validateAllJson=false).
 
 **dispatch_item(driver, item) -> dict**:
 - Routes by worker_filesystem_access: True→{route:'harness'}; False→orchestrator-managed
@@ -140,37 +130,13 @@ stub, applies a fix, runs the test, and returns ok=True ONLY because the test pa
 
 ## Wave Scheduler (WS3a Pilot)
 
-**wave_scheduler.py**: single-cycle orchestration of backlog intake, manifest building, and wave dispatch.
-
-**Algorithm**: (1) Intake up to N file-disjoint todo items from tracker.json (greedy selection by file count + priority). (2) Build manifest via build_manifest_item() enrichment (model + verificationTier from driver.probe). (3) Check HALT file before each phase (fail-closed). (4) Check cost ceiling before dispatch (fail-closed). (5) Call run_wave() with recovery journal + git ship config. (6) STOP before merge: emit Report JSON (items selected, wave result, branch/sha) for human/orchestrator review. (7) Emit checkpoint to STATE.md + BUILDLOG.md.
+**wave_scheduler.py** — single-cycle backlog orchestration: intake up to N file-disjoint todo items from tracker.json (empty/missing ownsFiles REJECTED; paths normalized posix+casefold-on-Windows before overlap checks; required fields pre-validated) -> manifest via build_manifest_item (model + verificationTier from driver.probe) -> HALT + cost-ceiling gates (fail-CLOSED: module import failure or check exception = abort with honest Report, phase=gate_unavailable) -> run_wave (recovery journal + git ship) -> STOP before merge; Report JSON {phase, wave_id, items_selected, items_skipped, items_failed_build, items_shipped, branch, sha, merged:false, halt_reason?, ceiling_reason?, success}. After ship, selected items atomically marked in_progress in tracker (temp+os.replace; dry-run never mutates) so a second run cannot double-dispatch.
 
 **CLI**: `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute`
 
-**Report schema**: {phase, wave_id, items_selected, items_shipped, branch, sha, halt_reason?, ceiling_reason?, error?, timestamp, success}
+**Tests** (tests/test_wave_scheduler.py, 24): disjoint/normalization/rejection cases, gate fail-closed incl. exception paths, dry-run purity, tracker idempotence, Report honesty, empty-tracker EMPTY report; module-tmpdir hygiene; all TestCase.
 
-**Phase 1 scope (wave-27 pilot)**: scaffold + disjoint filter + one run_wave call + manual merge. Proves: (a) disjoint filter rejects overlaps, (b) run_wave executes 3+ items in parallel (all verified green), (c) ci_merge_wait blocks correctly until CI green, (d) checkpoint STATE/BUILDLOG written atomically, (e) manual review before wave-28 loop proceeds unattended.
-
-**Mandatory gates** (before each phase):
-- HALT file check (tools/halt.py conventions: .HALT exists → reason is JSON → parsed on read).
-- Cost ceiling check (tools/cost_ceiling.py conventions: check() returns {exceeded, spent, ceiling, margin}; fail-closed).
-
-**Test coverage** (tests/test_wave_scheduler.py):
-- Disjoint selection: overlapping items rejected, only first selected.
-- Dry-run: produces valid manifest without dispatch.
-- HALT file: aborts before dispatch with honest reason.
-- Ceiling exceeded: aborts with honest reason.
-- Happy path: produces Report with wave result + branch/sha (requires FakeDriver + fixture tracker.json).
-- Empty tracker: clean EMPTY report (inputs always produce outputs).
-- Module-tmpdir guard (setUpModule/tearDownModule, no cwd pollution).
-- All test classes subclass unittest.TestCase (AST scanner gate).
-
-**Dependencies**: wave_loop.run_wave, agent_driver.AgentDriver, wave_bridge.build_manifest_item, verification_policy.verification_policy, halt, cost_ceiling (optional safety gates).
-
-**Invariants**: 
-- stdlib-only (no external provider SDKs), ASCII-only, Windows + Linux safe (sys.executable for subprocesses, no shell=True with quotes).
-- Manifest items carry resolved policy knobs (repairCap, spotCheckFrac, requireAdversarialReview, validateAllJson) from verification_policy(driver.probe_capabilities()) — template cannot recompute/drift.
-- Fail-safe: HALT + ceiling gates are fail-closed (absence of either gate file = no abort, present = abort).
-- Honest Report: every phase returns a result, never hangs or silently fails.
+**Invariants**: stdlib-only, ASCII, Windows+Linux safe (list-form subprocess); manifest items carry resolved policy knobs from verification_policy (no recompute drift); merge stays manual in the pilot.
 
 ## Status
 
