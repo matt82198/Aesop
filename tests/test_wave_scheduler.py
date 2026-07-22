@@ -801,5 +801,96 @@ class TestReportRealWaveShape(unittest.TestCase):
         self.assertEqual(data["items"][0]["status"], "in_progress")
 
 
+
+class TestReportRound2Fixes(unittest.TestCase):
+    """Gate-2 round-2: loud unmapped slugs, honest unknowns, verified-implies-success."""
+
+    class _D:
+        def probe_capabilities(self):
+            class C:
+                name = "fb"
+                recommended_verification_tier = 2
+            return C()
+
+        def resolve_model(self, role):
+            return "m"
+
+    def _tracker(self, td):
+        t = Path(td) / "tracker.json"
+        t.write_text(json.dumps({"items": [{
+            "id": "id-a", "slug": "item-a", "status": "todo", "priority": "P2",
+            "ownsFiles": ["f.py"], "prompt": "p", "testCmd": "t", "workDir": ".",
+            "title": "x", "created_at": "2026-01-01"}]}), encoding="utf-8")
+        return t
+
+    def _run(self, td, shape):
+        import wave_scheduler as ws
+        orig = ws.run_wave
+        ws.run_wave = lambda **k: shape
+        try:
+            return ws.run_wave_scheduler(tracker_path=str(self._tracker(td)),
+                                         max_items=1, dry_run=False,
+                                         driver=self._D(), state_dir=Path(td))
+        finally:
+            ws.run_wave = orig
+
+    def test_unmapped_shipped_slug_is_loud(self):
+        shape = {"preflight_ok": True, "aborted": False,
+                 "built": [{"slug": "ghost", "verified": True, "testExit": 0, "verificationTier": 2}],
+                 "shipped": ["ghost"], "shipped_repos": []}
+        with tempfile.TemporaryDirectory() as td:
+            r = self._run(td, shape)
+        self.assertEqual(r.get("tracker_update_error"), "unmapped_shipped_slugs")
+        self.assertIn("ghost", r.get("tracker_unmapped_slugs") or [])
+        self.assertFalse(r["success"])
+
+    def test_unbuilt_shipped_slug_honest_unknowns(self):
+        shape = {"preflight_ok": True, "aborted": False, "built": [],
+                 "shipped": ["item-a"], "shipped_repos": []}
+        with tempfile.TemporaryDirectory() as td:
+            r = self._run(td, shape)
+        rec = r["items_shipped"][0]
+        self.assertIsNone(rec["tier"])
+        self.assertFalse(rec["verified"])
+        self.assertFalse(rec["buildRecord"])
+        self.assertFalse(r["success"], "shipped-but-unproven must not be success")
+
+    def test_unverified_shipped_item_fails_success(self):
+        shape = {"preflight_ok": True, "aborted": False,
+                 "built": [{"slug": "item-a", "verified": False, "testExit": 1, "verificationTier": 2}],
+                 "shipped": ["item-a"], "shipped_repos": []}
+        with tempfile.TemporaryDirectory() as td:
+            r = self._run(td, shape)
+        self.assertFalse(r["success"])
+        self.assertTrue(r.get("tracker_update_attempted"))
+
+    def test_tracker_marked_before_report_crash(self):
+        import wave_scheduler as ws
+        shape = {"preflight_ok": True, "aborted": False,
+                 "built": [{"slug": "item-a", "verified": True, "testExit": 0, "verificationTier": 2}],
+                 "shipped": ["item-a"], "shipped_repos": [{"repo": "X", "committed": True, "sha": "s"}]}
+        with tempfile.TemporaryDirectory() as td:
+            tracker = self._tracker(td)
+            orig_run, orig_emit = ws.run_wave, ws.emit_report
+            calls = {"n": 0}
+            def exploding_emit(*a, **k):
+                calls["n"] += 1
+                if calls["n"] == 1 and k.get("phase") == "dispatch" and not k.get("error"):
+                    raise RuntimeError("report assembly crash")
+                return orig_emit(*a, **k)
+            ws.run_wave = lambda **k: shape
+            ws.emit_report = exploding_emit
+            try:
+                r = ws.run_wave_scheduler(tracker_path=str(tracker), max_items=1,
+                                          dry_run=False, driver=self._D(), state_dir=Path(td))
+            finally:
+                ws.run_wave, ws.emit_report = orig_run, orig_emit
+            data = json.loads(tracker.read_text(encoding="utf-8"))
+            self.assertEqual(data["items"][0]["status"], "in_progress",
+                             "tracker must be marked even when Report assembly crashes")
+            self.assertFalse(r["success"])
+            self.assertTrue(r.get("tracker_update_attempted"),
+                            "exception envelope must carry tracker outcome")
+
 if __name__ == "__main__":
     unittest.main()
