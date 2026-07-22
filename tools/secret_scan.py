@@ -8,7 +8,7 @@ Modes:
   secret_scan.py --history [--repo PATH]             Scan all blobs in git history
   secret_scan.py PATH [PATH...]                      Scan files/dirs directly (recurse dirs)
 
-Exit codes: 0=clean, 1=findings, 2=usage error
+Exit codes: 0=clean, 1=findings, 2=error (file unreadable/git failure/scan error)
 Output: one line per finding or summary (never prints full secrets)
 
 Pragma escape hatch (STRICTLY SCOPED to doc-shaped rules):
@@ -145,6 +145,12 @@ class GitScanError(Exception):
     printed CLEAN and exited 0 on an unresolvable range)."""
 
 
+class ScanError(Exception):
+    """Raised when a file cannot be scanned due to read/permission/OS errors.
+    Callers MUST treat this as fail-CLOSED (block / exit 2) -- a file the
+    scanner cannot read must block the push, not sail through as CLEAN."""
+
+
 def has_pragma(filepath):
     """Check if file has 'secretscan: allow-pattern-docs' pragma in first 10 lines."""
     try:
@@ -230,6 +236,9 @@ def scan_file(filepath):
     Large files (>1MB) and binary files are scanned for FATAL_RULES patterns:
     - Large files: scan first 1MB; emit SKIPPED-LARGE to stderr if file is larger
     - Binary files: decode as latin-1; emit SKIPPED-BINARY to stderr if not fully scanned
+
+    Raises ScanError if file cannot be read (permission denied, vanished, etc.)
+    to fail CLOSED rather than reporting the file clean.
     """
     SIZE_THRESHOLD = 1024 * 1024  # 1MB
     MAX_READ_SIZE = 2 * 1024 * 1024  # 2MB max to read
@@ -240,6 +249,7 @@ def scan_file(filepath):
         return findings
 
     # Check for pragma (applies only to specific rule-based findings, not filename findings)
+    # has_pragma() already swallows its own exceptions, so safe to call
     has_file_pragma = has_pragma(filepath)
 
     # Check if filename matches credential patterns (always fatal, pragma does NOT apply)
@@ -251,13 +261,21 @@ def scan_file(filepath):
             )
             break
 
+    # File stat and type detection — not wrapped in try/except so errors propagate
     try:
-        # Check file size and binary status
         stat = filepath.stat()
         file_size = stat.st_size
-        is_binary = is_binary_file(filepath)
-        is_large = file_size > SIZE_THRESHOLD
+    except (OSError, PermissionError, FileNotFoundError) as e:
+        raise ScanError(f"Cannot stat {filepath}: {e}")
 
+    try:
+        is_binary = is_binary_file(filepath)
+    except (OSError, PermissionError, FileNotFoundError) as e:
+        raise ScanError(f"Cannot check if binary {filepath}: {e}")
+
+    is_large = file_size > SIZE_THRESHOLD
+
+    try:
         if is_binary:
             # Binary file (any size): scan as-is for FATAL_RULES only
             with open(filepath, "rb") as f:
@@ -289,31 +307,26 @@ def scan_file(filepath):
             # Large text file: scan entire file in chunks for all rules
             print(f"SKIPPED-LARGE {filepath} (scanned in chunks)", file=sys.stderr)
             line_num = 0
-            try:
-                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                    # Read in 1MB chunks to avoid loading entire large file into memory
-                    for chunk in iter(lambda: f.read(1024 * 1024), ""):
-                        for chunk_line in chunk.split("\n"):
-                            line_num += 1
-                            for rule_name, (pattern, flags) in PATTERNS.items():
-                                # Skip env_assignment rule if not an .env-like file
-                                if rule_name == "env_assignment" and not is_env_file(filepath):
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                # Read in 1MB chunks to avoid loading entire large file into memory
+                for chunk in iter(lambda: f.read(1024 * 1024), ""):
+                    for chunk_line in chunk.split("\n"):
+                        line_num += 1
+                        for rule_name, (pattern, flags) in PATTERNS.items():
+                            # Skip env_assignment rule if not an .env-like file
+                            if rule_name == "env_assignment" and not is_env_file(filepath):
+                                continue
+
+                            matches = re.finditer(pattern, chunk_line, flags)
+                            for match in matches:
+                                match_str = match.group(0)
+
+                                # Skip if it's a placeholder
+                                if is_placeholder(match_str):
                                     continue
 
-                                matches = re.finditer(pattern, chunk_line, flags)
-                                for match in matches:
-                                    match_str = match.group(0)
-
-                                    # Skip if it's a placeholder
-                                    if is_placeholder(match_str):
-                                        continue
-
-                                    is_fatal = _classify_finding(rule_name, has_file_pragma)
-                                    findings.append((line_num, rule_name, match_str, is_fatal))
-            except (IOError, OSError) as e:
-                # FAIL CLOSED: if we cannot fully scan a large text file, exit with error
-                print(f"FATAL: Cannot fully scan large text file {filepath}: {e}", file=sys.stderr)
-                sys.exit(1)
+                                is_fatal = _classify_finding(rule_name, has_file_pragma)
+                                findings.append((line_num, rule_name, match_str, is_fatal))
 
         else:
             # Normal small text file: scan all rules
@@ -335,8 +348,9 @@ def scan_file(filepath):
                             is_fatal = _classify_finding(rule_name, has_file_pragma)
                             findings.append((line_num, rule_name, match_str, is_fatal))
 
-    except Exception:
-        pass
+    except (OSError, PermissionError, FileNotFoundError, IOError) as e:
+        # FAIL CLOSED: if file cannot be read, raise error (not return clean)
+        raise ScanError(f"Cannot scan file {filepath}: {e}")
 
     return findings
 
@@ -528,7 +542,11 @@ def get_range_files(repo_path, commit_range):
 
 
 def get_history_files(repo_path):
-    """Get all file contents from git history via git log -p."""
+    """Get all file contents from git history via git log -p.
+
+    Raises GitScanError if git log fails (corrupt repo, git crash, etc.).
+    This mirrors get_range_files() and get_staged_files() which already
+    fail closed on git errors."""
     files_content = []
     try:
         # Use git log -p to get full diff history
@@ -539,26 +557,32 @@ def get_history_files(repo_path):
             text=True,
             timeout=60,
         )
-        if result.returncode == 0:
-            # Parse the git log output: each file appears as +++ b/path/to/file followed by its content
-            current_file = None
-            current_content = []
-            for line in result.stdout.split("\n"):
-                if line.startswith("+++ b/"):
-                    if current_file and current_content:
-                        files_content.append((current_file, "\n".join(current_content)))
-                    current_file = line[6:]  # Remove "+++ b/"
-                    current_content = []
-                elif current_file and line.startswith("+") and not line.startswith("+++"):
-                    # Content line (added), strip the leading +
-                    current_content.append(line[1:])
-                elif current_file and line.startswith(" "):
-                    # Context line, keep it as-is (strip leading space)
-                    current_content.append(line[1:])
+    except Exception as e:
+        raise GitScanError(f"git log raised {e!r}")
+
+    if result.returncode != 0:
+        raise GitScanError(
+            f"git log failed (rc={result.returncode}): {result.stderr.strip()}"
+        )
+
+    # Parse the git log output: each file appears as +++ b/path/to/file followed by its content
+    current_file = None
+    current_content = []
+    for line in result.stdout.split("\n"):
+        if line.startswith("+++ b/"):
             if current_file and current_content:
                 files_content.append((current_file, "\n".join(current_content)))
-    except Exception:
-        pass
+            current_file = line[6:]  # Remove "+++ b/"
+            current_content = []
+        elif current_file and line.startswith("+") and not line.startswith("+++"):
+            # Content line (added), strip the leading +
+            current_content.append(line[1:])
+        elif current_file and line.startswith(" "):
+            # Context line, keep it as-is (strip leading space)
+            current_content.append(line[1:])
+    if current_file and current_content:
+        files_content.append((current_file, "\n".join(current_content)))
+
     return files_content
 
 
@@ -742,7 +766,13 @@ def main():
     elif args.history:
         # History scanning mode: unaffected by the blob-scan fix above, since
         # it already walks committed diff content via `git log -p`.
-        history_files = get_history_files(args.repo)
+        try:
+            history_files = get_history_files(args.repo)
+        except GitScanError as e:
+            print(f"FATAL: could not scan git history: {e}", file=sys.stderr)
+            print("Failing CLOSED: refusing to report CLEAN when git history cannot be read.", file=sys.stderr)
+            sys.exit(2)
+
         file_count = len(set(f for f, _ in history_files))
         for filepath, content in history_files:
             findings = scan_content(content)
@@ -755,7 +785,12 @@ def main():
         files = scan_paths(args.paths)
         file_count = len(files)
         for filepath in files:
-            findings = scan_file(filepath)
+            try:
+                findings = scan_file(filepath)
+            except ScanError as e:
+                print(f"FATAL: cannot scan file {filepath}: {e}", file=sys.stderr)
+                print("Failing CLOSED: refusing to report CLEAN when a file cannot be read.", file=sys.stderr)
+                sys.exit(2)
             for line_num, rule, match_str, is_fatal in findings:
                 all_findings.append((filepath, line_num, rule, match_str, is_fatal))
                 if is_fatal:
