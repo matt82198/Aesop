@@ -25,6 +25,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `ci_workflow_lint.py` — CI workflow linter (YAML parsing, npm ci lockfile checks, test coverage)
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness)
 - `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
+- `cost_projection.py` — Live burn-rate observability; projects end-of-wave spend and fires threshold alerts at 70% and 90% of ceiling; CLI: `--projection [--window N] [--json]` or `--check-alerts --wave N [--json]`; idempotent per wave via flag files under state/
 - `defect_escape.py` — Haiku code quality telemetry (fix-forward rate, first-try estimate); CLI: `--repo <path> --since <ISO date> [--json]`
 - `doctor.js` — Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates
