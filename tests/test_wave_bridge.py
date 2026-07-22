@@ -141,6 +141,38 @@ class TestBuildManifestItem(unittest.TestCase):
         self.assertEqual(result["spotCheckFrac"], 0.50)
         self.assertTrue(result["validateAllJson"])
 
+    def test_build_manifest_model_differs_by_driver(self):
+        """LOAD-BEARING: build_manifest_item calls driver.resolve_model(), not hardcoding.
+        Mutant: hardcoding 'haiku' would cause this test to fail when comparing Claude vs Codex.
+        """
+        claude_driver = ClaudeCodeDriver()
+        codex_driver = CodexDriver()
+
+        item = {
+            "slug": "test",
+            "ownsFiles": ["file.py"],
+            "prompt": "Do it",
+        }
+
+        claude_result = build_manifest_item(claude_driver, item)
+        codex_result = build_manifest_item(codex_driver, item)
+
+        # The two drivers use DIFFERENT model maps; if build_manifest_item
+        # is calling driver.resolve_model(), the results will differ.
+        # If build_manifest_item hardcoded 'haiku', both would be 'haiku' and test fails.
+        self.assertNotEqual(
+            claude_result["model"],
+            codex_result["model"],
+            msg="build_manifest_item must call driver.resolve_model() for each driver; "
+            "hardcoding a single model would cause this assertion to fail"
+        )
+
+        # Verify the actual expected models
+        self.assertEqual(claude_result["model"], "haiku",
+                        msg="ClaudeCodeDriver worker should resolve to haiku")
+        self.assertEqual(codex_result["model"], "gpt-3.5-turbo",
+                        msg="CodexDriver worker should resolve to gpt-3.5-turbo")
+
     def test_preserves_optional_fields(self):
         """build_manifest_item preserves optional fields like workDir, selfCheckCmd."""
         driver = CodexDriver()
