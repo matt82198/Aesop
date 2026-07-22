@@ -44,6 +44,9 @@ def run_server(fixture_root, port, extra_env=None):
     env = os.environ.copy()
     env["AESOP_ROOT"] = str(fixture_root)
     env["AESOP_STATE_ROOT"] = str(fixture_root / "state")
+    # Point to the real repo's built dist (not the fixture root)
+    env["AESOP_WEB_DIST"] = str(REPO_ROOT / "ui" / "web" / "dist")
+    env["AESOP_PROOF_FIXTURES"] = "1"
     env["PORT"] = str(port)
     env["AESOP_UI_COLLECT_INTERVAL"] = "0.1"
     if extra_env:
@@ -134,7 +137,9 @@ def main():
                     # Test 2: Navigate to dashboard (just to verify it loads)
                     print("[test] Dashboard loads")
                     page.goto(f"http://127.0.0.1:{port}/")
-                    page.wait_for_load_state("networkidle")
+                    # Use domcontentloaded instead of networkidle because SSE keeps
+                    # connections open indefinitely, preventing networkidle from firing
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
                     title = page.title()
                     assert title, "Page should have a title"
                     print(f"  ✓ Dashboard loaded: {title}")

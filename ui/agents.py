@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Aesop UI — agent transcript reading + path-traversal-safe id handling (wave-9 split)."""
 import json
+import os
 import re
 import subprocess
 import sys
@@ -60,8 +61,10 @@ def sanitize_agents_for_broadcast(agents):
 def get_fleet_agents():
     """Detect running subagents by calling dash-extra.mjs --json.
 
-    Falls back to reading fixture agents from _collector.json if dash-extra.mjs
-    returns no agents (used by browser proofs that don't have running agents).
+    Fallback (test-only): when AESOP_PROOF_FIXTURES=1 is set, read fixture agents from
+    _collector.json if dash-extra.mjs returns no agents (used by browser proofs that
+    don't have running agent processes). This env var is NEVER set in production, so
+    the fallback is safely gated.
 
     dash-extra.mjs truncates agent ids to 13 characters for display. With enough
     concurrently-active agents, two distinct agents can share the same 13-char
@@ -91,9 +94,11 @@ def get_fleet_agents():
     except Exception:
         pass
 
-    # Fallback: if no agents detected by dash-extra.mjs, try reading from _collector.json
-    # (used by browser proofs that create fixture agents in state/_collector.json)
-    if not agents:
+    # Fallback (test-only): if no agents detected by dash-extra.mjs AND
+    # AESOP_PROOF_FIXTURES is set, try reading from _collector.json
+    # (used by browser proofs that create fixture agents in state/_collector.json).
+    # This is gated by an explicit env var so it never fires in production.
+    if not agents and os.getenv("AESOP_PROOF_FIXTURES"):
         try:
             collector_json = config.STATE_DIR / "_collector.json"
             if collector_json.exists():

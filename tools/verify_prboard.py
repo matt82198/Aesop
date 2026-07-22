@@ -159,6 +159,8 @@ def start_server(root: Path, port: int, gh_path: Path):
                AESOP_ROOT=str(root),
                AESOP_STATE_ROOT=str(state_root),
                AESOP_TRANSCRIPTS_ROOT=str(root / "transcripts"),
+               AESOP_WEB_DIST=str(REPO / "ui" / "web" / "dist"),
+               AESOP_PROOF_FIXTURES="1",
                AESOP_UI_COLLECT_INTERVAL="0.3",
                AESOP_GH_BIN=str(gh_path),
                PORT=str(port))
