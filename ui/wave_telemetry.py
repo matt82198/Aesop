@@ -45,11 +45,11 @@ def _read_orchestrator_status():
         except ValueError:
             return None, None, None
 
-        # Check if fresh (<24h) and not in the future (beyond ~60s clock skew tolerance)
+        # Check if fresh (<24h) and not in the future
         now = datetime.now(timezone.utc)
         age = now - updated_at
-        # Treat future-dated timestamps (beyond 60s clock skew) as NOT fresh (fail-closed)
-        if age > timedelta(hours=24) or age < -timedelta(seconds=60):
+        # Treat ANY future-dated timestamp as NOT fresh (fail-closed)
+        if age > timedelta(hours=24) or age < timedelta(0):
             return None, None, None
 
         # Extract phase and activity
@@ -325,10 +325,10 @@ def get_wave_telemetry():
 
         if orch_phase:
             # Fresh orchestrator-status.json found; use it
-            # Extract wave identifier from phase (e.g., "wave-26" from "wave-26-verify")
-            wave_match = re.search(r'(wave[-.]?\d+|rc[-.]?\w+)', orch_phase, re.IGNORECASE)
+            # Extract wave identifier from phase (e.g., "wave-26" from "wave-26-verify", "wave-rc.2" from "wave-rc.2: build")
+            wave_match = re.search(r'(wave[-.]?\w+|rc[-.]?\w+)', orch_phase, re.IGNORECASE)
             if wave_match:
-                wave_str = wave_match.group(0)  # e.g., "wave-26" or "rc-1"
+                wave_str = wave_match.group(0)  # e.g., "wave-26", "wave-rc", or "rc-1"
             else:
                 wave_str = orch_phase  # Fallback to phase itself
             phase_info = {

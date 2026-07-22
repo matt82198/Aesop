@@ -465,6 +465,66 @@ class OrchestratorStatusSource(WaveTelemetryFixtureCase):
         self.assertNotEqual(body["wave"], "wave", "Wave should not be just 'wave'")
         self.assertEqual(body["phase"], "wave-26-verify")
 
+    def test_wave_telemetry_slight_future_date_rejected(self):
+        """Even slightly future-dated timestamps (>0s) should be rejected (P2 bug fix).
+
+        If orchestrator-status.json has a timestamp 30 seconds in the future,
+        it should fall back to STATE.md (not treat it as fresh).
+        """
+        from datetime import datetime, timezone, timedelta
+        # Create slightly future-dated orchestrator status (30 seconds in the future)
+        future_time = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+        future_status = f"""{{
+  "id": "main",
+  "role": "orchestrator",
+  "activity": "dispatching",
+  "phase": "wave-999-future",
+  "updated_at": "{future_time}"
+}}"""
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            future_status, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should reject even slightly future-dated status and fall back to STATE.md
+        self.assertTrue(
+            "rc.2" in body["phase"].lower() or "wave" in body["phase"].lower(),
+            f"Phase should fall back to STATE.md (rc.2 or wave): {body['phase']}"
+        )
+        self.assertEqual(body["source"], "state-md", "Should fall back to state-md for ANY future-dated status")
+
+    def test_wave_telemetry_wave_rc_format_extraction(self):
+        """Wave extraction handles wave-rc.2 format correctly (P3 bug fix).
+
+        If orchestrator-status.json has phase='wave-rc.2: build' (release candidate format),
+        the orchestrator-status regex should extract 'wave-rc' (preferred), not fall back to 'rc.2'.
+        """
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        fresh_timestamp = (now - timedelta(hours=6)).isoformat()
+        orch_status = f"""{{
+  "id": "main",
+  "role": "orchestrator",
+  "activity": "building wave-rc.2",
+  "phase": "wave-rc.2: build",
+  "updated_at": "{fresh_timestamp}"
+}}"""
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            orch_status, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should extract "wave-rc" from "wave-rc.2: build", not just "rc.2"
+        # The orchestrator-status source is preferred; it should extract the full wave identifier
+        wave = body["wave"].lower()
+        self.assertTrue(
+            "wave-rc" in wave,
+            f"Wave should include 'wave-rc' when source is orchestrator-status: got {wave}"
+        )
+        self.assertNotIn("wave-rc.2: build", body["wave"], "Wave should not include ': build' suffix")
+
 
 if __name__ == "__main__":
     unittest.main()
