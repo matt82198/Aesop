@@ -313,5 +313,34 @@ class TestTestHygiene(unittest.TestCase):
             self.fail(msg)
 
 
+
+class TestShellIdentityHygiene(unittest.TestCase):
+    """Incident 52d7be7: shell suites polluted the LIVE repo identity. Every
+    `git config user.*` WRITE in a shell test must be preceded (within 12
+    lines) by a cd into a fixture path ($TEST_ROOT/$TMPDIR/mktemp-derived) —
+    the python AST scanner cannot see .sh files, so this guards them."""
+
+    def test_shell_git_identity_writes_are_scoped(self):
+        tests_dir = Path(__file__).parent
+        violations = []
+        for sh in tests_dir.glob("*.sh"):
+            lines = sh.read_text(encoding="utf-8", errors="replace").split(chr(10))
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "git config user." in stripped and "--file" not in stripped and " -C " not in stripped:
+                    window = lines[max(0, i - 12):i]
+                    scoped = any(
+                        ("cd " in w and ("$TEST_ROOT" in w or "$TMPDIR" in w or "mktemp" in w
+                                          or "_REPO" in w or "$AESOP_ROOT" in w))
+                        for w in window
+                    )
+                    if not scoped:
+                        violations.append(f"{sh.name}:{i+1} {stripped[:60]}")
+        if violations:
+            self.fail("Unscoped git identity writes in shell tests (live-config "
+                      "pollution risk):" + chr(10) + chr(10).join("  " + v for v in violations))
+
 if __name__ == "__main__":
     unittest.main()
