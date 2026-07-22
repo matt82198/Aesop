@@ -291,7 +291,7 @@ def main():
     parser.add_argument(
         '--repos',
         default='',
-        help='os.pathsep-separated paths (';' on Windows, ':' on POSIX)'
+        help="os.pathsep-separated paths (; on Windows, : on POSIX)"
     )
     parser.add_argument(
         '--readonly-repos',
