@@ -411,6 +411,30 @@ export interface WaveAuditTailData {
 }
 
 /**
+ * One agent's reasoning tail entry from GET /api/wave/reasoning-tail.
+ * Shows per-agent latest transcript activity (redacted).
+ */
+export interface WaveReasoningAgent {
+  id: string;
+  phase: string; // 'dispatch' | 'thinking' | 'tool-use' | 'stall' | 'done'
+  reasoning: string; // redacted brief activity summary (tool:X → result → thinking...)
+  activity_age_sec: number;
+  token_estimate: number;
+  warnings?: string[]; // e.g., ['inactive >5min', 'stalled >10min']
+}
+
+/**
+ * GET /api/wave/reasoning-tail — per-agent live reasoning transparency.
+ * Shows latest transcript activity summary for each agent (redacted).
+ */
+export interface WaveReasoningTailData {
+  available: boolean;
+  agents: WaveReasoningAgent[];
+  at: string; // ISO 8601 UTC
+  error?: string; // optional error message
+}
+
+/**
  * One agent specialty quality metric from GET /api/wave/quality-scorecards.
  * Shows per-specialty success rate and retry/repair frequency.
  */

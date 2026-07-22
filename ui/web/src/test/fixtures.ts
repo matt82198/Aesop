@@ -37,6 +37,8 @@ import type {
   WaveGanttAgent,
   WaveAuditTailData,
   WaveAuditTailEvent,
+  WaveReasoningTailData,
+  WaveReasoningAgent,
 } from '../lib/types';
 
 /* ------------------------------------------------------------------ */
@@ -108,6 +110,8 @@ export const TESTIDS = {
   ganttPhaseBar: 'gantt-phase-bar',
   auditTail: 'audit-tail',
   auditTailItem: 'audit-tail-item',
+  reasoningTail: 'reasoning-tail',
+  reasoningTailAgent: 'reasoning-tail-agent',
 
   // Cost view
   viewCost: 'view-cost',
@@ -892,5 +896,42 @@ export const fixtureWaveAuditTail: WaveAuditTailData = {
 export const fixtureWaveAuditTailUnavailable: WaveAuditTailData = {
   available: false,
   audit_items: [],
+  at: '2026-07-21T10:35:00Z',
+};
+
+export const fixtureWaveReasoningAgents: WaveReasoningAgent[] = [
+  {
+    id: 'fleet-fix-0',
+    phase: 'tool-use',
+    reasoning: 'thinking → tool:edit → result → thinking',
+    activity_age_sec: 3,
+    token_estimate: 145000,
+  },
+  {
+    id: 'fleet-fix-1',
+    phase: 'stall',
+    reasoning: 'tool:bash → result (error)',
+    activity_age_sec: 420,
+    token_estimate: 89000,
+    warnings: ['inactive >5min', 'stalled >10min'],
+  },
+  {
+    id: 'fleet-review-0',
+    phase: 'thinking',
+    reasoning: 'prompt → thinking',
+    activity_age_sec: 12,
+    token_estimate: 76500,
+  },
+];
+
+export const fixtureWaveReasoningTail: WaveReasoningTailData = {
+  available: true,
+  agents: fixtureWaveReasoningAgents,
+  at: '2026-07-21T10:35:00Z',
+};
+
+export const fixtureWaveReasoningTailUnavailable: WaveReasoningTailData = {
+  available: false,
+  agents: [],
   at: '2026-07-21T10:35:00Z',
 };

@@ -19,6 +19,7 @@ import type {
   WaveDispatchData,
   WaveGanttData,
   WaveAuditTailData,
+  WaveReasoningTailData,
 } from './types';
 
 let _csrfTokenCache: string | null = null;
@@ -202,6 +203,13 @@ export async function fetchWaveGantt(): Promise<WaveGanttData> {
  */
 export async function fetchWaveAuditTail(): Promise<WaveAuditTailData> {
   return typedFetch('/api/wave/audit-tail', { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/reasoning-tail — per-agent live reasoning transparency
+ */
+export async function fetchWaveReasoningTail(): Promise<WaveReasoningTailData> {
+  return typedFetch('/api/wave/reasoning-tail', { method: 'GET', requireCSRF: false });
 }
 
 /**
