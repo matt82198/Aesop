@@ -14,19 +14,33 @@ Configuration (aesop.config.json):
 
 Spend source: an explicit --spent/spent= figure always wins. Otherwise spend
 is read from the cost ledger (tools/fleet_ledger.py's OUTCOMES-LEDGER.md under
-the resolved state dir): sum of tokens_in + tokens_out across all ledger rows.
+the resolved state dir): sum of tokens_in + tokens_out across all ledger rows
+within the specified window (or all rows if no window specified).
 Missing/unreadable ledger -> spend of 0 (never trips on a ledger that doesn't
 exist yet).
 
+WINDOW CONTRACT (shared with cost_projection.py):
+  Both tools filter ledger rows by the SAME window parameters to ensure
+  consistent spend calculations. The helper calculate_window_bounds() is
+  imported by both modules to ensure identical window calculations.
+
+  When both cost_projection.project(window_minutes=W) and cost_ceiling.check(window_minutes=W)
+  are called with the same W value, they will produce identical spend figures.
+
 API:
-  check(spent=None, period="wave", config=None, state_dir=None, trip=True) -> dict
+  check(spent=None, period="wave", config=None, state_dir=None, trip=True,
+        window_minutes=None) -> dict
     Returns {"period", "ceiling", "spent", "exceeded", "tripped"}.
     When exceeded and trip=True, calls tools/halt.py's halt() with a reason
     describing the breach, and "tripped" is True. When ceiling is None
     (unconfigured), exceeded is always False and nothing is ever tripped.
 
+    window_minutes: Optional time window in minutes for ledger filtering.
+    If None, uses all ledger rows (backward compat). If specified, only rows
+    within the window contribute to spend calculation.
+
 CLI:
-  python tools/cost_ceiling.py --check --spent N [--period wave|daily]
+  python tools/cost_ceiling.py --check --spent N [--period wave|daily] [--window MINUTES]
     Exit 0 if not exceeded (or ceiling unconfigured), exit 1 if exceeded
     (and thus tripped, unless already halted).
 """
@@ -35,7 +49,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 try:
     import halt
@@ -43,6 +57,26 @@ try:
 except ImportError:
     from tools import halt
     from tools import fleet_ledger
+
+
+def calculate_window_bounds(window_minutes):
+    """Calculate UTC window start and end times for ledger filtering.
+
+    Shared contract between cost_projection.py and cost_ceiling.py to ensure
+    consistent ledger windowing. Both tools import and use this helper to
+    guarantee agreement on spend figures when using the same window.
+
+    Args:
+        window_minutes: Time window in minutes (e.g., 30 = last 30 minutes)
+
+    Returns:
+        Tuple of (window_start_utc, window_end_utc) as datetime objects with UTC timezone.
+        window_end_utc is always datetime.now(timezone.utc).
+        window_start_utc is window_end_utc minus window_minutes.
+    """
+    now_utc = datetime.now(timezone.utc)
+    window_start = now_utc - timedelta(minutes=window_minutes)
+    return window_start, now_utc
 
 
 def load_config():
@@ -73,15 +107,22 @@ def get_ceiling(config, period):
         return None
 
 
-def read_ledger_total_tokens(state_dir, period="wave"):
-    """Sum tokens_in + tokens_out from OUTCOMES-LEDGER.md.
+def read_ledger_total_tokens(state_dir, period="wave", window_minutes=None):
+    """Sum tokens_in + tokens_out from OUTCOMES-LEDGER.md with optional windowing.
 
     Args:
         state_dir: path to state directory
         period: "wave" (all rows) or "daily" (today's rows only, filtered by UTC date)
+        window_minutes: Optional time window in minutes. If specified, only rows
+                       within the last window_minutes are included. Default None
+                       means include all rows (backward compat).
 
     Returns 0 if the ledger doesn't exist or is unreadable/empty.
     Uses fleet_ledger.py's shared parser (single source of truth).
+
+    Window contract: When both cost_projection and cost_ceiling use the same
+    window_minutes value, they produce identical spend figures (single source
+    of truth is the ledger parse result, and the same filtering is applied).
     """
     # Set the state root temporarily so fleet_ledger can find the ledger
     import os
@@ -98,6 +139,12 @@ def read_ledger_total_tokens(state_dir, period="wave"):
     if not rows:
         return 0
 
+    # Calculate window bounds if windowing is requested
+    if window_minutes is not None:
+        window_start, window_end = calculate_window_bounds(window_minutes)
+    else:
+        window_start = None  # No window filtering
+
     total = 0
 
     if period == "daily":
@@ -107,25 +154,56 @@ def read_ledger_total_tokens(state_dir, period="wave"):
             # Extract date from ISO timestamp (format: YYYY-MM-DDTHH:MM:SSZ or similar)
             try:
                 iso_ts = row['iso_ts']
-                # Parse the date part (first 10 characters: YYYY-MM-DD)
-                row_date = datetime.fromisoformat(iso_ts.replace('Z', '+00:00')).date()
-                if row_date == today_utc:
-                    total += row['tokens_in'] + row['tokens_out']
-            except (ValueError, IndexError, KeyError):
+                # Parse ISO timestamp
+                ts_clean = iso_ts.replace('Z', '+00:00') if 'Z' in iso_ts else iso_ts
+                row_dt = datetime.fromisoformat(ts_clean)
+                if row_dt.tzinfo is None:
+                    row_dt = row_dt.replace(tzinfo=timezone.utc)
+
+                # Check date filter
+                row_date = row_dt.date()
+                if row_date != today_utc:
+                    continue
+
+                # Check window filter (if specified)
+                if window_start is not None and row_dt < window_start:
+                    continue
+
+                total += row['tokens_in'] + row['tokens_out']
+            except (ValueError, IndexError, KeyError, AttributeError):
                 # Skip malformed timestamps
                 continue
     else:
-        # period == "wave": sum all rows
+        # period == "wave": sum rows within window (or all if no window)
         for row in rows:
+            # Check window filter (if specified)
+            if window_start is not None:
+                try:
+                    iso_ts = row['iso_ts']
+                    ts_clean = iso_ts.replace('Z', '+00:00') if 'Z' in iso_ts else iso_ts
+                    row_dt = datetime.fromisoformat(ts_clean)
+                    if row_dt.tzinfo is None:
+                        row_dt = row_dt.replace(tzinfo=timezone.utc)
+
+                    if row_dt < window_start:
+                        continue
+                except (ValueError, AttributeError):
+                    # Skip malformed timestamps
+                    continue
+
             total += row['tokens_in'] + row['tokens_out']
 
     return total
 
 
-def check(spent=None, period="wave", config=None, state_dir=None, trip=True):
+def check(spent=None, period="wave", config=None, state_dir=None, trip=True, window_minutes=None):
     """Check spend against the configured ceiling for `period`.
 
     Returns a dict: {"period", "ceiling", "spent", "exceeded", "tripped", "reason"}.
+
+    Window contract: when cost_ceiling and cost_projection both pass the same
+    window_minutes value, they will compute identical spend figures from the
+    ledger, ensuring agreement on cost tracking.
 
     Distinctions:
     - Genuine ceiling breach (ceiling is configured, spent >= ceiling): when trip=True,
@@ -134,6 +212,18 @@ def check(spent=None, period="wave", config=None, state_dir=None, trip=True):
       abort of current wave (exceeded=True) but does NOT write persistent sentinel
       (tripped=False). This preserves fleet availability across transient I/O errors
       (e.g., momentary file lock, disk full) while still aborting the current wave.
+
+    Args:
+        spent: Optional explicit spend figure in tokens. If provided, overrides ledger.
+        period: "wave" (all rows) or "daily" (today's rows only)
+        config: aesop.config.json dict, or None to load from disk
+        state_dir: path to state directory, or None to resolve from config
+        trip: If True and exceeded, trip the .HALT sentinel
+        window_minutes: Optional time window in minutes for ledger filtering.
+                       If None, all ledger rows are included (backward compat).
+                       When specified, only rows within the last window_minutes
+                       are included. MUST match the window_minutes used in
+                       cost_projection.project() to ensure agreement.
     """
     try:
         if config is None:
@@ -145,7 +235,7 @@ def check(spent=None, period="wave", config=None, state_dir=None, trip=True):
         ceiling = get_ceiling(config, period)
 
         if spent is None:
-            spent = read_ledger_total_tokens(state_dir, period=period)
+            spent = read_ledger_total_tokens(state_dir, period=period, window_minutes=window_minutes)
         spent = int(spent)
 
         exceeded = ceiling is not None and spent >= ceiling
@@ -190,13 +280,14 @@ def main(argv=None):
     parser.add_argument("--check", action="store_true", help="Run the ceiling check (required).")
     parser.add_argument("--spent", type=int, default=None, help="Explicit spend figure in tokens; defaults to ledger total.")
     parser.add_argument("--period", choices=("wave", "daily"), default="wave", help="Which ceiling to check against (default: wave).")
+    parser.add_argument("--window", type=int, default=None, help="Optional time window in minutes for ledger filtering; None means all rows (default, backward compat).")
     args = parser.parse_args(argv)
 
     if not args.check:
         parser.print_usage(sys.stderr)
         return 2
 
-    result = check(spent=args.spent, period=args.period)
+    result = check(spent=args.spent, period=args.period, window_minutes=args.window)
 
     # Check for errors FIRST (fail-closed): exception during check() means abort the wave
     if "error" in result:
