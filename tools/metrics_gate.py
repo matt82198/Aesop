@@ -75,9 +75,16 @@ class MetricsGate:
                 text=True,
                 check=False,
             )
-            if result.returncode not in (0, 128):  # 128 = invalid range
-                # Fall back to empty if range is invalid
+            if result.returncode == 0:
+                # Success, continue to parse
+                pass
+            elif result.returncode == 128:
+                # Invalid range (ref doesn't exist) - no diff available
                 return []
+            else:
+                # Other git error - fail closed (cannot verify => deny)
+                print(f"ERROR: git diff failed with exit code {result.returncode}", file=sys.stderr)
+                sys.exit(1)
 
             diff_output = result.stdout
             added_lines = []
@@ -96,8 +103,10 @@ class MetricsGate:
                         added_lines.append((current_file, content))
 
             return added_lines
-        except Exception:
-            return []
+        except Exception as e:
+            # Unexpected error (file I/O, parsing) - fail closed (cannot verify => deny)
+            print(f"ERROR: git diff operation failed: {e}", file=sys.stderr)
+            sys.exit(1)
 
     def is_version_number(self, text: str) -> bool:
         """Check if text looks like a version number."""

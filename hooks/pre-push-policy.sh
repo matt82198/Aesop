@@ -343,11 +343,11 @@ check_secret_scan() {
   local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
   local scan_script="$aesop_root/tools/secret_scan.py"
 
-  if [ ! -f "$scan_script" ]; then
-    # Scanner not found: log event and warn to stderr, but don't block (fail-open)
-    log_event "secret_scan_unavailable"
-    printf 'Warning: secret_scan.py not found at %s\n' "$scan_script" >&2
-    return 0
+  if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
+    # Scanner not found or not executable: fail-closed (cannot verify => deny)
+    log_block "secret_scan_unavailable"
+    printf 'FATAL: secret_scan.py not found or not executable at %s\n' "$scan_script" >&2
+    return 1
   fi
 
   # Parse pre-push stdin to get commit range(s), then scan files in each range.
