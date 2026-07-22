@@ -202,13 +202,6 @@ accuracy tables side by side.
 - **Not a security/safety benchmark.** This says nothing about adversarial
   robustness, prompt injection resistance, or anything outside plain task
   accuracy.
-- **Known repo-hygiene gap this PR leaves open (out of scope for this
-  worktree):** adding `bench/` and `tools/bench_runner.py` trips
-  `tests/domain-map-drift.test.mjs` (root `CLAUDE.md` domain map is missing a
-  `bench/` entry; `tools/CLAUDE.md` FILES section is missing `bench_runner.py`).
-  This worktree's write scope is limited to `bench/` and the two files it
-  owns under `tools/`/`tests/`, so those two one-line doc additions are left
-  for the integrating wave rather than made here.
 
 ## Transcript-sampled benchmark (Phase 1)
 

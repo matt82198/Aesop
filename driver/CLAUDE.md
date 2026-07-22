@@ -21,14 +21,13 @@ Grounded in a multi-model portability design spike.
 - **openai_transport.py** — stdlib urllib transport for OpenAI Chat Completions
   endpoint. Injectable seam so tests feed canned responses (FakeTransport) with
   no API key or network.
-- **verification_policy.py** — pure function mapping recommended_verification_tier
-  -> orchestrator tuning (validate_all_json, spot_check_frac, repair_cap,
-  require_adversarial_review).
-- **wave_bridge.py** — Phase 3 IMPLEMENTATION: bridges AgentDriver backends to
-  wave-flat-dispatch manifest items. Two core functions: build_manifest_item()
-  produces manifest item with verificationTier + model from driver probe;
-  dispatch_item() routes execution by capabilities (harness for tier-1, orchestrator
-  for tier-2+) and decides green ONLY from test exit code (never model's say-so).
+- **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.).
+- **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json,
+  spot_check_frac, repair_cap, require_adversarial_review).
+- **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items.
+  build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
+  by capability and decides green ONLY from test exit code (not model's say-so).
+- **backend_config.py** — Per-deployment model resolution (role → model id, API key/base URL).
 - **README.md** — the abstraction, the phased roadmap, the verification thesis.
 - **../tests/test_agent_driver.py** — the contract's test suite.
 - **../tests/test_codex_driver_e2e.py** — Phase 2 end-to-end offline tests
@@ -141,6 +140,7 @@ stub, applies a fix, runs the test, and returns ok=True ONLY because the test pa
   gated by AESOP_CODEX_LIVE + OPENAI_API_KEY (skipped in CI).
 - **Phase 3**: shipped. Wave bridge wiring driver -> manifest + orchestrator-side
   dispatch. Proves non-Claude backends can drive items end-to-end with verified-honest
-  decisions (green only from test exit 0). All offline tests GREEN.
+  decisions (green only from test exit 0). All offline tests GREEN. Drivers usable
+  directly; full wave-loop integration in progress.
 - **Next**: Refactor wave-flat-dispatch onto the driver (Phase 1 handoff).
 - **Future**: Open-model adapter (Tier-4 backend).
