@@ -22,23 +22,27 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `hardened-0.2.0-ready` (2026-07-22, current)
-**Hardening loop CLOSED at main @ 157e157**: 5 audit passes (defect + analyst-critique + adversarial +
-catalog-expert lenses, all findings adversarially verified), 4 fix rounds, 4 trains — convergence
-52->23->17->5->zero-code-defects. Backlog cleared 25/25 the same session (~75 PRs total). Release
-artifacts current and honest (ceiling semantics, security section). Review layer measurably load-bearing:
-caught a ceiling-windowing showstopper, refuted 3 false review claims, forced 8 fix-forwards.
+## Phase: `wave-27-complete` (2026-07-22, current)
+**Wave-27 SHIPPED at main @ 3a62d95 (PR #317 train)**: 10 lanes merged — reproduce subcommand, windows CI
+job (non-required), transcript-sampled bench N=150 + accuracy harness, StateAPI read facade + ratchet lint,
+cross-repo phase-1 per-repo ship, cost projection, mutation sandbox validation, PORTING.md, windows-runner
+parity. Required CI green on main post-merge (windows job = tracked python-parity surface). Union verification
+caught + fixed: cmd.exe single-quote fixture corruption (the shipped=1 flake, 3-bounce root-cause), 17
+never-collected bench tests (gate strengthened: baseless Test* classes now fail), wave_telemetry sys.path
+server death, npm-ci-without-lockfile (workflow linter). Delta hardening (4 lenses, orchestrator-verified):
+4 P1s + P2s filed to tracker as wave-28 backlog (source: wave-27-delta-hardening, 12 items).
 
-## NEXT STEPS (wave-27, 2026-07-22 in flight)
-- Wave-27 built: 10 PRs open (#306-#315) per ~/conductor3/plans/aesop-wave27-master-plan.md (9 lanes A-I +
-  windows-parity fix lane). Fix-forwards landed for #308 (7072b42 per-repo ship), #309 (cdbfc20), #310 (cb088ec),
-  #311 (7d24663 StateAPI delegation), #312 (8ecf536); #314 fix + windows-parity finishing; #308 break-it review out.
-- #293 merged under user decision B (fail-closed TTY); follow-up #316 merged (HEAD-independent empty-stdin test) —
-  restores main green (verify run in flight).
-- Then: assemble wave-27 integration train → union gates (counts/domain-map/lint/packaging/self_stats) → one CI →
-  merge → verify main → delta hardening pass over the day's surface (cadence) → checkpoint.
+## NEXT STEPS (wave-28)
+- Lead: verified P1 fixes (wave_loop add-residue unstage; cost_projection fired_alert honesty; reproduce.js
+  'Missing:' classifier; stateapi_lint posix-normalized keys + baseline regen) → then wire stateapi_lint into
+  CI and start the 32-violation burn-down.
+- Windows python-parity lane (job red: cost_ceiling ledger perms, tracker SSE WinError 10053, collector
+  NoneType); promote job to required after 5 green merges.
+- P2s: read_api dead fallback delete, redaction URL-credential pattern, state_store/CLAUDE.md read_api entry,
+  CHANGELOG wave-27 backfill, projection/ceiling window contract, explicit-repo-required preflight.
 - USER-GATED: cut 0.2.0 — `gh release create v0.2.0 --notes-file RELEASE-NOTES.md` (publish.yml OIDC -> npm);
-  WS1c outreach; live accuracy run (`python bench/accuracy_harness.py --mode live`, ~$5-10).
+  WS1c outreach; live accuracy run (`python bench/accuracy_harness.py --mode live`, ~$5-10); external
+  benchmark validation spend (wave-29, ~$200-500 grading).
 - Tracked defers: state fragmentation, StateAPI boundary, proof-harness consolidation, MAX_PATH deep-state note,
   bench validation of tool_use_accuracy (wave-27 release gate candidate), tripwire root-stray widening,
   codex max_tokens bound, falsifiability script pytest-discovery footnote.
