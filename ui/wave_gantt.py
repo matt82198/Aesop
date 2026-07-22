@@ -82,6 +82,7 @@ def get_wave_gantt() -> Dict:
         if not dispatch_data or not dispatch_data.get("available"):
             return {
                 "available": False,
+                "agents": [],
                 "error": "No active workflow",
                 "at": datetime.now(timezone.utc).isoformat() + "Z"
             }
@@ -134,6 +135,7 @@ def get_wave_gantt() -> Dict:
         traceback.print_exc()
         return {
             "available": False,
+            "agents": [],
             "error": str(e),
             "at": datetime.now(timezone.utc).isoformat() + "Z"
         }

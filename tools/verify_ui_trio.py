@@ -10,12 +10,35 @@ Tests that endpoints return valid data and components are renderable.
 """
 
 import json
+import os
+import socket
 import subprocess
+import sys
+import tempfile
 import time
 import urllib.request
 import urllib.error
 from pathlib import Path
 from typing import Dict, Any
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def wait_for_server(port: int, timeout_s: float = 30.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=2):
+                return True
+        except (urllib.error.URLError, OSError):
+            time.sleep(0.5)
+    return False
 
 # Test fixtures path
 FIXTURES_PATH = Path(__file__).parent / 'verify_ui_trio_fixtures.json'
@@ -166,22 +189,45 @@ def main():
     fixtures = load_fixtures()
     print(f"\nUsing fixtures from: {FIXTURES_PATH}")
 
-    # Assume UI is running on port 8770 (default)
-    base_url = "http://localhost:8770"
+    # Self-host the dashboard on a free port with isolated fixture state —
+    # never depend on a live :8770 instance (it may run different code).
+    port = find_free_port()
+    base_url = f"http://127.0.0.1:{port}"
 
-    # Test health check first
-    print("\n--- Health Check ---")
-    if not test_health_check(base_url):
-        print("\nERROR: Dashboard not accessible at {base_url}")
-        print("Make sure to run: cd ui/web && npm run build && python ui/serve.py")
-        return False
+    with tempfile.TemporaryDirectory() as tmpdir:
+        state_dir = Path(tmpdir) / 'state'
+        state_dir.mkdir(parents=True)
+        env = os.environ.copy()
+        env['PORT'] = str(port)
+        env['AESOP_STATE_ROOT'] = str(state_dir)
+        env['AESOP_ROOT'] = str(REPO)
+        env['AESOP_PROOF_FIXTURES'] = '1'
 
-    print("\n--- API Endpoints ---")
-    results = {
-        'gantt': test_gantt_endpoint(base_url),
-        'audit': test_audit_endpoint(base_url),
-        'reasoning': test_reasoning_endpoint(base_url),
-    }
+        proc = subprocess.Popen(
+            [sys.executable, str(REPO / 'ui' / 'serve.py')],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            print("\n--- Health Check ---")
+            if not wait_for_server(port):
+                print("\nERROR: self-hosted dashboard failed to start")
+                return False
+            if not test_health_check(base_url):
+                print(f"\nERROR: Dashboard not accessible at {base_url}")
+                return False
+
+            print("\n--- API Endpoints ---")
+            results = {
+                'gantt': test_gantt_endpoint(base_url),
+                'audit': test_audit_endpoint(base_url),
+                'reasoning': test_reasoning_endpoint(base_url),
+            }
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
     print("\n" + "=" * 60)
     passed = sum(1 for v in results.values() if v)
