@@ -33,6 +33,7 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 
 ## Module Layout
 - **read_api.py** — `ReadAPI` facade over state surfaces; read-only. Delegates to existing parsers: tracker snapshot, orchestrator status, heartbeat freshness via `tools/common`, ledger rows via `tools/fleet_ledger`. Never forks logic.
+- **write_api.py** — `WriteAPI(state_dir)` facade for tracker mutations (WS4b: state consolidation write path). Exposes two operations: `tracker_update_status(item_id, new_status, note)` and `tracker_append_item(item_dict)`. Both append events atomically AND update tracker.json projection (tempfile + os.replace). Fail-closed: event append failure blocks projection write; projection write conflict raises `WriteConflict` (no silent overwrite).
 - **store.py** — `EventStore(db_path)`: append-only SQLite log. `append(stream, type, payload, actor, expected_version=None)` returns new version or raises `ConcurrencyConflict` on OCC mismatch; `read(stream)` / `read_all()` return event rows. Corrupt JSON payloads are skipped with stderr log; snapshot read/write for tail-replay optimization.
 - **__init__.py** — Public exports: `EventStore`, `StateAPI`, `ConcurrencyConflict`, `project_tracker`, `export_tracker`, `ingest_tracker_json`.
 - **projections.py** — `project_tracker(events)`: folds `item_created` / `item_updated` / `item_archived` into the full `tracker.json` shape, preserving first-seen order.
