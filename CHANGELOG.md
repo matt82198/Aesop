@@ -17,6 +17,14 @@ Minor release shipping multi-model orchestration portability and adaptive verifi
 - **Cost-ceiling enforcement** (wave-32): Per-wave spend ceiling enforced at dispatch time; blocks work if budget exceeded.
 - **Transcript-sampled benchmark Phase 1** (wave-32): Infrastructure to extract coding tasks from real Claude Code session transcripts, enabling dynamic benchmark growth beyond hand-written examples.
 - **Backend config & role resolution** (wave-32): `backend_config.py` for per-deployment model mappings (worker/setup/verify roles) without orchestrator changes.
+- **Accuracy harness Phase 1** (wave-27): Offline + live benchmark infrastructure; live run measured gpt-4o-mini 32/32 composite on 2026-07-22 (`bench/results/accuracy-live-2026-07-22.json`).
+- **Cost projection tool** (wave-27): Burn-rate tracking with 70/90-percentile alerting for proactive spend monitoring.
+- **StateAPI read facade** (wave-27): ReadAPI layer delegates to existing parsers (tracker snapshot, orchestrator status, heartbeat via `tools/common`, ledger via `tools/fleet_ledger`); read-only, no logic fork.
+- **Cross-repo portability Phase 1** (wave-27): Per-repo aesop.config.json and initialization enables multi-repo orchestration with unified state backend.
+- **aesop reproduce subcommand** (wave-27): Re-run completed wave items end-to-end from transcript (debugging, verification, metrics).
+- **PORTING guide** (wave-27): Comprehensive docs/PORTING.md for adopters integrating Aesop into existing codebases.
+- **Windows CI job** (wave-27): Non-required but validated GitHub Actions workflow for Windows build parity.
+- **Transcript-sampled benchmark N=150** (wave-27): Expanded dynamic benchmark sourced from real Claude Code transcripts; N=150 curated task extracts.
 
 ### Changed
 - **Verification policy transparent** (wave-32): Verification tiers now driven by `AgentDriver.probe_capabilities()` — config-free, capability-driven safety.

@@ -32,6 +32,7 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 - **Use case:** Multiple orchestrators coordinating on multi-instance state (e.g., distributed tracing, multi-writer audit log) can use OCC to prevent lost updates when racing to extend the same stream.
 
 ## Module Layout
+- **read_api.py** — `ReadAPI` facade over state surfaces; read-only. Delegates to existing parsers: tracker snapshot, orchestrator status, heartbeat freshness via `tools/common`, ledger rows via `tools/fleet_ledger`. Never forks logic.
 - **store.py** — `EventStore(db_path)`: append-only SQLite log. `append(stream, type, payload, actor, expected_version=None)` returns new version or raises `ConcurrencyConflict` on OCC mismatch; `read(stream)` / `read_all()` return event rows. Corrupt JSON payloads are skipped with stderr log; snapshot read/write for tail-replay optimization.
 - **__init__.py** — Public exports: `EventStore`, `StateAPI`, `ConcurrencyConflict`, `project_tracker`, `export_tracker`, `ingest_tracker_json`.
 - **projections.py** — `project_tracker(events)`: folds `item_created` / `item_updated` / `item_archived` into the full `tracker.json` shape, preserving first-seen order.
