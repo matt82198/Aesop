@@ -43,8 +43,8 @@ describe('DispatchPanel', () => {
     const badges = await screen.findAllByTestId(TESTIDS.dispatchAgentPhase);
     expect(badges.length).toBeGreaterThan(0);
 
-    // Check first agent phase
-    expect(screen.getByText('tool-use')).toBeInTheDocument();
+    // Check first agent phase badge
+    expect(badges[0].textContent).toBe('tool-use');
   });
 
   it('formats activity age correctly', async () => {

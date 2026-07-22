@@ -19,7 +19,7 @@
 
 **csrf.py**: Session-token generation (atomic O_EXCL 0600 mode) + `validate_csrf_request()` (Origin/Referer check + X-Aesop-Token header). `init()` sets `SESSION_TOKEN` (43-char URL-safe base64). Token persisted to `state/.ui-session-token` (readable only by owner).
 
-**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD, and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status`, etc.
+**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD, and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status`, `get_agent_lifecycle_events` (wave-29: agent state transitions from transcript analysis), etc.
 
 **agents.py**: Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`, `get_agent_detail`), path-traversal-safe agent-id handling via `_AGENT_ID_FORBIDDEN`.
 

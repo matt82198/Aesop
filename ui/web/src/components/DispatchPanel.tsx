@@ -178,21 +178,27 @@ export default function DispatchPanel({ containerRef, fetcher = defaultFetcher }
           dispatch.agents.map((agent) => (
             <div key={agent.id} data-testid={TESTIDS.dispatchAgentRow} className={styles.agentRow}>
               <div className={styles.agentId}>{agent.id}</div>
-              <div
-                data-testid={TESTIDS.dispatchAgentPhase}
-                className={`${styles.phaseBadge} ${styles[`phase-${getPhaseColor(agent.phase)}`]}`}
-              >
-                {agent.phase}
-              </div>
-              <div data-testid={TESTIDS.dispatchAgentAge} className={styles.age}>
-                {formatAge(agent.last_activity_age_sec)}
-              </div>
-              <div data-testid={TESTIDS.dispatchAgentTokens} className={styles.tokens}>
-                {formatTokens(agent.token_estimate)}T
+              <div className={styles.agentMetrics}>
+                <div
+                  data-testid={TESTIDS.dispatchAgentPhase}
+                  className={`${styles.phaseBadge} ${styles[`phase-${getPhaseColor(agent.phase)}`]}`}
+                >
+                  {agent.phase}
+                </div>
+                <div data-testid={TESTIDS.dispatchAgentAge} className={styles.age}>
+                  {formatAge(agent.last_activity_age_sec)}
+                </div>
+                <div data-testid={TESTIDS.dispatchAgentTokens} className={styles.tokens}>
+                  {formatTokens(agent.token_estimate)}T
+                </div>
               </div>
               {agent.warnings && agent.warnings.length > 0 && (
                 <div className={styles.warnings}>{agent.warnings.join(', ')}</div>
               )}
+              <div data-testid={`dispatch-agent-lifecycle-${agent.id}`} className={styles.lifecycle}>
+                <span className={styles.lifecycleLabel}>lifecycle:</span>
+                <span className={styles.lifecycleBadge}>{agent.phase}</span>
+              </div>
             </div>
           ))
         )}

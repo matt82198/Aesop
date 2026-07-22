@@ -315,6 +315,87 @@ def get_alerts():
         print(f"[collectors] Failed to read alerts: {e}", file=sys.stderr)
     return alerts
 
+def get_agent_lifecycle_events():
+    """Collect agent lifecycle events from transcript analysis.
+
+    Scans agent-*.jsonl files to infer agent state transitions.
+    Returns structured events for Activity view rendering.
+
+    Event format (list of dicts):
+    [
+        {
+            "agent_id": "12345",
+            "state": "dispatch" | "working" | "done" | "stalled",
+            "last_activity": ISO 8601 timestamp (transcript mtime),
+            "age_sec": seconds since last activity,
+            "transitions": [
+                {"state": "dispatch", "at": "2026-07-22T...Z"},
+                {"state": "working", "at": "2026-07-22T...Z"},
+            ]
+        }
+    ]
+
+    If transcripts unavailable or no agents found, returns empty list.
+    """
+    events = []
+    try:
+        # Use wave_dispatch.py's existing logic for consistency
+        import wave_dispatch as wd
+
+        dispatch_data = wd.get_wave_dispatch(force=False)
+        if not dispatch_data.get("available"):
+            return events
+
+        # Convert phase and timing data to lifecycle event structure
+        agents_data = dispatch_data.get("agents", [])
+        now_ts = datetime.now(timezone.utc)
+
+        for agent in agents_data:
+            agent_id = agent.get("id")
+            phase = agent.get("phase")
+            age_sec = agent.get("last_activity_age_sec", 0)
+
+            if not agent_id:
+                continue
+
+            # Map phase to state
+            phase_to_state = {
+                "dispatch": "dispatch",
+                "thinking": "working",
+                "tool-use": "working",
+                "stall": "stalled",
+                "done": "done",
+                "unknown": "working",
+            }
+            state = phase_to_state.get(phase, "working")
+
+            # Estimate activity timestamp from age
+            if age_sec >= 0:
+                activity_ts = now_ts.timestamp() - age_sec
+                activity_dt = datetime.fromtimestamp(activity_ts, timezone.utc)
+                last_activity = activity_dt.isoformat(timespec='seconds').replace('+00:00', 'Z')
+            else:
+                last_activity = now_ts.isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+            event = {
+                "agent_id": agent_id,
+                "state": state,
+                "last_activity": last_activity,
+                "age_sec": age_sec,
+                "transitions": [
+                    {
+                        "state": state,
+                        "at": last_activity,
+                    }
+                ],
+            }
+            events.append(event)
+
+    except Exception as e:
+        print(f"[collectors] Failed to collect agent lifecycle events: {e}", file=sys.stderr)
+
+    return events
+
 def load_tracker():
     """Load tracker.json, return empty tracker if missing or corrupt.
 
