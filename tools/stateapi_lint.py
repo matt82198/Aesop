@@ -8,17 +8,29 @@ heartbeat files, OUTCOMES-LEDGER.md) outside the read_api module.
 
 Writers (state_store/export.py, state_store/ingest.py, etc.) are allowlisted.
 
+RATCHET MODE (hardening):
+  Baseline is keyed by file + pattern-id (NOT line numbers).
+  Without --update-baseline flag:
+    - FAILS if baseline contains entries absent from current scan (stale baseline)
+    - FAILS if current violations missing from baseline (new violations)
+    - PASS only if: current violations exactly match baseline entries
+  With --update-baseline flag:
+    - Allows regenerating the baseline (sets current as new baseline)
+
+  CI MUST NEVER pass --update-baseline (hand-edits of baseline detected & fail).
+
 Exit codes:
-  0 = no new violations (or no baseline yet)
-  1 = new violations detected
+  0 = all checks pass
+  1 = violations detected or baseline mismatch
   2 = error
 
 Usage:
-  python tools/stateapi_lint.py [--root REPO_ROOT] [--json]
+  python tools/stateapi_lint.py [--root REPO_ROOT] [--json] [--update-baseline]
 
 Options:
   --root REPO_ROOT: Repository root (default: cwd)
   --json: Output JSON instead of text
+  --update-baseline: Regenerate baseline from current violations (CI must never use)
 """
 import json
 import re
@@ -52,32 +64,31 @@ SCAN_DIRS = ["ui", "tools", "state_store"]  # Include state_store to catch inter
 def find_direct_opens(repo_root):
     """Scan repo for direct opens of protected state files outside the API.
 
+    Returns violations keyed by file + pattern-id (not line numbers).
+    Pattern-id is the matched pattern index, making the key stable across line edits.
+
     Args:
         repo_root: Path to repository root
 
     Returns:
-        list: List of violation strings (file:line or file:pattern)
+        list: List of violation keys (file@pattern-id format)
     """
     repo_root = Path(repo_root)
     violations = []
 
     # Pattern to detect file opens: Path(...).read_text(), open(...), json.load(open(...)), etc.
-    # Look for strings containing state file names in suspicious contexts
+    # Each pattern gets an ID for stable keying across line number changes
     read_patterns = [
-        r'["\']tracker\.json["\']',
-        r'["\']orchestrator-status\.json["\']',
-        r'["\']OUTCOMES-LEDGER\.md["\']',
-        r'["\']\.watchdog-heartbeat["\']',
-        r'["\']\.monitor-heartbeat["\']',
-        r'["\']\.orchestrator-heartbeat["\']',
+        (r'["\']tracker\.json["\']', "tracker-json"),
+        (r'["\']orchestrator-status\.json["\']', "status-json"),
+        (r'["\']OUTCOMES-LEDGER\.md["\']', "ledger-md"),
+        (r'["\']\.watchdog-heartbeat["\']', "watchdog-hb"),
+        (r'["\']\.monitor-heartbeat["\']', "monitor-hb"),
+        (r'["\']\.orchestrator-heartbeat["\']', "orchestrator-hb"),
+        (r'state\s*/\s*tracker\.json', "state-tracker-json"),
+        (r'state\s*/\s*orchestrator-status', "state-status-json"),
+        (r'state\s*/\s*.*heartbeat', "state-heartbeat"),
     ]
-
-    # Also look for state/ directory references
-    read_patterns.extend([
-        r'state\s*/\s*tracker\.json',
-        r'state\s*/\s*orchestrator-status',
-        r'state\s*/\s*.*heartbeat',
-    ])
 
     for scan_dir in SCAN_DIRS:
         scan_path = repo_root / scan_dir
@@ -106,7 +117,7 @@ def find_direct_opens(repo_root):
 
             # Scan for violations
             for line_num, line in enumerate(content.split("\n"), 1):
-                for pattern in read_patterns:
+                for pattern, pattern_id in read_patterns:
                     if re.search(pattern, line):
                         # Additional filter: skip comment lines and string literals in docstrings
                         if line.strip().startswith("#"):
@@ -114,10 +125,13 @@ def find_direct_opens(repo_root):
                         if '"""' in line or "'''" in line:
                             continue
 
-                        violations.append(f"{relative_path}:{line_num}")
-                        break  # Only report once per line
+                        # Key is file@pattern-id (stable across line edits)
+                        violation_key = f"{relative_path}@{pattern_id}"
+                        if violation_key not in violations:
+                            violations.append(violation_key)
+                        break  # Only report once per line per file
 
-    return violations
+    return sorted(violations)
 
 
 def save_baseline(baseline_file, data):
@@ -149,24 +163,32 @@ def load_baseline(baseline_file):
 
 
 def check_ratchet(baseline_violations, current_violations):
-    """Check ratchet: ensure current violations don't exceed baseline.
+    """Check ratchet: baseline and current must match exactly.
 
-    The ratchet pattern: baseline records the current state of violations.
-    New code must not ADD violations (tighter is OK, looser is FAIL).
+    Fails if:
+      1. Baseline contains entries absent from current (stale baseline)
+      2. Current violations missing from baseline (new violations)
+
+    Only passes if current violations exactly match baseline (bidirectional check).
 
     Args:
-        baseline_violations: list of violation strings from baseline
-        current_violations: list of violation strings from current scan
+        baseline_violations: list of violation keys from baseline
+        current_violations: list of violation keys from current scan
 
     Returns:
-        bool: True if OK (no new violations), False if new violations found.
+        tuple: (is_ok, stale_entries, new_violations)
+          is_ok (bool): True only if baseline == current
+          stale_entries (list): Entries in baseline not in current
+          new_violations (list): Entries in current not in baseline
     """
     baseline_set = set(baseline_violations)
     current_set = set(current_violations)
 
-    # Find violations in current that are NOT in baseline
-    new_violations = current_set - baseline_set
-    return len(new_violations) == 0
+    stale = list(baseline_set - current_set)
+    new = list(current_set - baseline_set)
+
+    is_ok = (len(stale) == 0 and len(new) == 0)
+    return is_ok, sorted(stale), sorted(new)
 
 
 def main(argv=None):
@@ -176,6 +198,7 @@ def main(argv=None):
     repo_root = None
     output_format = "text"
     baseline_file = None
+    update_baseline = False
 
     # Parse arguments
     i = 0
@@ -197,10 +220,12 @@ def main(argv=None):
             if i < len(argv):
                 baseline_file = argv[i]
             i += 1
+        elif arg == "--update-baseline":
+            update_baseline = True
+            i += 1
         else:
             print(f"Unknown argument: {arg}", file=sys.stderr)
             return 2
-        i += 1
 
     if repo_root is None:
         repo_root = Path.cwd()
@@ -217,8 +242,17 @@ def main(argv=None):
     baseline_data = load_baseline(str(baseline_file))
     baseline_violations = baseline_data.get("violations", [])
 
-    # Check ratchet
-    is_ok = check_ratchet(baseline_violations, violations)
+    # If --update-baseline, save current as baseline and exit
+    if update_baseline:
+        save_baseline(baseline_file, {"violations": violations})
+        if output_format == "json":
+            print(json.dumps({"ok": True, "message": "Baseline updated", "count": len(violations)}, indent=2))
+        else:
+            print(f"Baseline updated: {len(violations)} violation(s) recorded")
+        return 0
+
+    # Check ratchet: baseline must match current exactly
+    is_ok, stale_entries, new_violations = check_ratchet(baseline_violations, violations)
 
     if output_format == "json":
         result = {
@@ -226,7 +260,8 @@ def main(argv=None):
             "violations": violations,
             "baseline_count": len(baseline_violations),
             "current_count": len(violations),
-            "new_violations": [v for v in violations if v not in baseline_violations],
+            "stale_entries": stale_entries,
+            "new_violations": new_violations,
         }
         print(json.dumps(result, indent=2))
     else:
@@ -239,19 +274,33 @@ def main(argv=None):
             for v in sorted(violations):
                 print(f"  {v}")
 
-        new_violations = [v for v in violations if v not in baseline_violations]
+        # Report stale entries (in baseline but not current)
+        if stale_entries:
+            print(f"\nSTALE baseline entries ({len(stale_entries)}) — hand-edited or fixed?:")
+            for v in stale_entries:
+                print(f"  {v}")
+
+        # Report new violations (in current but not baseline)
         if new_violations:
             print(f"\nNEW violations ({len(new_violations)}):")
-            for v in sorted(new_violations):
+            for v in new_violations:
                 print(f"  {v}")
-            print(f"\nFAIL: {len(new_violations)} new violation(s) detected")
-            return 1
-        elif violations:
-            print(f"\nPASS: All violations within baseline ({len(baseline_violations)})")
+
+        # Final verdict
+        if is_ok:
+            if violations:
+                print(f"\nPASS: All {len(violations)} violations match baseline")
+            else:
+                print("\nPASS: No violations")
             return 0
         else:
-            print("PASS: No violations")
-            return 0
+            if stale_entries and new_violations:
+                print(f"\nFAIL: {len(stale_entries)} stale + {len(new_violations)} new violation(s)")
+            elif stale_entries:
+                print(f"\nFAIL: {len(stale_entries)} stale baseline entries (hand-edited?)")
+            else:
+                print(f"\nFAIL: {len(new_violations)} new violation(s) detected")
+            return 1
 
 
 if __name__ == "__main__":

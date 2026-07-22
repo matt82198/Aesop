@@ -16,9 +16,28 @@ Callers use:
   rows = api.read_ledger_rows()
 """
 import json
-import time
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Ensure tools module is importable (sys.path fix for bootstrapping)
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+try:
+    from tools.common import check_heartbeat_staleness
+except ImportError:
+    # Fallback: direct import if tools is not on path
+    import common as common_module
+    check_heartbeat_staleness = common_module.check_heartbeat_staleness
+
+try:
+    from tools.fleet_ledger import parse_ledger_rows as parse_ledger_rows_impl
+except ImportError:
+    # Fallback: direct import if tools is not on path
+    import fleet_ledger as fleet_ledger_module
+    parse_ledger_rows_impl = fleet_ledger_module.parse_ledger_rows
 
 
 class ReadAPI:
@@ -62,7 +81,8 @@ class ReadAPI:
         """Read orchestrator-status.json if present.
 
         Returns:
-            dict with "phase", "activity", "updated_at" fields if file is valid, or None.
+            dict with "updated_at" (required) and optional "phase", "activity" fields,
+            or None if file missing/unreadable.
         """
         status_file = self.state_dir / "orchestrator-status.json"
         if not status_file.exists():
@@ -71,9 +91,9 @@ class ReadAPI:
         try:
             content = status_file.read_text(encoding="utf-8")
             data = json.loads(content)
-            # Validate required fields for orchestrator status
-            if "phase" not in data:
-                return None
+            # Only require updated_at field for freshness checks;
+            # phase is optional (may not be set when status.json created before phase exists)
+            # Don't validate here—let callers decide what fields are required for their use case
             return data
         except Exception:
             return None
@@ -120,8 +140,7 @@ class ReadAPI:
     def check_heartbeat_fresh(self, heartbeat_filename, threshold_s=200):
         """Check if a heartbeat file is fresh.
 
-        Reads the heartbeat file (expected to contain epoch timestamp as first line)
-        and compares to current time.
+        Delegates to tools.common.check_heartbeat_staleness (single source of truth).
 
         Args:
             heartbeat_filename: Filename in state_dir (e.g., ".watchdog-heartbeat")
@@ -131,67 +150,18 @@ class ReadAPI:
             bool: True if file exists and is fresh, False otherwise.
         """
         hb_file = self.state_dir / heartbeat_filename
-        if not hb_file.exists():
-            return False
-
-        try:
-            content = hb_file.read_text(encoding="utf-8").strip()
-            if not content:
-                return False
-
-            timestamp = int(content)
-        except (ValueError, OSError):
-            return False
-
-        age_seconds = int(time.time()) - timestamp
-
-        # Check for future-dated timestamp (clock skew beyond tolerance)
-        if age_seconds < -120:  # More than 2min in future = clock skew
-            return False
-
-        # Clamp small negative ages to 0
-        age_seconds = max(0, age_seconds)
-
-        return age_seconds < threshold_s
+        # Use the shared implementation from common.py; invert staleness to freshness
+        is_stale, _, _ = check_heartbeat_staleness(hb_file, threshold_s)
+        return not is_stale
 
     def read_ledger_rows(self):
         """Read OUTCOMES-LEDGER.md and parse rows.
 
-        Reads the ledger markdown table and returns parsed rows.
+        Delegates to tools.fleet_ledger.parse_ledger_rows() (single source of truth).
         Returns empty list if file missing or unparseable.
 
         Returns:
             list: List of row dicts parsed from the ledger table, or [].
         """
-        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
-        if not ledger_file.exists():
-            return []
-
-        try:
-            content = ledger_file.read_text(encoding="utf-8")
-            rows = []
-
-            # Simple markdown table parser: look for lines starting with |
-            in_table = False
-            for line in content.split("\n"):
-                line = line.strip()
-
-                # Skip header and separator lines
-                if not line.startswith("|"):
-                    in_table = False
-                    continue
-
-                if not in_table:
-                    # Check if this looks like a header
-                    if "Date" in line or "Phase" in line:
-                        in_table = True
-                        continue
-
-                # Parse data row: | col1 | col2 | ... |
-                parts = [p.strip() for p in line.split("|")[1:-1]]  # ignore leading/trailing empty
-                if parts:
-                    rows.append(parts)
-
-            return rows
-        except Exception:
-            return []
+        # Use the shared implementation from fleet_ledger.py
+        return parse_ledger_rows_impl()
