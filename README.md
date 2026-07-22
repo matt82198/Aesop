@@ -69,6 +69,7 @@ Aesop builds itself. These numbers are live from git, verified by anyone who clo
 ```bash
 npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
 ```
+→ Copy `skills/` into `~/.claude/skills` to enable the `/power` and `/buildsystem` commands.
 → See [docs/INSTALL.md](./docs/INSTALL.md) for setup and first `/power` → `/buildsystem` cycle.
 → See [docs/DEMO.md](./docs/DEMO.md) for a complete walkthrough of one wave.
 
