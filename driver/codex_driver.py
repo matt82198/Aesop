@@ -325,13 +325,18 @@ class CodexDriver(AgentDriver):
             )
 
             # User: task + current file contents + test hint.
-            file_blocks = "\n".join(
-                f"File: {path}\n```\n{contents}\n```"
+            # SECURITY: Each file is wrapped as a JSON object to prevent prompt
+            # injection. File content cannot break this boundary even if it contains
+            # backticks, newlines, or instruction-like text. JSON.dumps() escaping
+            # makes the frame unforgeable.
+            file_objects = [
+                json.dumps({"path": path, "contents": contents})
                 for path, contents in file_contents.items()
-            )
+            ]
+            file_blocks = "\n".join(file_objects)
             user_msg = (
                 f"{request.prompt}\n\n"
-                f"Current files:\n{file_blocks}\n\n"
+                f"Current files (JSON-wrapped):\n{file_blocks}\n\n"
                 f"Target test: {request.label or 'unknown'}"
             )
 
