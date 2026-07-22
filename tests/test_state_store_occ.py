@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 import unittest
-from multiprocessing import Pool
+from multiprocessing import Pool, Barrier, Manager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +80,69 @@ def _worker_append_with_occ(args):
             "worker_id": worker_id,
             "successes": [],
             "conflicts": 0,
+            "error": str(e),
+        }
+
+
+def _worker_deterministic_occ_contention(args):
+    """Worker for deterministic OCC contention using a Barrier.
+
+    This worker reads version, then blocks on a Barrier until ALL workers are
+    ready, then ALL attempt append(expected_version=N) SIMULTANEOUSLY.
+
+    This GUARANTEES genuine contention every run, unlike sleep-based timing which
+    may serialize if the OS scheduler doesn't interleave reads and appends.
+
+    Args:
+        args: (db_path, stream, worker_id, barrier)
+
+    Returns:
+        dict with worker_id, success (bool), version (or None if conflict),
+        and any error message
+    """
+    db_path, stream, worker_id, barrier = args
+    try:
+        store = EventStore(db_path)
+
+        # Read current version (all workers do this sequentially, seeing the same version)
+        events = store.read(stream)
+        current_version = len(events)
+
+        # CRITICAL: Block on barrier until ALL workers are ready.
+        # This ensures they all release from this line at nearly the same instant.
+        barrier.wait()
+
+        # All workers now attempt append(expected_version=N) in close temporal proximity.
+        # Only ONE can succeed; the rest hit ConcurrencyConflict.
+        try:
+            payload = {"worker_id": worker_id}
+            version = store.append(
+                stream,
+                "test_event",
+                payload,
+                actor=f"worker_{worker_id}",
+                expected_version=current_version,
+            )
+            return {
+                "worker_id": worker_id,
+                "success": True,
+                "version": version,
+                "error": None,
+            }
+        except ConcurrencyConflict as e:
+            return {
+                "worker_id": worker_id,
+                "success": False,
+                "version": None,
+                "actual_version": e.actual_version,
+                "error": None,
+            }
+
+    except Exception as e:
+        return {
+            "worker_id": worker_id,
+            "success": False,
+            "version": None,
             "error": str(e),
         }
 
@@ -295,11 +358,15 @@ class OCCTest(unittest.TestCase):
             self.assertEqual(v_retry, 4)
 
     def test_multiprocess_simultaneous_occ_exactly_one_succeeds(self):
-        """Multi-process: two workers both attempt append(expected_version=N) on same stream.
+        """Multi-process: DETERMINISTIC multi-worker contention on append(expected_version=N).
 
-        Demonstrates that even with multiprocessing, only one succeeds when racing
-        for the same version. This is a stochastic test: the workers race, and
-        due to SQLite's write serialization, exactly one will succeed.
+        Uses a Manager-based Barrier to force ALL workers to block until everyone has read
+        version N, then ALL release simultaneously to attempt append(expected_version=N).
+        This GUARANTEES genuine contention every run, no stochastic timing.
+
+        Load-bearing assertion: EXACTLY ONE succeeds, the rest raise ConcurrencyConflict.
+        If a mutant removes the version check, all workers succeed (test fails).
+        If a mutant swaps the comparison, wrong workers succeed (test fails).
         """
         stream = "test_stream"
 
@@ -307,48 +374,62 @@ class OCCTest(unittest.TestCase):
         store = EventStore(self.db_path)
         store.append(stream, "seed", {"data": "seed"})
 
-        # Spawn 2+ workers racing to append (many workers increase collision likelihood)
+        # Spawn N workers racing to append (all will read version 1, all will attempt
+        # append(expected_version=1) simultaneously via barrier).
         num_workers = 5
-        with Pool(processes=num_workers) as pool:
-            async_results = [
-                pool.apply_async(
-                    _worker_simultaneous_occ_attempt,
-                    ((self.db_path, stream, worker_id, 0.0),),
-                )
-                for worker_id in range(num_workers)
-            ]
 
-            # Collect results with timeout
-            results = []
-            for async_result in async_results:
-                try:
-                    result = async_result.get(timeout=30)
-                    results.append(result)
-                    self.assertIsNone(result["error"],
-                                    f"Worker {result['worker_id']} error: {result['error']}")
-                except Exception as e:
-                    self.fail(f"Worker failed or timed out: {e}")
+        # Create a Manager-based Barrier for interprocess synchronization.
+        # A plain Barrier() cannot be pickled; Manager() creates a shareable version.
+        with Manager() as manager:
+            barrier = manager.Barrier(num_workers)
 
-        # Verify at most one succeeded (all workers read version 1, so only one can succeed with expected_version=1)
-        # Due to process timing, we may see different patterns, but at least one should succeed
+            with Pool(processes=num_workers) as pool:
+                async_results = [
+                    pool.apply_async(
+                        _worker_deterministic_occ_contention,
+                        ((self.db_path, stream, worker_id, barrier),),
+                    )
+                    for worker_id in range(num_workers)
+                ]
+
+                # Collect results with timeout
+                results = []
+                for async_result in async_results:
+                    try:
+                        result = async_result.get(timeout=30)
+                        results.append(result)
+                        self.assertIsNone(result["error"],
+                                        f"Worker {result['worker_id']} error: {result['error']}")
+                    except Exception as e:
+                        self.fail(f"Worker failed or timed out: {e}")
+
+        # DETERMINISTIC INVARIANT: exactly ONE success, rest conflicts.
+        # All workers read version 1, all attempted append(expected_version=1).
+        # Only one SQLite writer can succeed; others hit ConcurrencyConflict.
         successes = [r for r in results if r.get("success")]
         failures = [r for r in results if not r.get("success")]
 
-        # At least one should succeed, and all should either succeed or have a concurrency error
-        self.assertGreaterEqual(len(successes), 1,
-                               f"Expected at least 1 success, got {len(successes)}")
-        self.assertGreater(len(failures), 0,
-                          f"Expected some failures from OCC contention, got {len(failures)}")
+        self.assertEqual(len(successes), 1,
+                        f"Expected exactly 1 success from deterministic barrier contention, "
+                        f"got {len(successes)}. Mutant: version check may be missing or broken.")
+        self.assertEqual(len(failures), num_workers - 1,
+                        f"Expected exactly {num_workers - 1} failures, got {len(failures)}")
 
-        # Count successful appends in the stream
-        # (The number of events should match successes, since each success appends one event)
+        # Verify all failures are ConcurrencyConflict (have actual_version set).
+        for failure in failures:
+            self.assertIsNotNone(failure.get("actual_version"),
+                                f"Worker {failure['worker_id']}: expected ConcurrencyConflict "
+                                f"with actual_version set, got {failure}")
+
+        # Verify the stream has exactly one new event (1 seed + 1 success).
         events = store.read(stream)
-        # We expect: 1 seed + at least 1 success, but possibly more if the timing allowed sequential reads
-        # In any case, there should be no duplicates and versions should be gapless
+        self.assertEqual(len(events), 2,
+                        f"Expected 1 seed + 1 success = 2 events, got {len(events)}")
+
+        # Versions should be gapless [1, 2]
         versions = sorted([e["version"] for e in events])
-        expected_versions = list(range(1, len(events) + 1))
-        self.assertEqual(versions, expected_versions,
-                        "Versions should be gapless (no duplicates or gaps)")
+        self.assertEqual(versions, [1, 2],
+                        "Versions should be gapless: [1, 2]")
 
     def test_multiprocess_occ_conflict_retry_convergence(self):
         """Multi-process: one worker gets conflict, retries with new version, succeeds.
