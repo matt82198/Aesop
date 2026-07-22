@@ -57,7 +57,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `secret_scan.py` — Pre-push secret/credential detection gate (staged/history/paths)
 - `self_stats.py` — Git-derived metrics counter + README block generator
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
-- `stall_check.py` — Automated agent transcript stall detector
+- `stall_check.py` — Automated agent transcript stall detector; optional --active-from flag refines STALLED verdict to require both stale mtime AND active task file; --emit-recovery emits JSON advisories; --recovery-dir writes recovery-<agent>.json files (idempotent)
 - `status.js` — One-shot fleet status snapshot (watchdog/monitor heartbeat age, dashboard port reachability, git branch and working tree state)
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)

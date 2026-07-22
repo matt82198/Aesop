@@ -178,6 +178,203 @@ class TestStallCheck(unittest.TestCase):
             self.assertIsNotNone(over_entry, "Should find 'over' transcript")
             self.assertIn(over_entry["verdict"], ("stale", "dead"), "File just over threshold should be 'stale' or 'dead'")
 
+    def test_active_from_flag_inactive_agent(self):
+        """Test --active-from flag: stale + inactive = ok (not stalled)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            active_dir = Path(tmpdir) / "active"
+            active_dir.mkdir()
+
+            now = time.time()
+            threshold = 600
+
+            # Create a stalled transcript (20 minutes old)
+            stalled_file = tmpdir_path / "agent-inactive123.jsonl"
+            stalled_file.write_text("dummy")
+            stalled_mtime = now - 1200  # 1200 seconds old
+            os.utime(stalled_file, (stalled_mtime, stalled_mtime))
+
+            # Scan WITH active_from flag, but no task file exists for this agent
+            results = stall_check.scan_transcripts(tmpdir_path, threshold, active_from_dir=str(active_dir))
+
+            self.assertEqual(len(results), 1)
+            entry = results[0]
+            self.assertEqual(entry["verdict"], "ok", "Stale + inactive should be 'ok', not stalled")
+            self.assertFalse(entry["active"], "Agent should not be active")
+
+    def test_active_from_flag_active_agent(self):
+        """Test --active-from flag: stale + active = stalled."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            active_dir = Path(tmpdir) / "active"
+            active_dir.mkdir()
+
+            now = time.time()
+            threshold = 600
+
+            # Create a stalled transcript (20 minutes old)
+            stalled_file = tmpdir_path / "agent-active123.jsonl"
+            stalled_file.write_text("dummy")
+            stalled_mtime = now - 1200  # 1200 seconds old
+            os.utime(stalled_file, (stalled_mtime, stalled_mtime))
+
+            # Create active task file for this agent
+            (active_dir / "active123.task").write_text("task data")
+
+            # Scan WITH active_from flag
+            results = stall_check.scan_transcripts(tmpdir_path, threshold, active_from_dir=str(active_dir))
+
+            self.assertEqual(len(results), 1)
+            entry = results[0]
+            self.assertEqual(entry["verdict"], "stale", "Stale + active should be stalled")
+            self.assertTrue(entry["active"], "Agent should be active")
+
+    def test_active_from_flag_status_file_variant(self):
+        """Test --active-from flag with .status file (alternative to .task)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            active_dir = Path(tmpdir) / "active"
+            active_dir.mkdir()
+
+            now = time.time()
+            threshold = 600
+
+            # Create a stalled transcript
+            stalled_file = tmpdir_path / "agent-status999.jsonl"
+            stalled_file.write_text("dummy")
+            stalled_mtime = now - 1200
+            os.utime(stalled_file, (stalled_mtime, stalled_mtime))
+
+            # Create active status file (instead of task file)
+            (active_dir / "status999.status").write_text("running")
+
+            results = stall_check.scan_transcripts(tmpdir_path, threshold, active_from_dir=str(active_dir))
+
+            self.assertEqual(len(results), 1)
+            entry = results[0]
+            self.assertTrue(entry["active"], "Should find .status file as active marker")
+            self.assertEqual(entry["verdict"], "stale", "Should be stalled")
+
+    def test_legacy_behavior_no_active_from_flag(self):
+        """Test backward compatibility: no --active-from flag = legacy behavior (stale = stalled)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            now = time.time()
+            threshold = 600
+
+            # Create a stalled transcript
+            stalled_file = tmpdir_path / "agent-legacy.jsonl"
+            stalled_file.write_text("dummy")
+            stalled_mtime = now - 1200
+            os.utime(stalled_file, (stalled_mtime, stalled_mtime))
+
+            # Scan WITHOUT active_from flag
+            results = stall_check.scan_transcripts(tmpdir_path, threshold, active_from_dir=None)
+
+            self.assertEqual(len(results), 1)
+            entry = results[0]
+            self.assertEqual(entry["verdict"], "stale", "Legacy mode: stale mtime = stalled")
+            self.assertIsNone(entry["active"], "Active flag should be None when --active-from not used")
+
+    def test_emit_recovery_advisories(self):
+        """Test recovery advisory emission for stalled agents."""
+        results = [
+            {
+                "agent": "test-stale",
+                "verdict": "stale",
+                "mtime_age_s": 1200,
+                "suggested_action": "monitor for progress",
+                "active": True,
+            },
+            {
+                "agent": "test-dead",
+                "verdict": "dead",
+                "mtime_age_s": 2400,
+                "suggested_action": "investigate immediately",
+                "active": True,
+            },
+            {
+                "agent": "test-ok",
+                "verdict": "ok",
+                "mtime_age_s": 100,
+                "suggested_action": None,
+                "active": None,
+            },
+        ]
+
+        advisories = list(stall_check.emit_recovery_advisories(results))
+
+        # Should emit 2 advisories (stale + dead, not ok)
+        self.assertEqual(len(advisories), 2, "Should emit advisory for each stalled agent")
+
+        # Parse first advisory (stale)
+        stale_advisory = json.loads(advisories[0])
+        self.assertEqual(stale_advisory["agent"], "test-stale")
+        self.assertEqual(stale_advisory["verdict"], "stale")
+        self.assertIsInstance(stale_advisory["suggested_action"], list)
+        self.assertGreater(len(stale_advisory["suggested_action"]), 0, "Should have suggested actions")
+
+        # Parse second advisory (dead)
+        dead_advisory = json.loads(advisories[1])
+        self.assertEqual(dead_advisory["agent"], "test-dead")
+        self.assertEqual(dead_advisory["verdict"], "dead")
+        self.assertIsInstance(dead_advisory["suggested_action"], list)
+
+    def test_recovery_files_idempotent(self):
+        """Test recovery file writing is idempotent."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            recovery_dir = Path(tmpdir) / "recovery"
+
+            results = [
+                {
+                    "agent": "idempotent-test",
+                    "verdict": "stale",
+                    "mtime_age_s": 1200,
+                    "suggested_action": "test",
+                    "active": True,
+                },
+            ]
+
+            # Write recovery files
+            count1 = stall_check.write_recovery_files(results, str(recovery_dir))
+            self.assertEqual(count1, 1, "Should write 1 recovery file")
+
+            recovery_file = recovery_dir / "recovery-idempotent-test.json"
+            self.assertTrue(recovery_file.exists(), "Recovery file should exist")
+            content1 = recovery_file.read_text()
+
+            # Write again (idempotent overwrite)
+            count2 = stall_check.write_recovery_files(results, str(recovery_dir))
+            self.assertEqual(count2, 1, "Should write 1 recovery file again")
+            content2 = recovery_file.read_text()
+
+            # Content should be identical
+            self.assertEqual(content1, content2, "Recovery file should be overwritten identically")
+
+    def test_recovery_files_none_stalled(self):
+        """Test recovery files not written when no agents stalled."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recovery_dir = Path(tmpdir) / "recovery"
+
+            results = [
+                {
+                    "agent": "ok-agent",
+                    "verdict": "ok",
+                    "mtime_age_s": 100,
+                    "suggested_action": None,
+                    "active": None,
+                },
+            ]
+
+            count = stall_check.write_recovery_files(results, str(recovery_dir))
+            self.assertEqual(count, 0, "Should not write any files when no stalled agents")
+
+            # Directory should not exist or be empty
+            if recovery_dir.exists():
+                self.assertEqual(len(list(recovery_dir.iterdir())), 0, "Recovery directory should be empty")
+
 
 if __name__ == "__main__":
     unittest.main()

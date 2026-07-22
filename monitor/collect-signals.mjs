@@ -613,6 +613,58 @@ function detectIsolationViolations() {
   return { violations, count: violations.length };
 }
 
+// 12) Agent stall detection
+// Calls tools/stall_check.py --json with bounded timeout; fails gracefully with NOT-AVAILABLE signal
+function checkAgentStalls() {
+  let stallCheckPy = path.join(path.dirname(MON), 'tools', 'stall_check.py');
+
+  // Fallback: look in SCRIPTS_ROOT if not found in tools
+  if (!fs.existsSync(stallCheckPy)) {
+    stallCheckPy = path.join(SCRIPTS_ROOT, 'stall_check.py');
+  }
+
+  // Fallback: look in the actual aesop source directory (for tests/CI environments)
+  if (!fs.existsSync(stallCheckPy)) {
+    const realMonitorCharter = path.join(__dirname, 'CHARTER.md');
+    if (fs.existsSync(realMonitorCharter)) {
+      stallCheckPy = path.join(__dirname, '..', 'tools', 'stall_check.py');
+    }
+  }
+
+  if (!fs.existsSync(stallCheckPy)) {
+    // stall_check.py not available; return NOT-AVAILABLE signal
+    return { available: false, count: 0, summary: 'Tool not found', stalls: [] };
+  }
+
+  try {
+    // Invoke stall_check.py with 5-second timeout (bounded, fail-open)
+    const result = spawnSync('python', [stallCheckPy, '--json'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    if (result.status !== 0 || result.error) {
+      // Tool execution failed; return NOT-AVAILABLE signal
+      return { available: false, count: 0, summary: 'Tool execution failed', stalls: [] };
+    }
+
+    const stalls = JSON.parse(result.stdout || '[]');
+    const stalledCount = stalls.filter(s => s.verdict && ['stale', 'dead'].includes(s.verdict)).length;
+
+    return {
+      available: true,
+      count: stalledCount,
+      total: stalls.length,
+      summary: stalledCount > 0 ? `${stalledCount} agent(s) stalled` : 'No stalls detected',
+      stalls: stalls,
+    };
+  } catch (e) {
+    // Parse error or other exception; return NOT-AVAILABLE signal
+    return { available: false, count: 0, summary: `Error: ${e.message}`, stalls: [] };
+  }
+}
+
 // === AUTO Actions ===
 // Log rotation: invoke rotate_logs.py if available and log needs rotation
 function performAutoLogRotation(logFiles, actionsLogPath) {
@@ -839,6 +891,7 @@ const gitState = checkGitState();
 const memory = checkMemoryFreshness();
 const logFiles = checkLogFiles(securityAlertsContent);
 const isolationViolations = detectIsolationViolations();
+const agentStalls = checkAgentStalls();
 
 // Extended signal checks (5, 6, 8, 10) — skipped if extended_signals is OFF
 const junk = extendedSignals ? detectJunkScripts() : { skipped: true };
@@ -888,6 +941,7 @@ const signals = {
   costTick,
   unreviewedPrompts,
   isolationViolations,
+  agentStalls,
 };
 
 const brief = [];
@@ -942,6 +996,21 @@ if (isolationViolations.count === 0) {
   brief.push(`🚨 **${isolationViolations.count} isolation violation(s)** detected (worktrees inside repo root):`);
   for (const v of isolationViolations.violations) {
     brief.push(`  - ${v.path}: ${v.message}`);
+  }
+}
+brief.push('');
+
+brief.push('## Agent stalls');
+if (!agentStalls.available) {
+  brief.push(`NOT-AVAILABLE: ${agentStalls.summary}`);
+} else if (agentStalls.count === 0) {
+  brief.push('✓ No agent stalls detected.');
+} else {
+  brief.push(`🚨 **${agentStalls.count} agent(s) stalled** (${agentStalls.total} total scanned):`);
+  for (const stall of agentStalls.stalls) {
+    if (['stale', 'dead'].includes(stall.verdict)) {
+      brief.push(`  - ${stall.agent}: ${stall.verdict} (${stall.mtime_age_s}s old)`);
+    }
   }
 }
 brief.push('');

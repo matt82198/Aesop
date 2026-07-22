@@ -4,6 +4,7 @@ Automated silent-hang detection for agent transcripts.
 
 Usage:
   stall_check.py [--transcripts-root DIR] [--threshold-seconds SEC] [--json] [--exit-nonzero-on-stall]
+                 [--active-from DIR] [--emit-recovery] [--recovery-dir DIR]
 
 Options:
   --transcripts-root DIR       Root directory to scan for agent-*.jsonl transcripts.
@@ -12,11 +13,24 @@ Options:
                                Transcripts older than this are flagged as stalled.
   --json                       Output as JSON list of {agent_id, age_seconds, stalled, last_mtime}.
   --exit-nonzero-on-stall      Exit 1 if any agent is detected as stalled; default exit 0 always.
+  --active-from DIR            Optional. When set, an agent is ACTIVE only if a matching task/status
+                               file exists in DIR (named <agent_id>.task or <agent_id>.status).
+                               STALLED = stale mtime AND active. Default behavior (no flag):
+                               STALLED = stale mtime only.
+  --emit-recovery              When set, emit recovery advisory JSON for each STALLED agent.
+                               Advisory includes: agent, verdict, age_s, suggested_action (list).
+                               Output as JSON blocks (one per STALLED agent).
+  --recovery-dir DIR           Optional; only used with --emit-recovery. When set, write one
+                               recovery-<agent>.json file per STALLED agent to DIR (idempotent).
+                               No files written when none stalled.
 
 Behavior:
   - Walks transcripts-root for files matching agent-*.jsonl.
   - For each file, computes age = now - file mtime (seconds).
-  - Reports agents as stalled if age > threshold-seconds.
+  - Without --active-from: Reports agents as stalled if age > threshold-seconds (legacy).
+  - With --active-from: Reports agents as stalled if age > threshold-seconds AND active file exists.
+  - With --emit-recovery: Emits JSON advisory for each STALLED agent (to stdout).
+  - With --recovery-dir: Additionally writes recovery-<agent>.json files (idempotent, overwrite).
   - Default output: human-readable table; add --json for structured output.
   - Gracefully reports "no transcripts found" if root is missing or empty.
   - Exit code: 0 always (unless --exit-nonzero-on-stall specified and stalls detected).
@@ -38,10 +52,41 @@ def get_transcripts_root():
     return Path.home() / ".claude" / "projects"
 
 
-def scan_transcripts(transcripts_root, threshold_seconds):
+def is_agent_active(agent_id, active_from_dir):
+    """Check if an agent is active by looking for task/status files.
+
+    Args:
+        agent_id: Agent identifier (e.g., 'abc123')
+        active_from_dir: Directory to scan for <agent_id>.task or <agent_id>.status files
+
+    Returns:
+        True if any matching task/status file exists, False otherwise.
+    """
+    if not active_from_dir:
+        return None  # Flag not provided
+
+    active_from_path = Path(active_from_dir)
+    if not active_from_path.exists():
+        return False
+
+    # Check for <agent_id>.task or <agent_id>.status files
+    for pattern in [f"{agent_id}.task", f"{agent_id}.status"]:
+        if (active_from_path / pattern).exists():
+            return True
+
+    return False
+
+
+def scan_transcripts(transcripts_root, threshold_seconds, active_from_dir=None):
     """Scan transcripts root for agent-*.jsonl files and compute staleness.
 
-    Returns: list of dicts {agent, transcript, mtime_age_s, verdict, suggested_action, last_mtime (ISO)}
+    Args:
+        transcripts_root: Root directory to scan
+        threshold_seconds: Staleness threshold in seconds
+        active_from_dir: Optional. When set, agent is ACTIVE only if task/status file exists.
+                        STALLED = stale mtime AND active. Default (None): STALLED = stale mtime only.
+
+    Returns: list of dicts {agent, transcript, mtime_age_s, verdict, suggested_action, last_mtime (ISO), active}
     """
     transcripts_root = Path(transcripts_root)
 
@@ -66,16 +111,29 @@ def scan_transcripts(transcripts_root, threshold_seconds):
         # Extract agent_id from filename (e.g., agent-abc123.jsonl -> abc123)
         agent_id = jsonl_file.stem.replace("agent-", "")
 
+        # Check active status if flag is provided
+        active = is_agent_active(agent_id, active_from_dir)
+
         # Determine verdict
         if age_seconds <= STALE_THRESHOLD:
             verdict = "ok"
             suggested_action = None
         elif age_seconds <= DEAD_THRESHOLD:
-            verdict = "stale"
-            suggested_action = "monitor for progress or investigate why transcript is stalled"
+            # If active_from_dir is set, only stale if also active
+            if active_from_dir is not None and not active:
+                verdict = "ok"
+                suggested_action = None
+            else:
+                verdict = "stale"
+                suggested_action = "monitor for progress or investigate why transcript is stalled"
         else:
-            verdict = "dead"
-            suggested_action = "investigate immediately; agent may be hung or crashed"
+            # If active_from_dir is set, only dead if also active
+            if active_from_dir is not None and not active:
+                verdict = "ok"
+                suggested_action = None
+            else:
+                verdict = "dead"
+                suggested_action = "investigate immediately; agent may be hung or crashed"
 
         results.append({
             "agent": agent_id,
@@ -84,9 +142,99 @@ def scan_transcripts(transcripts_root, threshold_seconds):
             "verdict": verdict,
             "suggested_action": suggested_action,
             "last_mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime)),
+            "active": active if active_from_dir is not None else None,
         })
 
     return results
+
+
+def emit_recovery_advisories(results):
+    """Emit recovery advisory JSON blocks for stalled agents.
+
+    Yields JSON strings (one per stalled agent) with advisory structure:
+    {
+        "agent": <agent_id>,
+        "verdict": <verdict>,
+        "age_s": <seconds>,
+        "suggested_action": [<ordered list of actions>]
+    }
+    """
+    if not results:
+        return
+
+    stalled_entries = [r for r in results if r["verdict"] in ("stale", "dead")]
+
+    for entry in stalled_entries:
+        # Build ordered list of suggested actions
+        actions = []
+
+        if entry["verdict"] == "stale":
+            actions.append("SendMessage resume with scope recap")
+            actions.append("TaskStop + relaunch from journal")
+            actions.append("inspect transcript tail")
+        elif entry["verdict"] == "dead":
+            actions.append("TaskStop immediately")
+            actions.append("inspect transcript for crash/error")
+            actions.append("relaunch from last known-good checkpoint")
+
+        advisory = {
+            "agent": entry["agent"],
+            "verdict": entry["verdict"],
+            "age_s": entry["mtime_age_s"],
+            "suggested_action": actions,
+        }
+
+        yield json.dumps(advisory)
+
+
+def write_recovery_files(results, recovery_dir):
+    """Write recovery-<agent>.json files for each stalled agent (idempotent).
+
+    Args:
+        results: List of scan results
+        recovery_dir: Directory to write recovery files to
+
+    Returns:
+        Count of files written
+    """
+    if not results or not recovery_dir:
+        return 0
+
+    recovery_path = Path(recovery_dir)
+    recovery_path.mkdir(parents=True, exist_ok=True)
+
+    files_written = 0
+    stalled_entries = [r for r in results if r["verdict"] in ("stale", "dead")]
+
+    for entry in stalled_entries:
+        # Build ordered list of suggested actions
+        actions = []
+
+        if entry["verdict"] == "stale":
+            actions.append("SendMessage resume with scope recap")
+            actions.append("TaskStop + relaunch from journal")
+            actions.append("inspect transcript tail")
+        elif entry["verdict"] == "dead":
+            actions.append("TaskStop immediately")
+            actions.append("inspect transcript for crash/error")
+            actions.append("relaunch from last known-good checkpoint")
+
+        advisory = {
+            "agent": entry["agent"],
+            "verdict": entry["verdict"],
+            "age_s": entry["mtime_age_s"],
+            "suggested_action": actions,
+        }
+
+        recovery_file = recovery_path / f"recovery-{entry['agent']}.json"
+        try:
+            recovery_file.write_text(json.dumps(advisory, indent=2), encoding='utf-8')
+            files_written += 1
+        except Exception as e:
+            # Fail-open: log error but continue
+            sys.stderr.write(f"Warning: Failed to write {recovery_file}: {e}\n")
+
+    return files_written
 
 
 def print_human_table(results):
@@ -140,6 +288,21 @@ def main():
         action="store_true",
         help="Exit 1 if any agent is stalled (default: always exit 0)",
     )
+    parser.add_argument(
+        "--active-from",
+        default=None,
+        help="Optional. Directory to scan for task/status files. Agent is ACTIVE only if file exists.",
+    )
+    parser.add_argument(
+        "--emit-recovery",
+        action="store_true",
+        help="Emit recovery advisory JSON blocks to stdout for each STALLED agent",
+    )
+    parser.add_argument(
+        "--recovery-dir",
+        default=None,
+        help="Optional; only used with --emit-recovery. Write recovery-<agent>.json files to this directory",
+    )
 
     args = parser.parse_args()
 
@@ -147,16 +310,28 @@ def main():
     transcripts_root = args.transcripts_root if args.transcripts_root else get_transcripts_root()
 
     # Scan transcripts
-    results = scan_transcripts(transcripts_root, args.threshold_seconds)
+    results = scan_transcripts(transcripts_root, args.threshold_seconds, args.active_from)
 
-    # Output
-    if args.json:
-        print_json_output(results)
-    else:
-        if results is None:
-            print("no transcripts found")
+    # Emit recovery advisories if requested
+    if args.emit_recovery and results:
+        for advisory_json in emit_recovery_advisories(results):
+            print(advisory_json)
+
+    # Write recovery files if requested
+    if args.emit_recovery and args.recovery_dir and results:
+        write_recovery_files(results, args.recovery_dir)
+
+    # Output (human-readable or JSON)
+    # Note: if --emit-recovery was used, recovery advisories already printed above
+    if not args.emit_recovery:
+        # Only print human-readable/JSON if we're not emitting recovery advisories
+        if args.json:
+            print_json_output(results)
         else:
-            print_human_table(results)
+            if results is None:
+                print("no transcripts found")
+            else:
+                print_human_table(results)
 
     # Determine exit code
     exit_code = 0
