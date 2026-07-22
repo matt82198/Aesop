@@ -52,8 +52,54 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
         report_file.write_text(json.dumps(report), encoding='utf-8')
         return report_file
 
-    def test_timestamp_pipe_neutralized(self):
-        """Test that pipe in timestamp does not inject extra columns."""
+    def test_timestamp_with_payload_rejected(self):
+        """Test that timestamp with concatenated payload is rejected."""
+        report_file = self._create_test_report()
+        # Payload injection: newline+data that would corrupt timestamp field when stripped
+        malicious_ts = "2024-07-13T10:00:00\nfake_row"
+
+        result = self._run_ledger(
+            "append-wave",
+            "--report-file", str(report_file),
+            "--wave", "1",
+            "--phase", "build",
+            "--timestamp", malicious_ts
+        )
+
+        # Should REJECT with non-zero exit or mark error
+        # The proper fix should reject this as invalid ISO timestamp
+        if result.returncode == 0:
+            # If it did append, verify the timestamp is valid ISO format
+            sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+            try:
+                from fleet_ledger import parse_ledger_rows
+            finally:
+                sys.path.pop(0)
+
+            old_state_root = os.environ.get("AESOP_STATE_ROOT")
+            os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
+
+            try:
+                rows = parse_ledger_rows()
+                for row in rows:
+                    if row['wave'] == 1:
+                        # Timestamp must be valid ISO 8601 format
+                        # After fix: should match YYYY-MM-DDTHH:MM:SS pattern (with optional timezone)
+                        import re
+                        iso_pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
+                        self.assertRegex(row['iso_ts'], iso_pattern,
+                            f"Timestamp {row['iso_ts']} is not valid ISO 8601 format")
+                        # Critical: no payload data should be in the timestamp
+                        self.assertNotIn('fake_row', row['iso_ts'],
+                            "Payload data found in timestamp - injection successful!")
+            finally:
+                if old_state_root:
+                    os.environ["AESOP_STATE_ROOT"] = old_state_root
+                else:
+                    os.environ.pop("AESOP_STATE_ROOT", None)
+
+    def test_timestamp_pipe_rejected(self):
+        """Test that pipe in timestamp is rejected."""
         report_file = self._create_test_report()
         malicious_ts = "2024-07-13T10:00:00 | injected_column"
 
@@ -65,9 +111,12 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
             "--timestamp", malicious_ts
         )
 
-        self.assertEqual(result.returncode, 0)
+        # Should REJECT with error (pipe is forbidden character in ISO timestamp)
+        self.assertNotEqual(result.returncode, 0, "Invalid timestamp should be rejected")
+        self.assertIn("Timestamp contains forbidden characters", result.stdout + result.stderr,
+                      "Should indicate timestamp validation failed")
 
-        # Parse ledger to verify pipe was removed and no extra columns created
+        # Verify no rows were created
         sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
         try:
             from fleet_ledger import parse_ledger_rows
@@ -79,28 +128,15 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
 
         try:
             rows = parse_ledger_rows()
-            self.assertGreater(len(rows), 0)
-
-            # Find the row we just appended
-            found = False
-            for row in rows:
-                if row['phase'] == 'build' and row['wave'] == 1:
-                    found = True
-                    # Verify timestamp has pipe removed (sanitized) - this is the security check
-                    self.assertNotIn('|', row['iso_ts'])
-                    # Verify the timestamp doesn't match the original malicious input
-                    self.assertNotEqual(row['iso_ts'], malicious_ts)
-                    break
-
-            self.assertTrue(found, "Appended row not found in parsed ledger")
+            self.assertEqual(len(rows), 0, "Invalid timestamp should not be written to ledger")
         finally:
             if old_state_root:
                 os.environ["AESOP_STATE_ROOT"] = old_state_root
             else:
                 os.environ.pop("AESOP_STATE_ROOT", None)
 
-    def test_timestamp_newline_neutralized(self):
-        """Test that newline in timestamp does not inject extra rows."""
+    def test_timestamp_newline_rejected(self):
+        """Test that newline in timestamp is rejected (prevents injection)."""
         report_file = self._create_test_report()
         malicious_ts = "2024-07-13T10:00:00\n| fake_row | fake_model | 0 | 0 | 0 | FAKE | phase | 99 |"
 
@@ -112,9 +148,12 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
             "--timestamp", malicious_ts
         )
 
-        self.assertEqual(result.returncode, 0)
+        # Should REJECT with error
+        self.assertNotEqual(result.returncode, 0, "Invalid timestamp should be rejected")
+        self.assertIn("Timestamp contains forbidden characters", result.stdout + result.stderr,
+                      "Should indicate timestamp validation failed")
 
-        # Parse ledger to verify newline was removed and no extra rows were created
+        # Verify no rows were created from invalid input
         sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
         try:
             from fleet_ledger import parse_ledger_rows
@@ -126,21 +165,16 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
 
         try:
             rows = parse_ledger_rows()
-            # Should have exactly 1 row (no injected fake_row)
-            self.assertEqual(len(rows), 1)
-
-            # Verify no "fake_model" was injected
-            for row in rows:
-                self.assertNotEqual(row['model'], 'fake_model')
-                self.assertNotIn('\n', row['iso_ts'])
+            # Should have no rows (invalid input rejected)
+            self.assertEqual(len(rows), 0, "Invalid timestamp should not be written to ledger")
         finally:
             if old_state_root:
                 os.environ["AESOP_STATE_ROOT"] = old_state_root
             else:
                 os.environ.pop("AESOP_STATE_ROOT", None)
 
-    def test_timestamp_carriage_return_neutralized(self):
-        """Test that carriage return in timestamp is sanitized."""
+    def test_timestamp_carriage_return_rejected(self):
+        """Test that carriage return in timestamp is rejected."""
         report_file = self._create_test_report()
         malicious_ts = "2024-07-13T10:00:00\r\ninjected"
 
@@ -152,9 +186,12 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
             "--timestamp", malicious_ts
         )
 
-        self.assertEqual(result.returncode, 0)
+        # Should REJECT with error
+        self.assertNotEqual(result.returncode, 0, "Invalid timestamp should be rejected")
+        self.assertIn("Timestamp contains forbidden characters", result.stdout + result.stderr,
+                      "Should indicate timestamp validation failed")
 
-        # Verify the timestamp has no line-ending characters
+        # Verify no rows were created
         sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
         try:
             from fleet_ledger import parse_ledger_rows
@@ -166,9 +203,7 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
 
         try:
             rows = parse_ledger_rows()
-            self.assertEqual(len(rows), 1)
-            self.assertNotIn('\r', rows[0]['iso_ts'])
-            self.assertNotIn('\n', rows[0]['iso_ts'])
+            self.assertEqual(len(rows), 0, "Invalid timestamp should not be written")
         finally:
             if old_state_root:
                 os.environ["AESOP_STATE_ROOT"] = old_state_root
@@ -257,118 +292,124 @@ class TestFleetLedgerInjectionIdempotency(unittest.TestCase):
         # No new row should be created (idempotent)
         self.assertEqual(lines_after_first, lines_after_second)
 
-    def test_phase_with_pipe_no_duplicate_on_retry(self):
-        """Test that a phase with pipe does not create duplicate rows on retry."""
+    def test_phase_with_pipe_rejected(self):
+        """Test that a phase with pipe is rejected."""
         report_file = self._create_test_report()
-        # Phase with pipe character
+        # Phase with pipe character (forbidden)
         phase_with_pipe = "build|malicious"
         ts = "2024-07-13T10:00:00"
 
-        # First append
-        result1 = self._run_ledger(
+        # Try to append
+        result = self._run_ledger(
             "append-wave",
             "--report-file", str(report_file),
             "--wave", "2",
             "--phase", phase_with_pipe,
             "--timestamp", ts
         )
-        self.assertEqual(result1.returncode, 0)
 
-        # Get ledger after first append
-        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
-        lines_after_first = len([l for l in ledger_file.read_text().split('\n') if l.strip() and '|' in l and '---|' not in l])
+        # Should REJECT because phase contains forbidden character
+        self.assertNotEqual(result.returncode, 0, "Phase with pipe should be rejected")
+        self.assertIn("Phase contains forbidden characters", result.stdout + result.stderr,
+                      "Should indicate phase validation failed")
 
-        # Second append with same parameters (should be idempotent)
-        result2 = self._run_ledger(
-            "append-wave",
-            "--report-file", str(report_file),
-            "--wave", "2",
-            "--phase", phase_with_pipe,
-            "--timestamp", ts
-        )
-        self.assertEqual(result2.returncode, 0)
-        self.assertIn("already exists", result2.stdout)
+        # Verify no rows were created
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        try:
+            from fleet_ledger import parse_ledger_rows
+        finally:
+            sys.path.pop(0)
 
-        # Get ledger after second append
-        lines_after_second = len([l for l in ledger_file.read_text().split('\n') if l.strip() and '|' in l and '---|' not in l])
+        old_state_root = os.environ.get("AESOP_STATE_ROOT")
+        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
 
-        # No new row should be created (idempotent)
-        self.assertEqual(lines_after_first, lines_after_second)
+        try:
+            rows = parse_ledger_rows()
+            self.assertEqual(len(rows), 0, "Invalid phase should not be written to ledger")
+        finally:
+            if old_state_root:
+                os.environ["AESOP_STATE_ROOT"] = old_state_root
+            else:
+                os.environ.pop("AESOP_STATE_ROOT", None)
 
-    def test_timestamp_with_pipe_no_duplicate_on_retry(self):
-        """Test that a timestamp with pipe does not create duplicate rows on retry."""
+    def test_timestamp_with_pipe_rejected(self):
+        """Test that a timestamp with pipe is rejected."""
         report_file = self._create_test_report()
-        # Timestamp with pipe character
+        # Timestamp with pipe character (forbidden)
         ts_with_pipe = "2024-07-13T10:00:00 | extra_column"
 
-        # First append
-        result1 = self._run_ledger(
+        # Try to append
+        result = self._run_ledger(
             "append-wave",
             "--report-file", str(report_file),
             "--wave", "3",
             "--phase", "build",
             "--timestamp", ts_with_pipe
         )
-        self.assertEqual(result1.returncode, 0)
 
-        # Get ledger after first append
-        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
-        lines_after_first = len([l for l in ledger_file.read_text().split('\n') if l.strip() and '|' in l and '---|' not in l])
+        # Should REJECT because timestamp contains forbidden character
+        self.assertNotEqual(result.returncode, 0, "Timestamp with pipe should be rejected")
+        self.assertIn("Timestamp contains forbidden characters", result.stdout + result.stderr,
+                      "Should indicate timestamp validation failed")
 
-        # Second append with same parameters (should be idempotent)
-        result2 = self._run_ledger(
-            "append-wave",
-            "--report-file", str(report_file),
-            "--wave", "3",
-            "--phase", "build",
-            "--timestamp", ts_with_pipe
-        )
-        self.assertEqual(result2.returncode, 0)
-        self.assertIn("already exists", result2.stdout)
+        # Verify no rows were created
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        try:
+            from fleet_ledger import parse_ledger_rows
+        finally:
+            sys.path.pop(0)
 
-        # Get ledger after second append
-        lines_after_second = len([l for l in ledger_file.read_text().split('\n') if l.strip() and '|' in l and '---|' not in l])
+        old_state_root = os.environ.get("AESOP_STATE_ROOT")
+        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
 
-        # No new row should be created (idempotent)
-        self.assertEqual(lines_after_first, lines_after_second)
+        try:
+            rows = parse_ledger_rows()
+            self.assertEqual(len(rows), 0, "Invalid timestamp should not be written to ledger")
+        finally:
+            if old_state_root:
+                os.environ["AESOP_STATE_ROOT"] = old_state_root
+            else:
+                os.environ.pop("AESOP_STATE_ROOT", None)
 
-    def test_long_phase_with_pipe_no_duplicate(self):
-        """Test that a long phase with pipe does not create duplicates."""
+    def test_long_phase_with_pipe_rejected(self):
+        """Test that a long phase with pipe is rejected."""
         report_file = self._create_test_report()
         # Both long and contains pipe
         complex_phase = "verification_step_extended_name|malicious"
         ts = "2024-07-13T10:00:00"
 
-        # First append
-        result1 = self._run_ledger(
+        # Try to append
+        result = self._run_ledger(
             "append-wave",
             "--report-file", str(report_file),
             "--wave", "4",
             "--phase", complex_phase,
             "--timestamp", ts
         )
-        self.assertEqual(result1.returncode, 0)
 
-        # Get ledger after first append
-        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
-        lines_after_first = len([l for l in ledger_file.read_text().split('\n') if l.strip() and '|' in l and '---|' not in l])
+        # Should REJECT because phase contains forbidden character
+        self.assertNotEqual(result.returncode, 0, "Phase with pipe should be rejected")
+        self.assertIn("Phase contains forbidden characters", result.stdout + result.stderr,
+                      "Should indicate phase validation failed")
 
-        # Second append with same parameters (should be idempotent)
-        result2 = self._run_ledger(
-            "append-wave",
-            "--report-file", str(report_file),
-            "--wave", "4",
-            "--phase", complex_phase,
-            "--timestamp", ts
-        )
-        self.assertEqual(result2.returncode, 0)
-        self.assertIn("already exists", result2.stdout)
+        # Verify no rows were created
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        try:
+            from fleet_ledger import parse_ledger_rows
+        finally:
+            sys.path.pop(0)
 
-        # Get ledger after second append
-        lines_after_second = len([l for l in ledger_file.read_text().split('\n') if l.strip() and '|' in l and '---|' not in l])
+        old_state_root = os.environ.get("AESOP_STATE_ROOT")
+        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
 
-        # No new row should be created (idempotent)
-        self.assertEqual(lines_after_first, lines_after_second)
+        try:
+            rows = parse_ledger_rows()
+            self.assertEqual(len(rows), 0, "Invalid phase should not be written to ledger")
+        finally:
+            if old_state_root:
+                os.environ["AESOP_STATE_ROOT"] = old_state_root
+            else:
+                os.environ.pop("AESOP_STATE_ROOT", None)
 
 
 class TestFleetLedgerInjectionRoundTrip(unittest.TestCase):

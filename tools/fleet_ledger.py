@@ -62,6 +62,62 @@ def ensure_ledger_header():
         ledger_file.write_text(header, encoding='utf-8')
 
 
+def _validate_iso_timestamp(ts):
+    """Validate and normalize ISO 8601 timestamp.
+
+    Args:
+        ts: Timestamp string to validate
+
+    Returns:
+        Validated timestamp string or None if invalid
+
+    Raises:
+        ValueError: If timestamp is invalid
+    """
+    import re
+    if not ts:
+        return None
+
+    ts_str = str(ts).strip()
+
+    # Reject if contains control characters, pipes, newlines, etc.
+    if '\n' in ts_str or '\r' in ts_str or '|' in ts_str:
+        raise ValueError(f"Timestamp contains forbidden characters: {repr(ts_str)}")
+
+    # Validate ISO 8601 format: YYYY-MM-DDTHH:MM:SS[.fff][+HH:MM]
+    # This is a strict pattern to prevent injection via malformed timestamps
+    iso_pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:[+-]\d{2}:\d{2}|Z)?$'
+    if not re.match(iso_pattern, ts_str):
+        raise ValueError(f"Timestamp does not match ISO 8601 format: {ts_str}")
+
+    return ts_str
+
+
+def _validate_phase(phase):
+    """Validate and normalize phase name.
+
+    Args:
+        phase: Phase name to validate
+
+    Returns:
+        Validated phase string (max 15 chars) or empty string if None
+
+    Raises:
+        ValueError: If phase contains forbidden characters
+    """
+    if phase is None:
+        return ''
+
+    phase_str = str(phase).strip()
+
+    # Reject if contains forbidden characters (pipes, newlines, etc.)
+    if '|' in phase_str or '\n' in phase_str or '\r' in phase_str:
+        raise ValueError(f"Phase contains forbidden characters: {repr(phase_str)}")
+
+    # Truncate to 15 chars for idempotency consistency
+    return phase_str[:15]
+
+
 def append_ledger_line(iso_ts, agent_type, model, duration_sec, tokens_in, tokens_out, verdict='OK', phase=None, wave=None):
     """Append one line to the ledger.
 
@@ -75,23 +131,32 @@ def append_ledger_line(iso_ts, agent_type, model, duration_sec, tokens_in, token
         verdict: OK|FAILED|EMPTY|HUNG (default OK)
         phase: build|verify|repair|other (optional, default None)
         wave: wave number as int or None (optional, default None)
+
+    Raises:
+        ValueError: If timestamp or phase validation fails
     """
     ensure_ledger_header()
     ledger_file, _, _ = get_ledger_paths()
 
-    # Sanitize iso_ts: remove pipes, newlines, carriage returns (injection prevention)
-    iso_ts = str(iso_ts or '-').replace('|', '').replace('\n', '').replace('\r', '').strip()
+    # Validate and sanitize iso_ts: must be valid ISO 8601 format
+    try:
+        iso_ts = _validate_iso_timestamp(iso_ts)
+        if iso_ts is None:
+            iso_ts = '-'
+    except ValueError as e:
+        # Reject invalid timestamps to prevent injection
+        raise ValueError(f"Invalid timestamp: {e}") from e
 
     # Sanitize fields: no pipes, truncate to reasonable length
     agent_type = str(agent_type or '-').replace('|', '').strip()[:30]
     model = str(model or '-').replace('|', '').strip()[:30]
     verdict = str(verdict or 'OK').replace('|', '').strip()[:10]
 
-    # Sanitize optional fields
-    if phase is not None:
-        phase = str(phase).replace('|', '').strip()[:15]
-    else:
-        phase = ''
+    # Validate and sanitize optional fields
+    try:
+        phase = _validate_phase(phase)
+    except ValueError as e:
+        raise ValueError(f"Invalid phase: {e}") from e
 
     if wave is not None:
         try:
@@ -341,10 +406,19 @@ def append_wave(report_file, wave, phase, timestamp):
     except (ValueError, TypeError):
         return False, f"Invalid wave number: {wave}"
 
-    # Sanitize inputs for idempotency check to match append_ledger_line sanitization
-    # This prevents a malformed timestamp or long phase from bypassing dedup
-    iso_ts_sanitized = str(timestamp or '-').replace('|', '').replace('\n', '').replace('\r', '').strip()
-    phase_sanitized = str(phase or '-').replace('|', '').strip()[:15] if phase else ''
+    # Validate and sanitize inputs consistently with append_ledger_line
+    # This ensures idempotency check uses the same values as the actual write
+    try:
+        iso_ts_sanitized = _validate_iso_timestamp(timestamp)
+        if iso_ts_sanitized is None:
+            iso_ts_sanitized = '-'
+    except ValueError as e:
+        return False, f"Invalid timestamp: {e}"
+
+    try:
+        phase_sanitized = _validate_phase(phase)
+    except ValueError as e:
+        return False, f"Invalid phase: {e}"
 
     # Idempotency check: see if this exact row already exists
     existing_rows = parse_ledger_rows()
@@ -355,9 +429,12 @@ def append_wave(report_file, wave, phase, timestamp):
             row['model'] == model):
             return True, f"Row already exists (wave={wave_num}, phase={phase_sanitized}, ts={iso_ts_sanitized}); skipping"
 
-    # Append the row
-    append_ledger_line(timestamp, agent_type, model, 0, 0, tokens_out, verdict, phase, wave_num)
-    return True, f"Appended: wave={wave_num} phase={phase} tokens_out={tokens_out} verdict={verdict}"
+    # Append the row with validated inputs
+    try:
+        append_ledger_line(timestamp, agent_type, model, 0, 0, tokens_out, verdict, phase, wave_num)
+        return True, f"Appended: wave={wave_num} phase={phase_sanitized} tokens_out={tokens_out} verdict={verdict}"
+    except ValueError as e:
+        return False, f"Failed to append row: {e}"
 
 
 def parse_ledger_rows():
@@ -521,8 +598,12 @@ def main():
         phase = sys.argv[9] if len(sys.argv) > 9 else None
         wave = sys.argv[10] if len(sys.argv) > 10 else None
 
-        append_ledger_line(ts, agent_type, model, dur, ti, to, verdict, phase, wave)
-        print(f'Appended: {ts} {agent_type} {model} {dur}s {ti}->{to} [{verdict}] phase={phase} wave={wave}')
+        try:
+            append_ledger_line(ts, agent_type, model, dur, ti, to, verdict, phase, wave)
+            print(f'Appended: {ts} {agent_type} {model} {dur}s {ti}->{to} [{verdict}] phase={phase} wave={wave}')
+        except ValueError as e:
+            print(f'Error: {e}', file=sys.stderr)
+            sys.exit(1)
 
     elif cmd == 'append-wave':
         # append-wave --report-file <path> --wave <id> --phase <phase> --timestamp <iso>
