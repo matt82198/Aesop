@@ -863,6 +863,85 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== P1 TTY FIX: get_commit_range distinguishes TTY vs malformed stdin ===\n'
+(
+  # Test: when stdin is empty (no tuples), get_commit_range returns rc=3 (not rc=1).
+  # This simulates the TTY scenario where there's no stdin piped.
+  # In a real tty, [ -t 0 ] triggers and returns 3; in CI with empty stdin,
+  # we also get rc=3 (observable: same behavior, different cause).
+  # This test verifies the observable behavior (empty-stdin path returns rc=3).
+
+  export AESOP_ROOT="$TEST_ROOT/aesop_tty"
+  mkdir -p "$AESOP_ROOT/state"
+
+  # Direct test: empty stdin (simulates no tuples in tty mode)
+  rc=$( printf '' | get_commit_range; echo "$?" )
+
+  if [ "$rc" = "3" ]; then
+    printf 'PASS: get_commit_range with empty stdin returns rc=3 (consistent with tty behavior)\n'
+  else
+    printf 'FAIL: get_commit_range should return rc=3 for empty stdin, got rc=%s\n' "$rc"
+    exit 1
+  fi
+
+  # Verify that malformed stdin (e.g., 3-field line) still returns rc=1
+  rc=$( printf 'refs/heads/test abc123 refs/heads/test\n' | get_commit_range 2>/dev/null; echo "$?" )
+
+  if [ "$rc" = "1" ]; then
+    printf 'PASS: get_commit_range with malformed stdin returns rc=1 (fail-closed)\n'
+  else
+    printf 'FAIL: get_commit_range should return rc=1 for malformed stdin, got rc=%s\n' "$rc"
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== P1 TTY FIX: check_secret_scan allows empty stdin (rc=3 from get_commit_range) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_tty_check_secret"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy scanner script
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(0)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  # Test: check_secret_scan with empty stdin should allow with log_event
+  # (get_commit_range returns rc=3, which check_secret_scan treats as "allowed")
+  rc=$( printf '' | check_secret_scan 2>/dev/null; echo "$?" )
+
+  if [ "$rc" = "0" ]; then
+    printf 'PASS: check_secret_scan with empty stdin returns rc=0 (allow)\n'
+  else
+    printf 'FAIL: check_secret_scan should return rc=0 for empty stdin, got rc=%s\n' "$rc"
+    exit 1
+  fi
+
+  # Verify log_event was created
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created for empty-stdin secret_scan\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+  if ! printf '%s' "$audit_line" | grep -q 'secret_scan_skipped_empty_stdin'; then
+    printf 'FAIL: Audit log missing "secret_scan_skipped_empty_stdin" event\n'
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

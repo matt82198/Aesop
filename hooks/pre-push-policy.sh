@@ -323,8 +323,10 @@ get_commit_range() {
   local saw_any_tuple=0
 
   if [ -t 0 ]; then
-    # Running interactively on a tty; no stdin to parse
-    return 1
+    # Running interactively on a tty; no stdin to parse → nothing to scan → allow (rc=3)
+    # This is consistent with check_branch_policy's tty handling (treats tty as benign).
+    # A real `git push` ALWAYS pipes stdin; tty means human ran hook directly.
+    return 3
   fi
 
   local saw_delete=0
