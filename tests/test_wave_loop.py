@@ -23,6 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Add driver/ to path for imports.
 REPO = Path(__file__).resolve().parent.parent
@@ -548,23 +549,19 @@ class TestCostCeilingAbort(unittest.TestCase):
                 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
                 if str(TOOLS_DIR) not in sys.path:
                     sys.path.insert(0, str(TOOLS_DIR))
-                import cost_ceiling
+                import cost_ceiling  # noqa: F401
 
                 # Create a state_dir with a low ceiling.
                 with tempfile.TemporaryDirectory() as state_dir:
-                    # Write a fake cost_ceiling.db or config to set low limit.
-                    # For this test, we'll monkeypatch the check function.
-                    original_check = cost_ceiling.check
-
+                    # Patch wave_loop.cost_ceiling.check using the proper namespace.
                     def mock_check(*args, **kwargs):
                         return {"exceeded": True, "spent": 10000, "limit": 100}
 
-                    cost_ceiling.check = mock_check
+                    # Import wave_loop to patch its cost_ceiling reference
+                    import wave_loop  # noqa: F401
 
-                    result = run_wave(driver, manifest, state_dir=state_dir)
-
-                    # Restore original.
-                    cost_ceiling.check = original_check
+                    with mock.patch("wave_loop.cost_ceiling.check", side_effect=mock_check):
+                        result = run_wave(driver, manifest, state_dir=state_dir)
 
                     # Assert aborted.
                     self.assertTrue(result["aborted"])
