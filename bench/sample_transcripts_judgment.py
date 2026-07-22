@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 # Patterns for aggressive redaction of PII/credentials
 REDACTION_PATTERNS = [
     (r'\b(?:[a-zA-Z0-9_-]{32,}|sk-[a-zA-Z0-9]{20,})\b', '<api_key>'),
+    # URL userinfo credentials: scheme://user:password@host -> scheme://[REDACTED]@host
+    (r'((?:https?|ftp)://)[a-zA-Z0-9_.-]+:[^@\s]+@', r'\1[REDACTED]@'),
+    # Bare user:password@host (no scheme; negative lookahead so URLs above win)
+    (r'[a-zA-Z0-9_.-]+:(?!//)[^@\s]+@[a-zA-Z0-9.-]+', '<credentials>'),
     (r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b', '<email>'),
     (r'[A-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*', '<path>'),
     (r'(?:/(?:home|root|var|etc|tmp|usr|Users|opt)/[^\s"\'<>]+)', '<path>'),
