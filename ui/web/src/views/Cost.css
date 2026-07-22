@@ -71,6 +71,10 @@
   margin-bottom: var(--space-3);
 }
 
+.cost-section--full {
+  grid-column: 1 / -1;
+}
+
 /* Responsive: stack sections vertically on smaller screens */
 @media (max-width: 768px) {
   .view-cost {

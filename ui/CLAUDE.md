@@ -51,7 +51,8 @@
 - **App.tsx**: App shell; hash-routed views (/#/, /#/work, /#/activity, /#/cost).
 - **styles/tokens.css** + **global.css**: Design tokens (light/dark palettes, spacing, typography).
 - **views/**: Overview, Work, Activity, Cost, WavePRBoard (with SSE bindings). WavePRBoard polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
-- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, FailureDrilldown, etc.
+- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, etc.
+  - CostAnalyticsPanel (wave-29 UX): info-dense operator view with (a) spend per wave (bar chart), (b) model efficiency vs Opus counterfactual, (c) burn rate + end-of-wave projection with ceiling alert; graceful DATA-UNAVAILABLE states when ledger/ceiling missing.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
 - **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
 - **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status.
