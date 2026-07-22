@@ -53,6 +53,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `reconstitute.sh` — Clone/fetch repos from config with security validation
 - `rotate_logs.py` — Log rotation utility (size/line thresholds)
 - `scanner_selftest.py` — Regression harness for secret_scan.py
+- `stateapi_lint.py` — StateAPI migration ratchet: AST-scans for direct state-file reads outside state_store/read_api.py facade; violations keyed file@pattern-id against committed baseline (new violation = exit 1; fixed violation = must shrink baseline); `--update-baseline` regenerates (forbidden in CI)
 - `secret_scan.py` — Pre-push secret/credential detection gate (staged/history/paths)
 - `self_stats.py` — Git-derived metrics counter + README block generator
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
