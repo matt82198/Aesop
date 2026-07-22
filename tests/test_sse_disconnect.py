@@ -267,6 +267,58 @@ class DisconnectTestCase(unittest.TestCase):
         # Dropped counts should also be cleaned
         self.assertNotIn(q, sse_module._dropped_counts)
 
+    def test_is_client_disconnect_error_narrow_trio(self):
+        """_is_client_disconnect_error correctly identifies narrow disconnect trio."""
+        from ui import handler
+
+        # Test the narrow trio of disconnect errors
+        self.assertTrue(handler._is_client_disconnect_error(BrokenPipeError("pipe")))
+        self.assertTrue(handler._is_client_disconnect_error(ConnectionAbortedError("abort")))
+        self.assertTrue(handler._is_client_disconnect_error(ConnectionResetError("reset")))
+
+    def test_is_client_disconnect_error_winerror_10054(self):
+        """_is_client_disconnect_error recognizes Windows winerror 10054 as disconnect."""
+        from ui import handler
+
+        disconnect_error = OSError("Connection reset by peer")
+        disconnect_error.winerror = 10054
+        self.assertTrue(handler._is_client_disconnect_error(disconnect_error),
+                       "OSError with winerror 10054 should be recognized as disconnect")
+
+    def test_is_client_disconnect_error_winerror_10053(self):
+        """_is_client_disconnect_error recognizes Windows winerror 10053 as disconnect."""
+        from ui import handler
+
+        disconnect_error = OSError("Software caused connection abort")
+        disconnect_error.winerror = 10053
+        self.assertTrue(handler._is_client_disconnect_error(disconnect_error),
+                       "OSError with winerror 10053 should be recognized as disconnect")
+
+    def test_is_client_disconnect_error_real_oserror(self):
+        """_is_client_disconnect_error rejects non-disconnect OSErrors."""
+        from ui import handler
+
+        # PermissionError, FileNotFoundError are OSError subclasses but NOT disconnects
+        permission_error = PermissionError("Access denied")
+        self.assertFalse(handler._is_client_disconnect_error(permission_error),
+                        "PermissionError should NOT be a disconnect error")
+
+        file_error = FileNotFoundError("File not found")
+        self.assertFalse(handler._is_client_disconnect_error(file_error),
+                        "FileNotFoundError should NOT be a disconnect error")
+
+        generic_oserror = OSError("Disk full")
+        self.assertFalse(handler._is_client_disconnect_error(generic_oserror),
+                        "Generic OSError without disconnect winerror should NOT be disconnect")
+
+    def test_is_client_disconnect_error_other_exceptions(self):
+        """_is_client_disconnect_error correctly rejects non-OSError exceptions."""
+        from ui import handler
+
+        self.assertFalse(handler._is_client_disconnect_error(ValueError("bad value")))
+        self.assertFalse(handler._is_client_disconnect_error(RuntimeError("runtime")))
+        self.assertFalse(handler._is_client_disconnect_error(Exception("generic")))
+
 
 if __name__ == "__main__":
     unittest.main()
