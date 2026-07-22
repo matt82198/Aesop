@@ -9,7 +9,7 @@ import { TESTIDS, fixtureWaveAuditTail, fixtureWaveAuditTailUnavailable } from '
 
 describe('AuditTailStream', () => {
   it('renders loading state initially', () => {
-    const mockFetcher = vi.fn(() => new Promise(() => {})); // Never resolves
+    const mockFetcher = vi.fn(() => new Promise(() => {}) as Promise<import('../lib/types').WaveAuditTailData>); // Never resolves
     render(<AuditTailStream fetcher={mockFetcher} />);
     expect(screen.getByTestId(TESTIDS.auditTail)).toBeInTheDocument();
     expect(screen.getByText('Loading...')).toBeInTheDocument();
@@ -104,7 +104,7 @@ describe('AuditTailStream', () => {
 
   it('polls for data every 4 seconds when visible', async () => {
     const mockFetcher = vi.fn().mockResolvedValue(fixtureWaveAuditTail);
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
 
     render(<AuditTailStream fetcher={mockFetcher} />);
 

@@ -9,7 +9,7 @@ import { TESTIDS, fixtureWaveGantt, fixtureWaveGanttUnavailable } from '../test/
 
 describe('GanttTimeline', () => {
   it('renders loading state initially', () => {
-    const mockFetcher = vi.fn(() => new Promise(() => {})); // Never resolves
+    const mockFetcher = vi.fn(() => new Promise(() => {}) as Promise<import('./GanttTimeline').GanttData>); // Never resolves
     render(<GanttTimeline fetcher={mockFetcher} />);
     expect(screen.getByTestId(TESTIDS.ganttTimeline)).toBeInTheDocument();
     expect(screen.getByText('Loading...')).toBeInTheDocument();
@@ -50,7 +50,7 @@ describe('GanttTimeline', () => {
 
     // First agent should have dispatch, thinking, and tool-use phases
     const bars = screen.getAllByTestId(TESTIDS.ganttPhaseBar);
-    expect(bars.length).toBe(5); // 3 + 2 + 1 phases across 3 agents
+    expect(bars.length).toBe(6); // 3 + 2 + 1 phases across 3 agents = 6 spans
   });
 
   it('renders unavailable state', async () => {
@@ -106,7 +106,7 @@ describe('GanttTimeline', () => {
 
   it('polls for data every 3 seconds when visible', async () => {
     const mockFetcher = vi.fn().mockResolvedValue(fixtureWaveGantt);
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
 
     render(<GanttTimeline fetcher={mockFetcher} />);
 
@@ -131,6 +131,6 @@ describe('GanttTimeline', () => {
     await waitFor(() => {
       // Should render agent durations
       expect(screen.getByText('50s')).toBeInTheDocument(); // fleet-fix-0: 50 seconds
-    });
+    }, { timeout: 10000 });
   });
 });

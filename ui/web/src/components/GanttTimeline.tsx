@@ -6,7 +6,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { fetchWaveGantt } from '../lib/api';
-import { formatAge, formatTimestamp } from '../lib/format';
+import { formatTimestamp } from '../lib/format';
 import { TESTIDS } from '../test/fixtures';
 import styles from './GanttTimeline.module.css';
 

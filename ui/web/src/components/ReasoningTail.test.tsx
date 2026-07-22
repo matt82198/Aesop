@@ -9,7 +9,7 @@ import { TESTIDS, fixtureWaveReasoningTail, fixtureWaveReasoningTailUnavailable 
 
 describe('ReasoningTail', () => {
   it('renders loading state initially', () => {
-    const mockFetcher = vi.fn(() => new Promise(() => {})); // Never resolves
+    const mockFetcher = vi.fn(() => new Promise(() => {}) as Promise<import('../lib/types').WaveReasoningTailData>); // Never resolves
     render(<ReasoningTail fetcher={mockFetcher} />);
     expect(screen.getByTestId(TESTIDS.reasoningTail)).toBeInTheDocument();
     expect(screen.getByText('Loading...')).toBeInTheDocument();
@@ -133,7 +133,7 @@ describe('ReasoningTail', () => {
 
   it('polls for data every 2.5 seconds when visible', async () => {
     const mockFetcher = vi.fn().mockResolvedValue(fixtureWaveReasoningTail);
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
 
     render(<ReasoningTail fetcher={mockFetcher} />);
 

@@ -8,7 +8,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { fetchWaveAuditTail } from '../lib/api';
 import { TESTIDS } from '../test/fixtures';
 import styles from './AuditTailStream.module.css';
-import type { WaveAuditTailData, WaveAuditTailEvent } from '../lib/types';
+import type { WaveAuditTailData } from '../lib/types';
 
 interface AuditTailStreamProps {
   containerRef?: React.RefObject<HTMLDivElement>;
