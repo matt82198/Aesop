@@ -209,11 +209,8 @@ function runRepoMode() {
 function classifyDoctorFailure(output) {
   const lines = output.split('\n');
   const failures = [];
-  const expectedPreInitPatterns = [
-    'aesop.config.json not found',
-    'Pre-push hook not installed',
-    'Missing:' // For required directories
-  ];
+  // Expected pre-init directory names from doctor.js checkDirectories()
+  const expectedDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui'];
 
   for (const line of lines) {
     if (line.includes('✗') || line.includes('FAIL')) {
@@ -222,9 +219,25 @@ function classifyDoctorFailure(output) {
   }
 
   // Check if all failures match expected pre-init patterns
-  const allExpected = failures.every(failure =>
-    expectedPreInitPatterns.some(pattern => failure.includes(pattern))
-  );
+  const allExpected = failures.every(failure => {
+    // Pattern 1: Missing config file
+    if (failure.includes('aesop.config.json not found')) {
+      return true;
+    }
+    // Pattern 2: Pre-push hook not installed
+    if (failure.includes('Pre-push hook not installed')) {
+      return true;
+    }
+    // Pattern 3: Missing directories — verify line contains only expected directory names
+    if (failure.includes('Missing:')) {
+      // Extract the part after "Missing:"
+      const afterMissing = failure.substring(failure.indexOf('Missing:') + 8);
+      // Check if all mentioned items are valid directory names
+      const items = afterMissing.split(',').map(item => item.trim());
+      return items.every(item => expectedDirs.includes(item));
+    }
+    return false;
+  });
 
   return { allExpected, failures };
 }
