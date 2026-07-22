@@ -87,7 +87,9 @@ def _is_client_disconnect_error(exc):
 
     When clients close connections mid-stream (tab closed, network drop, etc.),
     we get BrokenPipeError, ConnectionAbortedError, or ConnectionResetError.
-    These are normal lifecycle events, not bugs, and should not be logged as errors.
+    On Windows, rare plain OSError with winerror 10053/10054 may also indicate
+    a disconnect. These are normal lifecycle events, not bugs, and should not
+    be logged as errors.
 
     Args:
         exc: The exception to check
@@ -95,8 +97,15 @@ def _is_client_disconnect_error(exc):
     Returns:
         bool: True if this is a normal disconnect, False if it's an unexpected error
     """
-    return isinstance(exc, (BrokenPipeError, ConnectionAbortedError,
-                           ConnectionResetError))
+    if isinstance(exc, (BrokenPipeError, ConnectionAbortedError,
+                       ConnectionResetError)):
+        return True
+    if isinstance(exc, OSError):
+        # Windows disconnect errors: 10053 (WSAECONNABORTED), 10054 (WSAECONNRESET)
+        winerror = getattr(exc, 'winerror', None)
+        if winerror in (10053, 10054):
+            return True
+    return False
 
 
 def _is_local_origin(origin):
@@ -352,8 +361,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
             self.end_headers()
             self.wfile.write(content)
-        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass  # client went away mid-response — normal, not an error
+        except OSError as e:
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_asset] Uncaught OSError: {e}", file=sys.stderr)
+                self.send_error(500)
+            # else: silently pass for disconnect errors
         except Exception as e:
             if not _is_client_disconnect_error(e):
                 print(f"[serve_asset] Uncaught exception: {e}", file=sys.stderr)
@@ -922,8 +936,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Retry-After", "30")
                 self.end_headers()
                 self.wfile.write(b"Service overloaded: too many concurrent clients\n")
-            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                 pass
+            except OSError as e:
+                if not _is_client_disconnect_error(e):
+                    print(f"[serve_events cap-exceeded] Uncaught OSError: {e}", file=sys.stderr)
+                # else: silently pass for disconnect errors
             return
 
         try:
@@ -933,7 +951,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Connection", "keep-alive")
             self.send_header("X-Accel-Buffering", "no")
             self.end_headers()
-        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            unregister_sse_client(q)
+            return
+        except OSError as e:
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_events headers] Uncaught OSError: {e}", file=sys.stderr)
             unregister_sse_client(q)
             return
         try:
@@ -964,9 +987,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 except queue.Empty:
                     self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
-        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             # Client disconnected (tab closed, network drop) — normal, not an error.
             pass
+        except OSError as e:
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_events stream] Uncaught OSError: {e}", file=sys.stderr)
+            # else: silently pass for disconnect errors
         except Exception:
             pass
         finally:

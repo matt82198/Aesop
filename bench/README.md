@@ -402,3 +402,27 @@ benchmark can measure tier separation.
 This phase is validation infrastructure, not a final verdict. The benchmark is now
 measurable; the question "is Haiku sufficient for fleet work?" remains open pending
 live runs and result analysis.
+
+### Scoring Honesty: Regex Tightening & Exemplar/Counter-Example Validation
+
+To prevent keyword-permissive scoring (where a weak answer passes by containing a
+common word), all 20 `expected_regex` patterns have been tightened to require
+*conjunction* of discriminating elements:
+
+- Use lookaheads `(?=.*element1)(?=.*element2)` to ensure multiple key concepts coexist
+- Avoid single-word alternatives (e.g., bare `|minimal` or `|break|problem`)
+- Require specific mechanisms or justifications, not just terminology
+
+Example: **ft15 (state machine correctness)**
+- OLD (keyword-permissive): `break|problem|invariant|skip.*PROCESSING|notification|cleanup|audit`
+  - Fails: A response saying "the transition breaks PROCESSING" passes even without identifying side effects
+- NEW (substance-required): `(?i)(?=.*break|violat)(?=.*PROCESSING)(?=.*skip)(?=.*(?:notification|cleanup|audit|invariant))`
+  - Requires: explicit identification of the problem + PROCESSING + skip mention + at least one side effect
+
+Every regex ground truth now includes two validation fields:
+- `exemplar`: a correct answer that *must* match the regex (tests scorer permissiveness)
+- `counter_example`: a plausible wrong answer that *must NOT* match the regex (tests scorer strictness)
+
+Validation is machine-checked: `tests/test_frontier_slice.py::TestGroundTruthValidation::test_regex_ground_truth_has_exemplar_and_counter` asserts that every exemplar matches and every counter_example fails.
+
+**Offline accuracy with tightened patterns: 50.0% (10/20)** — represents the FakeTransport mock runner's performance against substance-demanding patterns. The mock runner is weak on semantic judgment and multi-step reasoning; this reflects its limited instruction-following, not a ceiling for real models.

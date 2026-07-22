@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scaffoldOnce, cleanupFixtures } from './helpers/scaffold-fixture.mjs';
+import { scaffoldOnce, cleanupFixtures, assertFixturePristine } from './helpers/scaffold-fixture.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -32,8 +32,12 @@ before(() => {
   wizardFixture = scaffoldOnce('wizard-default', { mode: 'wizard', yes: true });
 });
 
-// Note: fixture cleanup is deferred to OS temp dir cleanup
-// Don't call cleanupFixtures() in after() - let tests reference the cache
+after(() => {
+  // Assert fixture is pristine before cleanup (detects test mutations)
+  assertFixturePristine(wizardFixture);
+  // Clean up temp directory
+  cleanupFixtures();
+});
 
 function runCli(targetDir, args = [], stdin = null) {
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;

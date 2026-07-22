@@ -467,6 +467,8 @@ def emit_report(
     ceiling_reason: Optional[str] = None,
     error: Optional[str] = None,
     tracker_update_error: Optional[str] = None,
+    tracker_update_attempted: bool = False,
+    tracker_unmapped_slugs: Optional[List[str]] = None,
     success: bool = False,
     merged: bool = False,
 ) -> Dict[str, Any]:
@@ -503,6 +505,10 @@ def emit_report(
         report["error"] = error
     if tracker_update_error:
         report["tracker_update_error"] = tracker_update_error
+    if tracker_update_attempted:
+        report["tracker_update_attempted"] = True
+    if tracker_unmapped_slugs:
+        report["tracker_unmapped_slugs"] = tracker_unmapped_slugs
 
     return report
 
@@ -711,33 +717,59 @@ def run_wave_scheduler(
             items_shipped.append({
                 "slug": slug,
                 "backend": backend_name,
-                "tier": b.get("verificationTier", 1),
+                # tier None = no build record (unknown), never a fabricated 1.
+                "tier": b.get("verificationTier") if b else None,
+                # verified False = NOT PROVEN (conservative), see REPORT-CONTRACT.
                 "verified": b.get("verified", False),
                 "testExit": b.get("testExit"),
+                "buildRecord": bool(b),
             })
+
+        # TRACKER UPDATE FIRST (live-pilot lesson: a crash in Report assembly
+        # must never leave shipped-but-unmarked items). Attempted as soon as
+        # shipped_slugs is known; outcome fields survive into ANY report,
+        # including the exception envelope below.
+        tracker_update_attempted = False
+        tracker_update_error = None
+        tracker_unmapped = []
+        if shipped_slugs:
+            tracker_update_attempted = True
+            try:
+                slug_to_id = {it.get("slug"): it.get("id") for it in selected_items}
+                shipped_item_ids = []
+                for s_ in shipped_slugs:
+                    id_ = slug_to_id.get(s_)
+                    if id_:
+                        shipped_item_ids.append(id_)
+                    else:
+                        # LOUD, never silent: an unmapped shipped slug means the
+                        # tracker cannot be marked -> double-dispatch risk.
+                        tracker_unmapped.append(s_)
+                if shipped_item_ids:
+                    success_update, update_error = _write_tracker_status_atomic(
+                        tracker_path,
+                        shipped_item_ids,
+                        "in_progress",
+                        wave_id,
+                        expected_hash=intake_hash,  # P6: conflict detection
+                    )
+                    if not success_update:
+                        tracker_update_error = update_error
+                if tracker_unmapped and tracker_update_error is None:
+                    tracker_update_error = "unmapped_shipped_slugs"
+            except Exception as te:
+                tracker_update_error = f"tracker_update_exception: {te}"
 
         # Ship sha comes from the per-repo ship results (no top-level sha key).
         repo_results = wave_result.get("shipped_repos") or []
         sha = next((r.get("sha") for r in repo_results if isinstance(r, dict) and r.get("sha")), None)
         branch = None  # run_wave ships on the current branch; scheduler does not switch branches
 
-        # P1-5 (WIRED): After successful ship, mark items "in_progress" by ITEM ID.
-        tracker_update_error = None
-        if items_shipped:
-            slug_to_id = {it.get("slug"): it.get("id") for it in selected_items}
-            shipped_item_ids = [slug_to_id[s] for s in shipped_slugs if slug_to_id.get(s)]
-            success_update, update_error = _write_tracker_status_atomic(
-                tracker_path,
-                shipped_item_ids,
-                "in_progress",
-                wave_id,
-                expected_hash=intake_hash,  # P6: conflict detection
-            )
-            if not success_update:
-                tracker_update_error = update_error
-
-        # run_wave has NO top-level "success" key: derive honestly.
+        # run_wave has NO top-level "success" key: derive honestly. success
+        # additionally requires EVERY shipped item verified (contract: a
+        # shipped-but-unproven item is not a successful wave).
         wave_ok = bool(wave_result.get("preflight_ok")) and not wave_result.get("aborted")
+        all_verified = all(i.get("verified") for i in items_shipped) if items_shipped else True
         return emit_report(
             phase="dispatch",
             wave_id=wave_id,
@@ -746,17 +778,23 @@ def run_wave_scheduler(
             items_failed_build=failed_build_ids if failed_build_ids else None,
             branch=branch,
             sha=sha,
+            tracker_update_attempted=tracker_update_attempted,
             tracker_update_error=tracker_update_error,
-            success=wave_ok and tracker_update_error is None,
+            tracker_unmapped_slugs=tracker_unmapped if tracker_unmapped else None,
+            success=wave_ok and all_verified and tracker_update_error is None,
             merged=False,  # P2c: pilot stops before merge
         )
 
     except Exception as e:
+        # The exception envelope must never hide ship-vs-tracker divergence:
+        # carry whatever tracker outcome was reached before the crash.
         return emit_report(
             phase="dispatch",
             wave_id=wave_id,
             items_selected=selected_ids,
             error=str(e),
+            tracker_update_attempted=locals().get("tracker_update_attempted", False),
+            tracker_update_error=locals().get("tracker_update_error"),
             success=False,
             merged=False,
         )
