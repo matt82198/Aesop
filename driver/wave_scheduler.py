@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Wave scheduler: single-cycle orchestration of backlog intake, manifest build, and wave dispatch.
 
-WS3a pilot: deterministic one-cycle loop that:
+WS3a pilot: deterministic one-cycle loop with CRITICAL GUARDRAILS:
   1. Intakes up to N file-disjoint todo items from tracker.json (respects ownsFiles)
-  2. Validates required fields + path normalization (P1-6, P1-2)
+  2. Validates required fields + path normalization (platform-independent, no symlink TOCTOU)
   3. Builds a run_wave manifest via wave_templates conventions
   4. Invokes driver.wave_loop.run_wave with recovery journal + git ship config
   5. STOPS before merge: emits Report JSON for human/orchestrator review
-  6. Bounded by: HALT file check (before each phase) + cost ceiling check (P1-3, P1-4)
-  7. Double-dispatch prevention: write "in_progress" status to tracker.json (P1-5)
+  6. Double-dispatch prevention: write "in_progress" status to tracker.json (atomic, conflict-detecting)
+  7. Bounded by: HALT file check (final gate before dispatch) + cost ceiling check
+
+SINGLE-WRITER ASSUMPTION: This pilot assumes tracker.json is NOT edited concurrently by other
+processes. Concurrent-writer safety checks detect conflicts and abort; full lock/StateAPI
+integration is filed for next wave. Do NOT run multiple schedulers against the same tracker.
 
 CLI: python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute
 
@@ -16,9 +20,11 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,17 +62,20 @@ except ImportError:
 
 
 # ========================================================================
-# Path Normalization (P1-2)
+# Path Normalization (P1-2: PLATFORM-INDEPENDENT)
 # ========================================================================
 
 def _normalize_path(path: str) -> str:
-    """Normalize a path for comparison: posixify, strip ./, casefold on Windows.
+    """Normalize a path for comparison: posixify, strip ./, casefold ALWAYS (P1-2).
+
+    CRITICAL: Casefolding ALWAYS (not just on Windows) ensures platform-independent
+    ownership semantics — same tracker selects identically on all OS.
 
     Args:
         path: file path (potentially with backslashes, ./ prefix)
 
     Returns:
-        normalized path (forward slashes, no leading ./, lowercased on Windows)
+        normalized path (forward slashes, no leading ./, lowercased)
     """
     # Replace backslashes with forward slashes (posixify)
     normalized = path.replace("\\", "/")
@@ -75,11 +84,30 @@ def _normalize_path(path: str) -> str:
     if normalized.startswith("./"):
         normalized = normalized[2:]
 
-    # Casefold on Windows
-    if sys.platform == "win32":
-        normalized = normalized.lower()
+    # Casefold ALWAYS for platform-independent semantics (P1-2)
+    normalized = normalized.lower()
 
     return normalized
+
+
+def _is_valid_owned_path(path: str) -> bool:
+    """Validate an ownsFiles entry: reject absolute paths and traversal attacks (P5).
+
+    Args:
+        path: normalized file path
+
+    Returns:
+        True iff path is relative, has no .. traversal, and is safe to dispatch
+    """
+    # Reject absolute paths (starting with /)
+    if path.startswith("/"):
+        return False
+
+    # Reject traversal attacks (.. after normalization)
+    if ".." in path:
+        return False
+
+    return True
 
 
 # ========================================================================
@@ -109,8 +137,29 @@ def load_tracker_items(tracker_path: str) -> List[Dict[str, Any]]:
         return []
 
 
+def _read_tracker_with_hash(tracker_path: str) -> Tuple[List[Dict], Optional[str]]:
+    """Load tracker.json and compute content hash for conflict detection (P6).
+
+    Returns:
+        (items_list, content_hash)
+    """
+    items = load_tracker_items(tracker_path)
+    p = Path(tracker_path)
+
+    if p.exists():
+        try:
+            with open(p, "rb") as f:
+                content_hash = hashlib.sha256(f.read()).hexdigest()
+        except IOError:
+            content_hash = None
+    else:
+        content_hash = None
+
+    return items, content_hash
+
+
 def _validate_item(item: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-    """Validate required fields and ownsFiles for an item (P1-6).
+    """Validate required fields and ownsFiles for an item (P1-6, P5).
 
     Args:
         item: tracker item dict
@@ -123,9 +172,15 @@ def _validate_item(item: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     if not owns or (isinstance(owns, list) and len(owns) == 0):
         return False, "no_file_ownership"
 
-    # Ensure all entries in ownsFiles are non-empty strings
-    if isinstance(owns, list) and not all(isinstance(f, str) and f for f in owns):
-        return False, "invalid_ownsFiles_entries"
+    # Ensure all entries in ownsFiles are non-empty strings and valid paths (P5)
+    if isinstance(owns, list):
+        for entry in owns:
+            if not isinstance(entry, str) or not entry:
+                return False, "invalid_ownsFiles_entries"
+            # Normalize and validate (reject absolute paths, traversal)
+            normalized = _normalize_path(entry)
+            if not _is_valid_owned_path(normalized):
+                return False, "invalid_path"
 
     # Check other required fields
     required = ["slug", "prompt", "testCmd"]
@@ -204,7 +259,7 @@ def _check_halt_file(state_dir: Optional[Path] = None) -> Tuple[bool, Optional[s
         (is_halted: bool, reason: str|None)
 
     Raises:
-        RuntimeError if halt module is unavailable
+        RuntimeError if halt module is unavailable or check fails
     """
     if halt is None:
         raise RuntimeError("halt module unavailable (import failed)")
@@ -234,7 +289,7 @@ def _check_cost_ceiling(state_dir: Optional[Path] = None) -> Tuple[bool, Optiona
         raise RuntimeError("cost_ceiling module unavailable (import failed)")
 
     try:
-        # P2a: use trip=True to enforce (fail-closed on exceeded)
+        # P2a: use trip=False to enforce (fail-closed on exceeded)
         result = cost_ceiling.check(spent=None, period="wave", state_dir=state_dir, trip=False)
         if result.get("exceeded"):
             return True, f"Cost ceiling exceeded: {result.get('spent', 0)}/{result.get('ceiling', 0)} tokens"
@@ -302,21 +357,24 @@ def build_wave_manifest(
 
 
 # ========================================================================
-# Tracker Update (P1-5)
+# Tracker Update (P1-5, P6: ATOMIC WITH CONFLICT DETECTION)
 # ========================================================================
 
 def _write_tracker_status_atomic(
-    tracker_path: str, items_to_update: List[str], new_status: str, wave_id: str
+    tracker_path: str, items_to_update: List[str], new_status: str, wave_id: str,
+    expected_hash: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
-    """Write item status updates to tracker.json atomically (P1-5).
+    """Write item status updates to tracker.json atomically (P1-5, P6, HIGH).
 
-    Uses temp file + os.replace for atomicity.
+    Uses tempfile.NamedTemporaryFile + os.replace for atomicity and TOCTOU safety.
+    Detects concurrent writes via content-hash comparison.
 
     Args:
         tracker_path: path to tracker.json
         items_to_update: list of item IDs to mark "in_progress"
         new_status: new status (should be "in_progress" for pilot)
         wave_id: wave ID to record in notes
+        expected_hash: content hash from intake; if current content differs, abort with conflict
 
     Returns:
         (success: bool, error_reason: str|None)
@@ -327,6 +385,18 @@ def _write_tracker_status_atomic(
         if not p.exists():
             return True, None  # No tracker to update (dry-run or first pass)
 
+        # P6: Detect concurrent writes (conflict detection)
+        if expected_hash:
+            try:
+                with open(p, "rb") as f:
+                    current_content = f.read()
+                    current_hash = hashlib.sha256(current_content).hexdigest()
+                if current_hash != expected_hash:
+                    return False, "tracker_conflict"
+            except IOError:
+                return False, "tracker_conflict"
+
+        # Load tracker for mutation
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -346,17 +416,35 @@ def _write_tracker_status_atomic(
                 notes = item.get("notes", "")
                 item["notes"] = f"{notes} [wave {wave_id[:8]}]".strip()
 
-        # Write atomically: temp file + replace
-        temp_path = p.with_suffix(".tmp")
-        with open(temp_path, "w", encoding="utf-8") as f:
-            if isinstance(data, dict):
-                data["items"] = items
-                json.dump(data, f, indent=2)
-            else:
-                json.dump(items, f, indent=2)
+        # P1-5, HIGH: Write atomically using tempfile.NamedTemporaryFile (TOCTOU safe)
+        # Do NOT use predictable .tmp suffix (symlink vulnerability)
+        temp_fd = None
+        try:
+            temp_fd, temp_path = tempfile.mkstemp(dir=p.parent, prefix=".tracker-", suffix=".tmp")
+            temp_path = Path(temp_path)
 
-        os.replace(temp_path, p)
-        return True, None
+            # Write to temp file
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                if isinstance(data, dict):
+                    data["items"] = items
+                    json.dump(data, f, indent=2)
+                else:
+                    json.dump(items, f, indent=2)
+            temp_fd = None
+
+            # Atomic replace
+            os.replace(temp_path, p)
+            return True, None
+
+        except Exception as e:
+            if temp_fd is not None:
+                os.close(temp_fd)
+            # Clean up temp file if it exists
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return False, f"Failed to update tracker: {e}"
 
     except Exception as e:
         return False, f"Failed to update tracker: {e}"
@@ -378,6 +466,7 @@ def emit_report(
     halt_reason: Optional[str] = None,
     ceiling_reason: Optional[str] = None,
     error: Optional[str] = None,
+    tracker_update_error: Optional[str] = None,
     success: bool = False,
     merged: bool = False,
 ) -> Dict[str, Any]:
@@ -410,6 +499,8 @@ def emit_report(
         report["ceiling_reason"] = ceiling_reason
     if error:
         report["error"] = error
+    if tracker_update_error:
+        report["tracker_update_error"] = tracker_update_error
 
     return report
 
@@ -478,8 +569,9 @@ def run_wave_scheduler(
             success=False,
         )
 
-    # ====== PHASE 2: INTAKE + VALIDATION (P1-6) ======
-    all_items = load_tracker_items(tracker_path)
+    # ====== PHASE 2: INTAKE + VALIDATION (P1-6, P5) ======
+    # P6: Read tracker with hash for conflict detection
+    all_items, intake_hash = _read_tracker_with_hash(tracker_path)
     todo_items = filter_todo_items(all_items)
 
     # Separate valid from invalid items
@@ -545,28 +637,7 @@ def run_wave_scheduler(
             success=True,
         )
 
-    # ====== PHASE 6: HALT CHECK (BEFORE DISPATCH) ======
-    try:
-        is_halted, halt_reason = _check_halt_file(state_dir)
-    except RuntimeError as e:
-        return emit_report(
-            phase="halt",
-            wave_id=wave_id,
-            items_selected=selected_ids,
-            error=str(e),
-            success=False,
-        )
-
-    if is_halted:
-        return emit_report(
-            phase="halt",
-            wave_id=wave_id,
-            items_selected=selected_ids,
-            halt_reason=halt_reason,
-            success=False,
-        )
-
-    # ====== PHASE 7: COST CEILING CHECK (P2b: before manifest, after halt) ======
+    # ====== PHASE 6: COST CEILING CHECK (P2b: before final HALT) ======
     try:
         ceiling_exceeded, ceiling_reason = _check_cost_ceiling(state_dir)
     except RuntimeError as e:
@@ -584,6 +655,27 @@ def run_wave_scheduler(
             wave_id=wave_id,
             items_selected=selected_ids,
             ceiling_reason=ceiling_reason,
+            success=False,
+        )
+
+    # ====== PHASE 7: FINAL HALT CHECK (P2b, P4: immediately before dispatch) ======
+    try:
+        is_halted, halt_reason = _check_halt_file(state_dir)
+    except RuntimeError as e:
+        return emit_report(
+            phase="halt",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            error=str(e),
+            success=False,
+        )
+
+    if is_halted:
+        return emit_report(
+            phase="halt",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            halt_reason=halt_reason,
             success=False,
         )
 
@@ -608,6 +700,19 @@ def run_wave_scheduler(
         branch = wave_result.get("branch")
         sha = wave_result.get("sha")
 
+        # P1-5 (WIRED): After successful ship, mark items "in_progress" (P1 DEAD CODE fix)
+        tracker_update_error = None
+        if items_shipped:
+            success_update, update_error = _write_tracker_status_atomic(
+                tracker_path,
+                items_shipped,
+                "in_progress",
+                wave_id,
+                expected_hash=intake_hash,  # P6: conflict detection
+            )
+            if not success_update:
+                tracker_update_error = update_error
+
         return emit_report(
             phase="dispatch",
             wave_id=wave_id,
@@ -616,7 +721,8 @@ def run_wave_scheduler(
             items_failed_build=failed_build_ids if failed_build_ids else None,
             branch=branch,
             sha=sha,
-            success=wave_result.get("success", False),
+            tracker_update_error=tracker_update_error,
+            success=wave_result.get("success", False) and tracker_update_error is None,
             merged=False,  # P2c: pilot stops before merge
         )
 
