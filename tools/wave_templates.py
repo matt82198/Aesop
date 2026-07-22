@@ -195,7 +195,7 @@ def validate_manifest(
             raise ValueError("Manifest contains unsubstituted placeholders (not fully instantiated)")
 
 
-def validate_presets(preset_names: List[str]) -> Tuple[bool, List[str]]:
+def validate_presets(preset_names: List[str], output_json: bool = False) -> Tuple[bool, List[str]]:
     """Validate one or more presets.
 
     Args:
@@ -208,22 +208,34 @@ def validate_presets(preset_names: List[str]) -> Tuple[bool, List[str]]:
     """
     errors = []
     all_valid = True
+    results = {}
 
     for preset_name in preset_names:
         try:
             preset = load_preset(preset_name)
             # Validate the preset: allow placeholders (presets have them), require testCmd (wave engine needs it)
             validate_manifest(preset, allow_placeholders=True, require_testcmd=True)
-            print(f"✓ {preset_name}: valid", file=sys.stderr)
+            results[preset_name] = {"valid": True, "errors": []}
+            print(f" {preset_name}: valid", file=sys.stderr)
         except FileNotFoundError as e:
-            errors.append(f"✗ {preset_name}: {e}")
+            errors.append(f" {preset_name}: {e}")
             all_valid = False
+            results[preset_name] = {"valid": False, "errors": [str(e)]}
         except ValueError as e:
-            errors.append(f"✗ {preset_name}: {e}")
+            errors.append(f" {preset_name}: {e}")
             all_valid = False
+            results[preset_name] = {"valid": False, "errors": [str(e)]}
         except Exception as e:
-            errors.append(f"✗ {preset_name}: unexpected error: {e}")
+            errors.append(f" {preset_name}: unexpected error: {e}")
             all_valid = False
+            results[preset_name] = {"valid": False, "errors": [str(e)]}
+
+    if output_json:
+        print(json.dumps({"ok": all_valid, "templates": results}))
+    else:
+        # Print errors if any
+        for error in errors:
+            print(error, file=sys.stderr)
 
     return all_valid, errors
 
@@ -247,6 +259,11 @@ def main():
         choices=["saas", "data", "library", "all"],
         default="all",
         help="which preset(s) to validate (default: all)"
+    )
+    validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output results in JSON format"
     )
 
     # Subcommand: instantiate
@@ -284,11 +301,7 @@ def main():
             else:
                 presets = [args.template]
 
-            success, errors = validate_presets(presets)
-
-            # Print errors if any
-            for error in errors:
-                print(error, file=sys.stderr)
+            success, errors = validate_presets(presets, output_json=args.json)
 
             if not success:
                 sys.exit(1)
