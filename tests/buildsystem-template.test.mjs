@@ -167,14 +167,14 @@ test('FIX 2: timebox line only added when agentTimeboxNote is set (backward comp
 // ============================================================================
 // CENTER-VERIFICATION: Adversarial Review Phase
 // ============================================================================
-test('adversarialReview parameter documented in args', () => {
-  assert.ok(src.includes('adversarialReview: boolean | null'), 'adversarialReview parameter not documented');
+test('requireAdversarialReview parameter documented in args', () => {
+  assert.ok(src.includes('requireAdversarialReview: boolean | null'), 'requireAdversarialReview parameter not documented');
   assert.ok(src.includes('when truthy, after integration green'), 'trigger condition not documented');
 });
 
 test('adversarialReview block exists and is gated on args', () => {
   // ADVERSARIAL_REVIEW now consumes manifest-provided A.requireAdversarialReview (resolved in Python)
-  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false"), 'ADVERSARIAL_REVIEW constant with manifest consumption missing');
+  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : true"), 'ADVERSARIAL_REVIEW constant with manifest consumption missing');
   assert.ok(src.includes("if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green)"), 'gate condition missing');
   assert.ok(src.includes("phase('AdversarialReview')"), 'AdversarialReview phase missing');
 });
@@ -226,12 +226,12 @@ test('contractFindings added to all early-return paths (ceiling/brake aborts)', 
   assert.ok(ceilingReturns && ceilingReturns.length >= 3, 'contractFindings not in all return paths (expected >=3 occurrences)');
 });
 
-test('adversarialReview gated: absent args.adversarialReview => no review phase (uses manifest/defaults)', () => {
-  // Static check: when adversarialReview is absent/falsy AND A.requireAdversarialReview is not set,
-  // the phase should not run (defaults to false, tier-1 behavior).
+test('adversarialReview standing default enabled: absent A.requireAdversarialReview defaults to true', () => {
+  // Standing default flip: when A.requireAdversarialReview is not set, defaults to true (enabled).
+  // Set explicit false to disable.
   assert.ok(src.includes("if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green)"), 'gating condition missing');
-  // Verify the gate uses the ADVERSARIAL_REVIEW constant (now consuming manifest field)
-  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false"), 'ADVERSARIAL_REVIEW constant consuming manifest field not found');
+  // Verify the gate uses the ADVERSARIAL_REVIEW constant (now consuming manifest field with true default)
+  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : true"), 'ADVERSARIAL_REVIEW constant with true default not found');
 });
 
 test('adversarialReview backward-compatible: all existing assertions still pass', () => {
@@ -346,26 +346,70 @@ test('manifest field consumption: CAP reads A.repairCap with fallback', () => {
 });
 
 test('manifest field consumption: ADVERSARIAL_REVIEW reads A.requireAdversarialReview with fallback', () => {
-  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false"),
-    'ADVERSARIAL_REVIEW should consume A.requireAdversarialReview with tier-1 default false');
+  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : true"),
+    'ADVERSARIAL_REVIEW should consume A.requireAdversarialReview with default true');
 });
 
 test('tier-1/absent manifest fields yield tier-1 defaults (backward compat)', () => {
   // When the manifest does NOT include repairCap/requireAdversarialReview (legacy),
-  // the template defaults to tier-1 behavior: CAP=1, ADVERSARIAL_REVIEW=false.
-  // This keeps the tier-1/Claude path byte-identical to before the change.
-  const tierLogic = src.substring(src.indexOf('const VERIFICATION_TIER'), src.indexOf('const ADVERSARIAL_REVIEW_MODE'));
+  // the template defaults to tier-1 behavior: CAP=1, ADVERSARIAL_REVIEW=true (enabled by default).
+  const tierLogic = src.substring(src.indexOf('const CAP'), src.indexOf('const ADVERSARIAL_REVIEW_MODE'));
   assert.ok(tierLogic.includes("typeof A.repairCap === 'number' ? A.repairCap : 1"), 'CAP fallback to 1 missing');
-  assert.ok(tierLogic.includes("typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false"), 'ADVERSARIAL_REVIEW fallback missing');
+  assert.ok(tierLogic.includes("typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : true"), 'ADVERSARIAL_REVIEW fallback missing');
 });
 
-test('verificationTier parsed from args with default 1', () => {
-  assert.ok(src.includes("const VERIFICATION_TIER = typeof A.verificationTier === 'number' ? A.verificationTier : 1"),
-    'VERIFICATION_TIER parsing missing or default not 1');
-});
 
 test('policy comment documents that JS no longer recomputes (no drift trap)', () => {
   assert.ok(src.includes('no recomputation'), 'recomputation statement missing');
   assert.ok(src.includes('no drift'), 'drift trap reference missing');
   assert.ok(src.includes('literal manifest fields'), 'manifest field reference missing');
+});
+
+// ============================================================================
+// BUG FIX 1: TDZ ReferenceError — declarations must precede while loop
+// ============================================================================
+test('TDZ fix: contractFindings declared before while loop', () => {
+  const beforeWhile = src.substring(src.indexOf("phase('Repair')"), src.indexOf('while (v && !v.green'));
+  assert.ok(beforeWhile.includes('let contractFindings = []'), 'contractFindings must be declared before while loop');
+  const whileIdx = src.indexOf('while (v && !v.green');
+  const declIdx = src.indexOf('let contractFindings = []');
+  assert.ok(declIdx < whileIdx, 'contractFindings declaration must precede while loop');
+});
+
+test('TDZ fix: adversarialReviewOut declared before while loop', () => {
+  const beforeWhile = src.substring(src.indexOf("phase('Repair')"), src.indexOf('while (v && !v.green'));
+  assert.ok(beforeWhile.includes('let adversarialReviewOut = 0'), 'adversarialReviewOut must be declared before while loop');
+  const whileIdx = src.indexOf('while (v && !v.green');
+  const declIdx = src.indexOf('let adversarialReviewOut = 0');
+  assert.ok(declIdx < whileIdx, 'adversarialReviewOut declaration must precede while loop');
+});
+
+test('TDZ fix: adversarialReviewPending declared before while loop', () => {
+  const beforeWhile = src.substring(src.indexOf("phase('Repair')"), src.indexOf('while (v && !v.green'));
+  assert.ok(beforeWhile.includes('let adversarialReviewPending = false'), 'adversarialReviewPending must be declared before while loop');
+  const whileIdx = src.indexOf('while (v && !v.green');
+  const declIdx = src.indexOf('let adversarialReviewPending = false');
+  assert.ok(declIdx < whileIdx, 'adversarialReviewPending declaration must precede while loop');
+});
+
+test('TDZ fix: no duplicate declarations after while loop', () => {
+  const afterRepairLabel = src.substring(src.indexOf("// -------- Adversarial Review"));
+  assert.ok(!afterRepairLabel.startsWith("let contractFindings = []"), 'no duplicate contractFindings declaration');
+  assert.ok(!afterRepairLabel.includes("let adversarialReviewOut = 0\nlet adversarialReviewPending"), 'no duplicate declarations in review section');
+});
+
+// ============================================================================
+// BUG FIX 3: Standing default flip — ADVERSARIAL_REVIEW defaults to true
+// ============================================================================
+test('Standing default flip: manifest omitting requireAdversarialReview enables adversarial review', () => {
+  // When A.requireAdversarialReview is undefined/absent, ADVERSARIAL_REVIEW defaults to true.
+  // This means adversarial review runs by default (if integration green and blocking mode).
+  assert.ok(src.includes("const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : true"),
+    'Default must be true so omitted flag enables adversarial review');
+});
+
+test('Standing default flip: explicit false disables adversarial review', () => {
+  // When A.requireAdversarialReview is explicitly false, ADVERSARIAL_REVIEW is false (review disabled).
+  const constant = "const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : true";
+  assert.ok(src.includes(constant), 'ternary must evaluate A.requireAdversarialReview if boolean (including false)');
 });
