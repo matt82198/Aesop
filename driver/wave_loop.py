@@ -33,6 +33,7 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 """
 
 import concurrent.futures
+import hashlib
 import json
 import os
 import posixpath
@@ -111,26 +112,39 @@ def _quote_arg(s: str) -> str:
 
 
 def _safe_slug(slug: str) -> str:
-    """Sanitize a slug to prevent path traversal attacks.
+    """Sanitize a slug to prevent path traversal attacks and enforce filesystem limits.
 
     Whitelists [A-Za-z0-9_-]+ and rejects or normalizes everything else.
     This prevents '../../../etc/x' style escape attempts when slug is used
     in path joins.
 
-    If normalization changed the string (removed characters), appends a stable
-    suffix derived from a hash of the raw slug to prevent collisions when two
-    different raw slugs normalize to the same value.
+    LENGTH BOUND:
+        The returned slug is guaranteed to produce a journal filename (slug + '.json')
+        that fits within the 255-byte filesystem limit (stricter than MAX_PATH on
+        Windows). The normalized slug is truncated to ~200 characters, leaving room
+        for a '-' separator + 8-char hash suffix + '.json' extension.
+
+        When truncation occurs (slug > 200 chars after normalization), a stable
+        hash suffix is always appended to preserve uniqueness.
+
+    COLLISION PREVENTION:
+        If normalization changed the string (removed characters), appends a stable
+        suffix derived from a hash of the raw slug to prevent collisions when two
+        different raw slugs normalize to the same value.
 
     Args:
         slug: the slug to sanitize
 
     Returns:
         str: sanitized slug with only alphanumeric, underscore, hyphen,
-             optionally with a hash suffix if normalization occurred
+             optionally truncated and with a hash suffix if truncation or
+             normalization occurred
 
     Raises:
         ValueError: if slug is empty or contains only invalid characters
     """
+    MAX_NORMALIZED_LEN = 200  # Leaves room for '-' + 8-char hash + '.json' (< 255)
+
     if not slug:
         raise ValueError("slug cannot be empty")
 
@@ -140,9 +154,16 @@ def _safe_slug(slug: str) -> str:
     if not sanitized:
         raise ValueError(f"slug contains no valid characters: {slug}")
 
-    # If normalization changed the string, append a stable suffix to prevent collisions
-    if sanitized != slug:
-        import hashlib
+    # Track if we need to append a hash suffix
+    needs_suffix = sanitized != slug  # Normalization changed the string
+
+    # Truncate to MAX_NORMALIZED_LEN if necessary; mark for hash suffix
+    if len(sanitized) > MAX_NORMALIZED_LEN:
+        sanitized = sanitized[:MAX_NORMALIZED_LEN]
+        needs_suffix = True  # Always append hash when truncated for uniqueness
+
+    # If normalization or truncation changed the string, append a stable suffix
+    if needs_suffix:
         raw_hash = hashlib.sha1(slug.encode()).hexdigest()[:8]
         sanitized = f"{sanitized}-{raw_hash}"
 
