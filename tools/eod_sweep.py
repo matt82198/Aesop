@@ -24,6 +24,7 @@ Usage: eod_sweep.py [--repos PATHS] [--readonly-repos PATHS] [--fix-push]
 """
 
 import json
+import os
 import subprocess
 import sys
 import os
@@ -166,12 +167,18 @@ def check_untracked_files(repo_path):
 
 
 def check_repo(repo_path):
-    """Check a single repo; return list of Finding objects or None if repo doesn't exist."""
+    """Check a single repo; returns a list of Finding objects.
+
+    FAIL-CLOSED (runner incident): a repo the caller ASKED to check that does
+    not exist or is not a git repo is an AT-RISK finding, never a silent skip
+    — the silent-None path made the sweep report a vacuous SAFE (exit 0) when
+    fixture/real repos failed to initialize.
+    """
     if not repo_path.exists():
-        return None
+        return [Finding(repo_path, "repo path does not exist")]
 
     if not (repo_path / '.git').exists():
-        return None
+        return [Finding(repo_path, "not a git repository (.git missing)")]
 
     findings = []
 
@@ -309,14 +316,18 @@ def main():
     args = parser.parse_args()
 
     # Parse repos
+    # Split on os.pathsep (';' on Windows, ':' on POSIX): a ':' delimiter
+    # eats Windows drive letters (the runner's vacuous-SAFE incident: tmp on
+    # C:, checkout on D:, drive-relative remainder resolved to nothing and
+    # the old silent-skip reported SAFE with zero repos scanned).
     repos_to_check = []
     if args.repos:
-        repos_to_check = [Path(p) for p in args.repos.split(':') if p]
+        repos_to_check = [Path(p) for p in args.repos.split(os.pathsep) if p]
 
     # Parse readonly repos
     readonly_repos = set()
     if args.readonly_repos:
-        readonly_repos = {Path(p) for p in args.readonly_repos.split(':') if p}
+        readonly_repos = {Path(p) for p in args.readonly_repos.split(os.pathsep) if p}
 
     findings = []
 

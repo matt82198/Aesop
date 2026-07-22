@@ -33,14 +33,20 @@ class TestEodSweep(unittest.TestCase):
             shutil.rmtree(self.temp_dir, onerror=handle_remove_readonly)
 
     def _init_git_repo(self, repo_path):
-        """Initialize a git repository for testing."""
+        """Initialize a git repository for testing.
+
+        LOUD fixture (runner incident): every step is returncode-checked so a
+        half-built fixture fails the test at SETUP with the real error instead
+        of surfacing later as a vacuous tool verdict.
+        """
         repo_path.mkdir(parents=True, exist_ok=True)
 
-        subprocess.run(
+        r = subprocess.run(
             ["git", "init"],
             cwd=str(repo_path),
-            capture_output=True
+            capture_output=True, text=True
         )
+        assert r.returncode == 0, f"fixture git init failed: {r.stderr or r.stdout}"
         subprocess.run(
             ["git", "config", "user.name", "Test User"],
             cwd=str(repo_path),
@@ -59,11 +65,12 @@ class TestEodSweep(unittest.TestCase):
             cwd=str(repo_path),
             capture_output=True
         )
-        subprocess.run(
+        r = subprocess.run(
             ["git", "commit", "-m", "Initial commit"],
             cwd=str(repo_path),
-            capture_output=True
+            capture_output=True, text=True
         )
+        assert r.returncode == 0, f"fixture initial commit failed: {r.stderr or r.stdout}"
 
     def _diag(self, result, repo=None):
         """Forensics for runner-only failures (windows job red while local
@@ -86,11 +93,11 @@ class TestEodSweep(unittest.TestCase):
         cmd = [sys.executable, str(self.eod_script)]
 
         if repos:
-            repos_str = ":".join(str(r) for r in repos)
+            repos_str = os.pathsep.join(str(r) for r in repos)
             cmd.extend(["--repos", repos_str])
 
         if readonly_repos:
-            readonly_str = ":".join(str(r) for r in readonly_repos)
+            readonly_str = os.pathsep.join(str(r) for r in readonly_repos)
             cmd.extend(["--readonly-repos", readonly_str])
 
         if fix_push:
@@ -115,14 +122,15 @@ class TestEodSweep(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("EOD-SWEEP: SAFE", result.stdout)
 
-    def test_nonexistent_repo(self):
+    def test_nonexistent_repo_at_risk(self):
         """Test graceful degradation when repo doesn't exist."""
         nonexistent = Path(self.temp_dir) / "nonexistent"
 
         result = self._run_eod_sweep([nonexistent])
-        # Should report SAFE (non-existent repos are skipped)
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("EOD-SWEEP: SAFE", result.stdout)
+        # Should report SAFE (non-existent repos are reported AT-RISK (fail-closed))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("repo path does not exist", result.stdout, "explicit repo must FAIL CLOSED with a finding")
+        self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
 
     def test_clean_repo(self):
         """Test clean repository reports SAFE."""
@@ -266,15 +274,16 @@ class TestEodSweep(unittest.TestCase):
         # Should still work, just not auto-push readonly repos
         self.assertIn("EOD-SWEEP: SAFE", result.stdout)
 
-    def test_non_git_directory_skipped(self):
-        """Test that non-git directories are gracefully skipped."""
+    def test_non_git_directory_at_risk(self):
+        """Test that non-git directories are gracefully reported AT-RISK (fail-closed)."""
         plain_dir = Path(self.temp_dir) / "plain_dir"
         plain_dir.mkdir()
 
         result = self._run_eod_sweep([plain_dir])
-        # Should report SAFE (non-git repos are skipped)
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("EOD-SWEEP: SAFE", result.stdout)
+        # Should report SAFE (non-git repos are reported AT-RISK (fail-closed))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a git repository", result.stdout, "explicit repo must FAIL CLOSED with a finding")
+        self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
 
     # BUILDLOG tests
     def test_buildlog_append_on_safe(self):
