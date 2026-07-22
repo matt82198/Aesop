@@ -22,6 +22,7 @@ HONESTY GUARANTEE:
   - Verified = True ONLY if the item's test passed (exit code 0 from run_command).
   - Any exception -> item.verified = False, never a false green.
   - Ownership is enforced at the driver level (dispatch_worker rejects out-of-scope).
+  - Adversarial review is NOT yet enforced; marked as 'deferred' (TODO in a later increment).
 
 FAIL-SAFE:
   - Cost-ceiling check: if exceeded, ABORT the wave immediately (return early).
@@ -33,8 +34,11 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 
 import concurrent.futures
 import json
+import os
 import sys
 import time
+import uuid
+from math import ceil
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -134,22 +138,25 @@ def run_wave(
     # ========================================================================
     # PHASE 1: Preflight ownership guard
     # ========================================================================
-    owner_map = {}  # file -> slug
+    owner_map = {}  # normalized file -> slug
     conflicts = []
 
     for item in items:
         slug = item.get("slug", "unknown")
         owned_files = item.get("ownsFiles", [])
         for f in owned_files:
-            if f in owner_map:
+            # Normalize path: handle separators, ./, .., and case on case-insensitive platforms
+            normalized = os.path.normcase(os.path.normpath(f))
+            if normalized in owner_map:
                 conflicts.append(
                     {
                         "file": f,
-                        "items": [owner_map[f], slug],
+                        "normalized": normalized,
+                        "items": [owner_map[normalized], slug],
                     }
                 )
             else:
-                owner_map[f] = slug
+                owner_map[normalized] = slug
 
     if conflicts:
         result["aborted"] = True
@@ -199,7 +206,7 @@ def run_wave(
         workdir = item.get("workDir", ".")
 
         # Try to claim the item if state_dir is given (fail-closed on claim failure).
-        instance_id = f"wave-{int(time.time() * 1000)}"
+        instance_id = f"wave-{uuid.uuid4()}"
         claim_held = False
         if coordination is not None and state_dir is not None:
             try:
@@ -361,33 +368,73 @@ def run_wave(
         failed_items = next_failed
 
     # ========================================================================
-    # PHASE 6: Adversarial review (optional, can be deferred)
+    # PHASE 5.5: Spot-check verified items (if spot_check_frac > 0)
     # ========================================================================
-    # For now, implement as deferred (TODO: real review dispatch).
-    if require_adversarial_review:
-        # Mark as deferred for now.
-        for item_result in result["built"]:
-            if item_result.get("verified"):
-                item_result["adversarial_review"] = "deferred"
+    if spot_check_frac > 0:
+        # Collect verified items and their original test commands.
+        verified_items_to_check = []
+        for item_index, (idx, original_item, item_result) in enumerate(
+            [(i, items[i], r) for i, r in enumerate(result["built"]) if r.get("verified", False)]
+        ):
+            verified_items_to_check.append((original_item, item_result))
+
+        # Determine how many to spot-check.
+        num_to_check = ceil(len(verified_items_to_check) * spot_check_frac)
+
+        # Deterministic sampling: check first N items by slug order.
+        # Sort by slug for determinism, then check the first num_to_check.
+        verified_items_to_check.sort(key=lambda x: x[0].get("slug", ""))
+        items_to_rerun = verified_items_to_check[:num_to_check]
+
+        # Re-run tests for sampled items.
+        for original_item, item_result in items_to_rerun:
+            test_cmd = original_item.get("testCmd", "")
+            workdir = original_item.get("workDir", ".")
+
+            if test_cmd:
+                try:
+                    rerun_result = driver.run_command(test_cmd, cwd=workdir)
+                    # If re-run does NOT exit 0, flip verified to False.
+                    if rerun_result.exit_code != 0:
+                        item_result["verified"] = False
+                        item_result["spot_check_failed"] = True
+                except Exception:
+                    # On exception, flip verified to False.
+                    item_result["verified"] = False
+                    item_result["spot_check_failed"] = True
+
+    # ========================================================================
+    # PHASE 6: Adversarial review (deferred, not yet enforced)
+    # ========================================================================
+    # Adversarial review is not yet implemented; mark all as deferred.
+    # (TODO in a later increment: real adversarial review dispatch via driver)
+    result["adversarial_review"] = "deferred"
+    for item_result in result["built"]:
+        item_result["adversarial_review"] = "deferred"
 
     # ========================================================================
     # PHASE 7: Batched ship (git operations, if configured)
     # ========================================================================
     if git is not None:
-        # Verify expectTopLevel guard.
+        # Verify expectTopLevel guard: MUST be a non-empty string matching actual toplevel.
         expect_top_level = git.get("expectTopLevel")
-        if expect_top_level:
-            toplevel_result = driver.run_command("git rev-parse --show-toplevel")
-            if toplevel_result.exit_code != 0:
-                result["aborted"] = True
-                result["abort_reason"] = "git_toplevel_check_failed"
-                return result
+        if not expect_top_level or not isinstance(expect_top_level, str):
+            # Empty or missing expectTopLevel with git config is an error.
+            result["aborted"] = True
+            result["abort_reason"] = "git_toplevel_missing_or_empty"
+            return result
 
-            toplevel = toplevel_result.stdout.strip()
-            if toplevel != expect_top_level:
-                result["aborted"] = True
-                result["abort_reason"] = "git_toplevel_mismatch"
-                return result
+        toplevel_result = driver.run_command("git rev-parse --show-toplevel")
+        if toplevel_result.exit_code != 0:
+            result["aborted"] = True
+            result["abort_reason"] = "git_toplevel_check_failed"
+            return result
+
+        toplevel = toplevel_result.stdout.strip()
+        if toplevel != expect_top_level:
+            result["aborted"] = True
+            result["abort_reason"] = "git_toplevel_mismatch"
+            return result
 
         # Only ship items that verified green.
         verified_items = [
