@@ -113,6 +113,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/claudemd_lint.py --root .
 
+      - name: CI workflow linter gate (fail-closed)
+        if: matrix.python-shard == 0
+        run: python tools/ci_workflow_lint.py
+
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
         run: |
           python3 << 'EOF'
@@ -257,6 +261,15 @@ jobs:
 
       - name: Run agent inspector browser proof (verify_agent_inspector)
         run: python tools/verify_agent_inspector.py
+
+      - name: Run activity filter browser proof (verify_activity_filter)
+        run: python tools/verify_activity_filter.py
+
+      - name: Run failure drilldown browser proof (verify_failure_drilldown)
+        run: python tools/verify_failure_drilldown.py
+
+      - name: Run wave telemetry browser proof (verify_wave_telemetry)
+        run: python tools/verify_wave_telemetry.py
 
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh
