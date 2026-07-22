@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test suite for driver/config.py — offline, no API key required.
+"""Test suite for driver/backend_config.py — offline, no API key required.
 
 Tests:
   1. load_backend_config() with various input paths and missing files
@@ -33,7 +33,7 @@ if str(DRIVER_DIR) not in sys.path:
 
 from agent_driver import AgentDriver
 from claude_code_driver import ClaudeCodeDriver
-from config import build_driver, describe_backend, load_backend_config
+from backend_config import build_driver, describe_backend, load_backend_config
 
 
 class TestLoadBackendConfig(unittest.TestCase):

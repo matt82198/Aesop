@@ -141,6 +141,7 @@ sys.path.insert(0, "driver")           # bare imports within the domain
 from claude_code_driver import ClaudeCodeDriver
 from codex_driver import CodexDriver
 from verification_policy import verification_policy
+from backend_config import build_driver, load_backend_config, describe_backend
 
 for driver in (ClaudeCodeDriver(), CodexDriver()):
     caps = driver.probe_capabilities()
@@ -237,9 +238,9 @@ behavior).
 **Example configurations**:
 
 ```python
-# config.py provides helpers to load and build drivers from JSON:
+# backend_config.py provides helpers to load and build drivers from JSON:
 
-from config import load_backend_config, build_driver, describe_backend
+from backend_config import load_backend_config, build_driver, describe_backend
 
 # Load from aesop.config.json (or default to Claude)
 config = load_backend_config()  # path="aesop.config.json" by default
@@ -309,8 +310,10 @@ print(describe_backend(config))
    export OPENROUTER_API_KEY=sk-...    # for OpenRouter
    # Ollama needs no key
    ```
-4. Run aesop; the orchestration loop loads the config and instantiates the driver:
+4. Run aesop; the orchestration loop loads the config and instantiates the driver (from backend_config):
    ```python
+   from backend_config import load_backend_config, build_driver
+   
    config = load_backend_config()
    driver = build_driver(config)
    # Pass driver to wave orchestration loop
