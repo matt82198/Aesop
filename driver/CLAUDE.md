@@ -146,5 +146,4 @@ stub, applies a fix, runs the test, and returns ok=True ONLY because the test pa
 - **Phase 3**: shipped. Wave bridge: driver → manifest, orchestrator-side dispatch.
   Proves non-Claude backends drive items end-to-end with honest green (test exit 0 only).
 - **Wave Scheduler (WS3a)**: shipped. Single-cycle orchestration: intake → manifest → dispatch → report (manual merge). Pilot gate: disjoint filter, HALT/ceiling, run_wave integration.
-- **Next**: Refactor wave-flat-dispatch onto the driver (Phase 1 handoff).
-- **Future**: Open-model adapter (Tier-4 backend).
+- **Next**: wave-flat-dispatch onto the driver; then open-model adapter (Tier-4).
