@@ -11,8 +11,8 @@ const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
 
-// Check for runtime subcommands (doctor, watch, dash, status, fleet)
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet'];
+// Check for runtime subcommands (doctor, watch, dash, status, fleet, health-score)
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health-score'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
 
 if (isRuntimeCommand) {
@@ -21,7 +21,8 @@ if (isRuntimeCommand) {
     'watch': '../tools/watch.js',
     'dash': '../tools/dash.js',
     'status': '../tools/status.js',
-    'fleet': '../tools/fleet.js'
+    'fleet': '../tools/fleet.js',
+    'health-score': '../tools/health-score.js'
   };
   // Load and run the appropriate runtime module
   // These modules run async code that sets process.exitCode and will cause Node to exit

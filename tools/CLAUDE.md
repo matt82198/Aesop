@@ -33,6 +33,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache)
 - `halt.py` — Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
+- `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config/hooks/CLAUDE.md/writable/heartbeats/git-identity/secret-scan with weighted scoring
 - `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
