@@ -83,29 +83,7 @@ Optional (non-abstract): `get_tokens_spent()`.
 
 ## Phase 2 Codex Implementation Details
 
-The Codex driver proves a non-Claude backend can take a real coding task
-end-to-end through the AgentDriver and produce orchestrator-verified results,
-entirely offline (no API key, no network in CI). The probe's `tool_use_accuracy` 0.92 assertion is evidence-backed as conservative by the 2026-07-22 live run (gpt-4o-mini 32/32 composite, `bench/results/accuracy-live-2026-07-22.json`); single-run, N=32 curated — not a transfer claim.
-
-**dispatch_worker**: Orchestrator-managed worker (Tier 2):
-- Injects owned-file contents into the prompt (worker has no filesystem access).
-- Calls OpenAI Chat Completions API via injectable transport (default=urllib).
-- Requests strict JSON schema output (full-file replacements).
-- Validates ALL JSON with bounded in-turn retry (<=2 attempts).
-- Enforces ownership: rejects out-of-scope paths wholesale.
-- Pre-dispatch max_owned_bytes guard: fails safe on oversized files (no
-  truncation).
-- Writes full-file replacements to disk; never applies diffs.
-- Records usage.total_tokens for cost tracking.
-- CRITICAL: Green is NOT decided by the model's done:true; it is decided by
-  the orchestrator running run_command and getting exit 0 (center verification).
-
-**Transport seam**: injectable transport callable keeps CI offline (FakeTransport
-in tests; production reads OPENAI_API_KEY, default_openai_transport, hard timeout).
-
-**Verification policy**: verification_policy(caps) maps tier 2 -> {
-validate_all_json: True, spot_check_frac: 0.50, repair_cap: 2,
-require_adversarial_review: True }. Feeds the wave's integration verifier.
+Codex driver (Tier 2): injects file contents into prompt (no filesystem), calls OpenAI Chat Completions via injectable transport (FakeTransport in tests, default_openai_transport prod), validates JSON with bounded retry, enforces ownership. CRITICAL: Green = exit 0 only (not model's done:true). Verification policy: tier 2 -> {validate_all_json:True, spot_check_frac:0.50, repair_cap:2, require_adversarial_review:True}.
 
 ## Phase 3 Bridge Implementation Details
 
@@ -129,15 +107,39 @@ requireAdversarialReview=false, spotCheckFrac=0.10, validateAllJson=false).
 stub, applies a fix, runs the test, and returns ok=True ONLY because the test passed
 (exit 0). All offline, no API key, no network.
 
-## Wave Scheduler (WS3a Pilot)
+## Wave Scheduler (WS3a Pilot) + GATE-1 Handoff Kit
 
-**wave_scheduler.py** — single-cycle backlog orchestration: intake up to N file-disjoint todo items from tracker.json (empty/missing ownsFiles REJECTED; paths normalized posix+casefold-on-Windows before overlap checks; required fields pre-validated) -> manifest via build_manifest_item (model + verificationTier from driver.probe) -> HALT + cost-ceiling gates (fail-CLOSED: module import failure or check exception = abort with honest Report, phase=gate_unavailable) -> run_wave (recovery journal + git ship) -> STOP before merge; Report JSON {phase, wave_id, items_selected, items_skipped, items_failed_build, items_shipped, branch, sha, merged:false, halt_reason?, ceiling_reason?, success}. After ship, selected items atomically marked in_progress in tracker (temp+os.replace; dry-run never mutates) so a second run cannot double-dispatch.
+**wave_scheduler.py** — single-cycle backlog orchestration: intake up to N file-disjoint todo items from tracker.json (empty/missing ownsFiles REJECTED; paths normalized posix+casefold-on-Windows before overlap checks; required fields pre-validated) -> manifest via build_manifest_item (model + verificationTier from driver.probe) -> HALT + cost-ceiling gates (fail-CLOSED: module import failure or check exception = abort with honest Report, phase=gate_unavailable) -> run_wave (recovery journal + git ship) -> STOP before merge; Report JSON with per-item observability (GATE-1). After ship, selected items atomically marked in_progress in tracker (temp+os.replace; dry-run never mutates) so a second run cannot double-dispatch.
 
-**CLI**: `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute`
+**CLI** (GATE-1): `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute --driver claude|codex` (default: claude). For codex+execute, requires OPENAI_API_KEY env var; dry-run works without it.
 
-**Tests** (tests/test_wave_scheduler.py, 24): disjoint/normalization/rejection cases, gate fail-closed incl. exception paths, dry-run purity, tracker idempotence, Report honesty, empty-tracker EMPTY report; module-tmpdir hygiene; all TestCase.
+**Tests** (35+): disjoint/normalization/rejection, gate fail-closed, dry-run, GATE-1 per-item/driver/ceiling/codex tests; module-tmpdir hygiene; all TestCase.
 
 **Invariants**: stdlib-only, ASCII, Windows+Linux safe (list-form subprocess); manifest items carry resolved policy knobs from verification_policy (no recompute drift); merge stays manual in the pilot.
+
+### REPORT-CONTRACT (GATE-1 Orchestrator Handoff)
+
+The scheduler emits a Report JSON consumed by the orchestrator to decide merge eligibility:
+```
+{
+  "phase": "dispatch"|"intake"|"halt"|"ceiling"|"gate_unavailable"|"manifest",
+  "wave_id": "<uuid>",
+  "items_selected": ["id1", "id2"],  // IDs selected for this wave
+  "items_shipped": [
+    { "slug": "feat/x", "backend": "claude-code|codex", "tier": 1|2|3|4, "verified": true|false, "testExit": 0|1|null },
+    ...
+  ],
+  "merged": false,  // pilot always false (manual merge)
+  "success": true|false,
+  "timestamp": "<ISO8601>",
+  "branch": "<branch_name>",  // optional; set when ship succeeds
+  "sha": "<git_sha>",  // optional; set when ship succeeds
+  "halt_reason": "...",  // optional; set if halted
+  "ceiling_reason": "...",  // optional; ceiling exceeded before dispatch (abort-before-dispatch only)
+  "error": "..."  // optional; unexpected error
+}
+```
+Ceiling semantics: checked BEFORE run_wave dispatch (phase=ceiling, ceiling_reason populated). Mid-wave ceiling trips are run_wave's responsibility. items_shipped[] carries per-item observability: slug, backend (driver name), tier (verificationTier), verified (from test exit 0), testExit (test command exit code or null if not run).
 
 ## Status
 
@@ -145,5 +147,4 @@ stub, applies a fix, runs the test, and returns ok=True ONLY because the test pa
 - **Phase 2**: shipped. Codex OpenAI Chat Completions implementation. Offline tests GREEN.
 - **Phase 3**: shipped. Wave bridge: driver → manifest, orchestrator-side dispatch.
   Proves non-Claude backends drive items end-to-end with honest green (test exit 0 only).
-- **Wave Scheduler (WS3a)**: shipped. Single-cycle orchestration: intake → manifest → dispatch → report (manual merge). Pilot gate: disjoint filter, HALT/ceiling, run_wave integration.
-- **Next**: wave-flat-dispatch onto the driver; then open-model adapter (Tier-4).
+- **Wave Scheduler (WS3a) + GATE-1**: shipped. Single-cycle orchestration: intake → manifest → dispatch → report (manual merge). Per-item observability, driver injection (--driver claude|codex), ceiling semantics documented.

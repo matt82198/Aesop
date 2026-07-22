@@ -458,7 +458,7 @@ def emit_report(
     phase: str,
     wave_id: str,
     items_selected: List[str],
-    items_shipped: Optional[List[str]] = None,
+    items_shipped: Optional[List[Dict[str, Any]]] = None,
     items_failed_build: Optional[List[str]] = None,
     items_skipped: Optional[List[Dict[str, str]]] = None,
     branch: Optional[str] = None,
@@ -470,7 +470,9 @@ def emit_report(
     success: bool = False,
     merged: bool = False,
 ) -> Dict[str, Any]:
-    """Emit a Report JSON structure.
+    """Emit a Report JSON structure (GATE-1 HANDOFF KIT).
+
+    Per-item observability: items_shipped includes full details {slug, backend, tier, verified, testExit}.
 
     Returns:
         report dict (ready to serialize)
@@ -692,10 +694,17 @@ def run_wave_scheduler(
         )
 
         # P2c: verify no merged=True, record merged=false
-        items_shipped = [
-            item.get("id", "unknown")
-            for item in wave_result.get("shipped", []) or []
-        ]
+        # GATE-1: per-item observability {slug, backend, tier, verified, testExit}
+        items_shipped = []
+        for item in wave_result.get("shipped", []) or []:
+            shipped_item = {
+                "slug": item.get("slug", "unknown"),
+                "backend": driver.probe_capabilities().name,
+                "tier": item.get("verificationTier", 1),
+                "verified": item.get("verified", False),
+                "testExit": item.get("testExit"),
+            }
+            items_shipped.append(shipped_item)
 
         branch = wave_result.get("branch")
         sha = wave_result.get("sha")
@@ -742,7 +751,7 @@ def run_wave_scheduler(
 # ========================================================================
 
 def main():
-    """CLI entry point."""
+    """CLI entry point (GATE-1: driver injection, --driver claude|codex)."""
     parser = argparse.ArgumentParser(
         description="Wave scheduler: intake -> manifest -> dispatch -> report"
     )
@@ -771,16 +780,48 @@ def main():
         "--state-dir",
         help="State directory (default: ./state)",
     )
+    parser.add_argument(
+        "--driver",
+        choices=["claude", "codex"],
+        default="claude",
+        help="Backend driver (claude|codex, default: claude)",
+    )
 
     args = parser.parse_args()
 
     dry_run = not args.execute
+
+    # GATE-1: driver injection (instantiate based on --driver flag)
+    driver = None
+    if args.driver == "codex":
+        # CodexDriver requires OPENAI_API_KEY for execute; --dry-run works without it
+        try:
+            from codex_driver import CodexDriver
+            if args.execute and not os.environ.get("OPENAI_API_KEY"):
+                print(
+                    "ERROR: --driver codex --execute requires OPENAI_API_KEY environment variable",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            driver = CodexDriver()
+        except ImportError:
+            print("ERROR: --driver codex requires codex_driver.py", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Default: Claude Code driver
+        try:
+            from claude_code_driver import ClaudeCodeDriver
+            driver = ClaudeCodeDriver()
+        except ImportError:
+            print("ERROR: claude_code_driver.py not found", file=sys.stderr)
+            sys.exit(1)
 
     # Run scheduler
     report = run_wave_scheduler(
         tracker_path=args.tracker,
         max_items=args.max_items,
         dry_run=dry_run,
+        driver=driver,
         state_dir=Path(args.state_dir) if args.state_dir else None,
     )
 
