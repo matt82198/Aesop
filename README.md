@@ -106,6 +106,7 @@ The benchmark proves it: across 39 judgment tasks (code review, severity calibra
 ## Learn More
 
 - **[docs/INSTALL.md](./docs/INSTALL.md)** — Setup and first wave  
+- **[docs/PORTING.md](./docs/PORTING.md)** — Adopter's guide: port Aesop to your repo (prerequisites, scaffold, 10 failure modes)  
 - **[docs/HOW-THE-LOOP-WORKS.md](./docs/HOW-THE-LOOP-WORKS.md)** — Concrete walkthrough of a wave cycle  
 - **[docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)** — Cost analysis and scaling  
 - **[docs/CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles  
