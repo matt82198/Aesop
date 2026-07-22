@@ -289,6 +289,35 @@ class TestCostCeilingFailClosed(CostCeilingSpikeTesting):
         finally:
             self.fleet_ledger.parse_ledger_rows = original_parse
 
+    def test_main_exits_nonzero_on_ledger_read_error(self):
+        """Test the CLI fail-closed fix: main() must exit 1 when ledger is unreadable,
+        not skip and exit 0. This reproduces the P1 security bug: unreadable ledger
+        file caused main() to print 'skipping' and return 0 instead of failing."""
+        config = {"limits": {"max_wave_tokens": 1000}}
+        config_file = self.fixture_root / "aesop.config.json"
+        config_file.write_text(json.dumps(config), encoding="utf-8")
+
+        # Monkeypatch fleet_ledger.parse_ledger_rows to raise an OSError
+        # (simulating an unreadable ledger file)
+        original_parse = self.fleet_ledger.parse_ledger_rows
+
+        def mock_parse_ledger_rows():
+            raise OSError("Permission denied: Cannot read ledger file")
+
+        self.fleet_ledger.parse_ledger_rows = mock_parse_ledger_rows
+
+        try:
+            # Call main() with --check flag
+            exit_code = self.cost_ceiling.main(argv=["--check", "--period", "wave"])
+
+            # CRITICAL: exit code must be 1 (fail-closed), NOT 0 (fail-open)
+            self.assertEqual(
+                exit_code, 1,
+                "main() must exit 1 on ledger read error (fail-closed), not 0 (fail-open)"
+            )
+        finally:
+            self.fleet_ledger.parse_ledger_rows = original_parse
+
 
 class TestCostCeilingMultipleCheckPoints(CostCeilingSpikeTesting):
     """Test that multiple ceiling check points all enforce correctly."""
