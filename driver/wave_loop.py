@@ -36,6 +36,8 @@ import concurrent.futures
 import json
 import os
 import posixpath
+import re
+import shlex
 import sys
 import threading
 import time
@@ -74,6 +76,80 @@ except ImportError:
 
 
 # ========================================================================
+# Sanitization and Security
+# ========================================================================
+
+def _quote_arg(s: str) -> str:
+    """Quote an argument for safe shell execution across Windows and POSIX.
+
+    On Windows (cmd.exe), single quotes don't quote; shlex.quote (POSIX-only)
+    is unsafe. This function uses subprocess.list2cmdline semantics for Windows
+    and shlex.quote for POSIX systems.
+
+    The durable fix is to refactor run_command to accept a list of arguments
+    instead of shell=True strings (deferred).
+
+    Args:
+        s: the string to quote for shell execution
+
+    Returns:
+        str: properly quoted argument safe for shell execution on this OS
+    """
+    if os.name == 'nt':
+        # Windows (cmd.exe): use subprocess.list2cmdline semantics.
+        # Double quotes are the safe quoting mechanism; embed quotes are escaped
+        # with backslash, and backslashes before quotes are escaped.
+        # For safety, we wrap in double quotes and escape embedded quotes/backslashes.
+        if not s:
+            return '""'
+        # Escape backslashes before quotes, then escape quotes
+        escaped = s.replace('\\', '\\\\').replace('"', '\\"')
+        return f'"{escaped}"'
+    else:
+        # POSIX: shlex.quote handles all cases safely
+        return shlex.quote(s)
+
+
+def _safe_slug(slug: str) -> str:
+    """Sanitize a slug to prevent path traversal attacks.
+
+    Whitelists [A-Za-z0-9_-]+ and rejects or normalizes everything else.
+    This prevents '../../../etc/x' style escape attempts when slug is used
+    in path joins.
+
+    If normalization changed the string (removed characters), appends a stable
+    suffix derived from a hash of the raw slug to prevent collisions when two
+    different raw slugs normalize to the same value.
+
+    Args:
+        slug: the slug to sanitize
+
+    Returns:
+        str: sanitized slug with only alphanumeric, underscore, hyphen,
+             optionally with a hash suffix if normalization occurred
+
+    Raises:
+        ValueError: if slug is empty or contains only invalid characters
+    """
+    if not slug:
+        raise ValueError("slug cannot be empty")
+
+    # Keep only alphanumeric, underscore, and hyphen
+    sanitized = re.sub(r'[^A-Za-z0-9_-]', '', slug)
+
+    if not sanitized:
+        raise ValueError(f"slug contains no valid characters: {slug}")
+
+    # If normalization changed the string, append a stable suffix to prevent collisions
+    if sanitized != slug:
+        import hashlib
+        raw_hash = hashlib.sha1(slug.encode()).hexdigest()[:8]
+        sanitized = f"{sanitized}-{raw_hash}"
+
+    return sanitized
+
+
+# ========================================================================
 # Wave Recovery: Journal and Resume Support
 # ========================================================================
 
@@ -87,12 +163,20 @@ def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, 
         data: dict with outcome data (verified, testExit, repairs, etc.)
 
     Journal is stored as: state_dir/journal/<slug>.json with timestamp.
+    Slug is sanitized to prevent path traversal attacks.
     """
     state_path = Path(state_dir)
     journal_dir = state_path / "journal"
     journal_dir.mkdir(parents=True, exist_ok=True)
 
-    journal_file = journal_dir / f"{slug}.json"
+    # Sanitize slug to prevent path traversal.
+    try:
+        safe_slug = _safe_slug(slug)
+    except ValueError:
+        # Fail-closed: if slug is invalid, skip journaling.
+        return
+
+    journal_file = journal_dir / f"{safe_slug}.json"
     entry = {
         "slug": slug,
         "phase": phase,
@@ -125,7 +209,8 @@ def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
 
     journal_state = {}
     try:
-        for journal_file in journal_dir.glob("*.json"):
+        # Only read files that match the safe slug pattern to avoid traversal attacks.
+        for journal_file in journal_dir.glob("[A-Za-z0-9_-]*.json"):
             try:
                 entry = json.loads(journal_file.read_text())
                 slug = entry.get("slug")
@@ -725,17 +810,20 @@ def run_wave(
                 files_to_add.extend(item_result.get("filesWritten", []))
 
             if files_to_add:
-                # Add files.
-                add_cmd = "git add " + " ".join(files_to_add)
+                # Add files. Escape each filename to prevent shell injection.
+                # Use _quote_arg for platform-safe quoting (Windows + POSIX).
+                escaped_files = [_quote_arg(f) for f in files_to_add]
+                add_cmd = "git add " + " ".join(escaped_files)
                 add_result = driver.run_command(add_cmd)
                 if add_result.exit_code != 0:
                     result["aborted"] = True
                     result["abort_reason"] = "git_add_failed"
                     return result
 
-                # Commit.
+                # Commit. Escape the message to prevent shell injection.
+                # Use _quote_arg for platform-safe quoting.
                 commit_msg = f"Wave: {len(verified_items)} items verified"
-                commit_cmd = f"git commit -m '{commit_msg}'"
+                commit_cmd = f"git commit -m {_quote_arg(commit_msg)}"
                 commit_result = driver.run_command(commit_cmd)
                 if commit_result.exit_code != 0:
                     # Might be "nothing to commit"; not necessarily a failure.
