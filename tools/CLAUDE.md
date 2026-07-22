@@ -39,7 +39,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
-- `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 always (advisory)
+- `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
 - `orchestrator_status.py` — Atomic orchestrator status updates
 - `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
