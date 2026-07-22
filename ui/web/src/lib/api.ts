@@ -17,6 +17,9 @@ import type {
   WavePRBoardData,
   WaveFailureData,
   WaveDispatchData,
+  WaveGanttData,
+  WaveAuditTailData,
+  WaveReasoningTailData,
 } from './types';
 
 let _csrfTokenCache: string | null = null;
@@ -186,6 +189,27 @@ export async function fetchWaveFailure(prNumber: number): Promise<WaveFailureDat
  */
 export async function fetchWaveDispatch(): Promise<WaveDispatchData> {
   return typedFetch('/api/wave/dispatch', { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/gantt — Gantt timeline data for agent phase spans
+ */
+export async function fetchWaveGantt(): Promise<WaveGanttData> {
+  return typedFetch('/api/wave/gantt', { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/audit-tail — latest audit/verification outcomes
+ */
+export async function fetchWaveAuditTail(): Promise<WaveAuditTailData> {
+  return typedFetch('/api/wave/audit-tail', { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/reasoning-tail — per-agent live reasoning transparency
+ */
+export async function fetchWaveReasoningTail(): Promise<WaveReasoningTailData> {
+  return typedFetch('/api/wave/reasoning-tail', { method: 'GET', requireCSRF: false });
 }
 
 /**

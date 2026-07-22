@@ -603,6 +603,72 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Test 19: delete-only push skips secret scan (rc 0, even with NO scanner available) ===\n'
+(
+  zeros="0000000000000000000000000000000000000000"
+  old_sha=$(git rev-parse HEAD 2>/dev/null || echo "1234567890123456789012345678901234567890")
+  # Point AESOP_ROOT at an empty dir: no scanner exists (reproduces CI). A
+  # delete-only push carries no content, so it must pass without a scanner.
+  scannerless_root=$(mktemp -d)
+  printf '(delete) %s refs/heads/some-old-branch %s\n' "$zeros" "$old_sha" | {
+    AESOP_ROOT="$scannerless_root" check_secret_scan
+    exit_code=$?
+    if [ "$exit_code" -ne 0 ]; then
+      printf 'FAIL: delete-only push should skip secret scan (rc 0), got %d\n' "$exit_code"
+      rm -rf "$scannerless_root"
+      exit 1
+    fi
+  } || { rm -rf "$scannerless_root"; exit 1; }
+  rm -rf "$scannerless_root"
+  printf 'PASS: delete-only push skips secret scan cleanly (scannerless env)\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 20: delete-only push allowed by branch policy even from main checkout ===\n'
+(
+  zeros="0000000000000000000000000000000000000000"
+  old_sha=$(git rev-parse HEAD 2>/dev/null || echo "1234567890123456789012345678901234567890")
+  # branch policy must not consult current branch for a pure-delete push
+  printf '(delete) %s refs/heads/some-old-branch %s\n' "$zeros" "$old_sha" | {
+    check_branch_policy
+    exit_code=$?
+    if [ "$exit_code" -ne 0 ]; then
+      printf 'FAIL: delete-only push should pass branch policy (rc 0), got %d\n' "$exit_code"
+      exit 1
+    fi
+  } || exit 1
+  printf 'PASS: delete-only push passes branch policy regardless of checkout\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 21: deleting refs/heads/main itself is still BLOCKED ===\n'
+(
+  zeros="0000000000000000000000000000000000000000"
+  old_sha=$(git rev-parse HEAD 2>/dev/null || echo "1234567890123456789012345678901234567890")
+  printf '(delete) %s refs/heads/main %s\n' "$zeros" "$old_sha" | {
+    check_branch_policy
+    exit_code=$?
+    if [ "$exit_code" -eq 0 ]; then
+      printf 'FAIL: deleting refs/heads/main must be blocked, got rc 0\n'
+      exit 1
+    fi
+  } || exit 1
+  printf 'PASS: deleting refs/heads/main is blocked\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

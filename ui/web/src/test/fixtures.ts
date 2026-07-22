@@ -33,6 +33,12 @@ import type {
   WaveFailureRun,
   WaveDispatchData,
   WaveDispatchAgent,
+  WaveGanttData,
+  WaveGanttAgent,
+  WaveAuditTailData,
+  WaveAuditTailEvent,
+  WaveReasoningTailData,
+  WaveReasoningAgent,
 } from '../lib/types';
 
 /* ------------------------------------------------------------------ */
@@ -99,6 +105,13 @@ export const TESTIDS = {
   dispatchAgentPhase: 'dispatch-agent-phase',
   dispatchAgentAge: 'dispatch-agent-age',
   dispatchAgentTokens: 'dispatch-agent-tokens',
+  ganttTimeline: 'gantt-timeline',
+  ganttRow: 'gantt-row',
+  ganttPhaseBar: 'gantt-phase-bar',
+  auditTail: 'audit-tail',
+  auditTailItem: 'audit-tail-item',
+  reasoningTail: 'reasoning-tail',
+  reasoningTailAgent: 'reasoning-tail-agent',
 
   // Cost view
   viewCost: 'view-cost',
@@ -753,4 +766,172 @@ export const fixtureWaveDispatchUnavailable: WaveDispatchData = {
   wave_phase: null,
   agents: [],
   at: '2026-07-17T20:24:50Z',
+};
+
+export const fixtureWaveGanttAgent: WaveGanttAgent = {
+  id: 'fleet-fix-0',
+  phases: [
+    {
+      phase: 'dispatch',
+      start: '2026-07-17T20:24:00Z',
+      end: '2026-07-17T20:24:15Z',
+      duration_sec: 15,
+      token_estimate: 5000,
+    },
+    {
+      phase: 'thinking',
+      start: '2026-07-17T20:24:15Z',
+      end: '2026-07-17T20:24:45Z',
+      duration_sec: 30,
+      token_estimate: 25000,
+    },
+    {
+      phase: 'tool-use',
+      start: '2026-07-17T20:24:45Z',
+      end: '2026-07-17T20:24:50Z',
+      duration_sec: 5,
+      token_estimate: 3000,
+    },
+  ],
+  total_duration_sec: 50,
+  status: 'running',
+};
+
+export const fixtureWaveGantt: WaveGanttData = {
+  available: true,
+  wave_phase: 'wave-rc.7: verify',
+  agents: [
+    fixtureWaveGanttAgent,
+    {
+      id: 'fleet-fix-1',
+      phases: [
+        {
+          phase: 'dispatch',
+          start: '2026-07-17T20:24:05Z',
+          end: '2026-07-17T20:24:20Z',
+          duration_sec: 15,
+          token_estimate: 4000,
+        },
+        {
+          phase: 'stall',
+          start: '2026-07-17T20:24:20Z',
+          end: '2026-07-17T20:24:50Z',
+          duration_sec: 30,
+          token_estimate: 0,
+        },
+      ],
+      total_duration_sec: 45,
+      status: 'stalled',
+    },
+    {
+      id: 'fleet-review-0',
+      phases: [
+        {
+          phase: 'thinking',
+          start: '2026-07-17T20:24:10Z',
+          end: '2026-07-17T20:24:38Z',
+          duration_sec: 28,
+          token_estimate: 20000,
+        },
+      ],
+      total_duration_sec: 28,
+      status: 'done',
+    },
+  ],
+  at: '2026-07-17T20:24:50Z',
+};
+
+export const fixtureWaveGanttUnavailable: WaveGanttData = {
+  available: false,
+  wave_phase: undefined,
+  agents: [],
+  at: '2026-07-17T20:24:50Z',
+};
+
+export const fixtureWaveAuditTailEvents: WaveAuditTailEvent[] = [
+  {
+    type: 'audit_backlog',
+    status: '✅',
+    tier: 'P0',
+    tag: '[sec]',
+    title: 'CSRF validation chain fixed',
+    timestamp: '2026-07-21T10:30:00Z',
+  },
+  {
+    type: 'verdict',
+    agent: 'fleet-fix-0',
+    verdict: 'OK',
+    timestamp: '2026-07-21T10:28:15Z',
+  },
+  {
+    type: 'audit_backlog',
+    status: '🔵',
+    tier: 'P1',
+    tag: '[perf]',
+    title: 'SSE keepalive tuning in progress',
+    timestamp: '2026-07-21T09:45:00Z',
+  },
+  {
+    type: 'verdict',
+    agent: 'fleet-fix-1',
+    verdict: 'FAILED',
+    timestamp: '2026-07-21T09:40:22Z',
+  },
+  {
+    type: 'audit_backlog',
+    status: '⬜',
+    tier: 'P2',
+    tag: '[ui]',
+    title: 'Timeline component edge case handling',
+    timestamp: '2026-07-21T08:15:00Z',
+  },
+];
+
+export const fixtureWaveAuditTail: WaveAuditTailData = {
+  available: true,
+  audit_items: fixtureWaveAuditTailEvents,
+  at: '2026-07-21T10:35:00Z',
+};
+
+export const fixtureWaveAuditTailUnavailable: WaveAuditTailData = {
+  available: false,
+  audit_items: [],
+  at: '2026-07-21T10:35:00Z',
+};
+
+export const fixtureWaveReasoningAgents: WaveReasoningAgent[] = [
+  {
+    id: 'fleet-fix-0',
+    phase: 'tool-use',
+    reasoning: 'thinking → tool:edit → result → thinking',
+    activity_age_sec: 3,
+    token_estimate: 145000,
+  },
+  {
+    id: 'fleet-fix-1',
+    phase: 'stall',
+    reasoning: 'tool:bash → result (error)',
+    activity_age_sec: 420,
+    token_estimate: 89000,
+    warnings: ['inactive >5min', 'stalled >10min'],
+  },
+  {
+    id: 'fleet-review-0',
+    phase: 'thinking',
+    reasoning: 'prompt → thinking',
+    activity_age_sec: 12,
+    token_estimate: 76500,
+  },
+];
+
+export const fixtureWaveReasoningTail: WaveReasoningTailData = {
+  available: true,
+  agents: fixtureWaveReasoningAgents,
+  at: '2026-07-21T10:35:00Z',
+};
+
+export const fixtureWaveReasoningTailUnavailable: WaveReasoningTailData = {
+  available: false,
+  agents: [],
+  at: '2026-07-21T10:35:00Z',
 };

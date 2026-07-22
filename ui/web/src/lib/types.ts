@@ -352,6 +352,89 @@ export interface WaveDispatchData {
 }
 
 /**
+ * One phase span in a Gantt row (GET /api/wave/gantt).
+ */
+export interface WaveGanttPhase {
+  phase: string; // 'dispatch' | 'thinking' | 'tool-use' | 'stall' | 'done'
+  start: string; // ISO 8601 UTC
+  end: string; // ISO 8601 UTC
+  duration_sec: number;
+  token_estimate?: number;
+}
+
+/**
+ * One agent row in Gantt chart (GET /api/wave/gantt).
+ */
+export interface WaveGanttAgent {
+  id: string;
+  phases: WaveGanttPhase[];
+  total_duration_sec: number;
+  status: 'running' | 'done' | 'stalled' | 'inactive';
+}
+
+/**
+ * GET /api/wave/gantt — Gantt timeline data per-agent phase spans.
+ * Shows agents as rows with phase timing bars for execution visibility.
+ */
+export interface WaveGanttData {
+  available: boolean;
+  wave_phase?: string; // e.g., "wave-rc.7: verify"
+  agents: WaveGanttAgent[];
+  at: string; // ISO 8601 UTC
+  error?: string; // optional error message if available=false
+}
+
+/**
+ * One audit tail event from GET /api/wave/audit-tail.
+ * Union of audit backlog item or ledger verdict.
+ */
+export interface WaveAuditTailEvent {
+  type: 'audit_backlog' | 'verdict';
+  status?: string; // audit: '✅' | '🔵' | '⬜' | '⏸'
+  tier?: string; // audit: 'P0' | 'P1' | 'P2'
+  tag?: string; // audit: '[sec]' | '[ui]' | ...
+  title?: string; // audit title
+  timestamp?: string; // ISO 8601 or null
+  verdict?: string; // ledger: 'OK' | 'FAILED' | 'EMPTY' | 'HUNG'
+  agent?: string; // ledger: agent ID (short)
+}
+
+/**
+ * GET /api/wave/audit-tail — latest audit/verification outcomes.
+ * Shows recent audit backlog items and ledger verdicts.
+ */
+export interface WaveAuditTailData {
+  available: boolean;
+  audit_items: WaveAuditTailEvent[];
+  at: string; // ISO 8601 UTC
+  error?: string; // optional error message
+}
+
+/**
+ * One agent's reasoning tail entry from GET /api/wave/reasoning-tail.
+ * Shows per-agent latest transcript activity (redacted).
+ */
+export interface WaveReasoningAgent {
+  id: string;
+  phase: string; // 'dispatch' | 'thinking' | 'tool-use' | 'stall' | 'done'
+  reasoning: string; // redacted brief activity summary (tool:X → result → thinking...)
+  activity_age_sec: number;
+  token_estimate: number;
+  warnings?: string[]; // e.g., ['inactive >5min', 'stalled >10min']
+}
+
+/**
+ * GET /api/wave/reasoning-tail — per-agent live reasoning transparency.
+ * Shows latest transcript activity summary for each agent (redacted).
+ */
+export interface WaveReasoningTailData {
+  available: boolean;
+  agents: WaveReasoningAgent[];
+  at: string; // ISO 8601 UTC
+  error?: string; // optional error message
+}
+
+/**
  * One agent specialty quality metric from GET /api/wave/quality-scorecards.
  * Shows per-specialty success rate and retry/repair frequency.
  */

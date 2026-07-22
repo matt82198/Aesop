@@ -18,6 +18,9 @@ import wave_prs
 import wave_telemetry
 import wave_failure
 import wave_dispatch
+import wave_gantt
+import wave_audit_tail
+import wave_reasoning_tail
 import api
 import api.tracker
 import api.submit
@@ -205,6 +208,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_wave_telemetry()
         elif self.path == "/api/wave/dispatch":
             self.serve_api_wave_dispatch()
+        elif self.path == "/api/wave/gantt":
+            self.serve_api_wave_gantt()
+        elif self.path == "/api/wave/audit-tail":
+            self.serve_api_wave_audit_tail()
+        elif self.path == "/api/wave/reasoning-tail":
+            self.serve_api_wave_reasoning_tail()
         elif self.path == "/api/wave/quality-scorecards":
             self.serve_api_wave_quality_scorecards()
         elif self.path.startswith("/api/wave/failure"):
@@ -475,6 +484,69 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
             print(f"[serve_api_wave_dispatch] Uncaught exception: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_wave_gantt(self):
+        """GET /api/wave/gantt — Gantt timeline data for agents in current wave.
+
+        Read-only; reads at call time (no caching). Returns per-agent rows with
+        phase timing spans suitable for Gantt visualization. Degrades to
+        {available:false} when no active workflow.
+        """
+        try:
+            payload = wave_gantt.get_wave_gantt()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            print(f"[serve_api_wave_gantt] Uncaught exception: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_wave_audit_tail(self):
+        """GET /api/wave/audit-tail — latest audit/verification outcomes.
+
+        Read-only; reads at call time (no caching). Returns recent audit backlog
+        items and ledger verdicts as a compact tail. Shows latest findings from
+        adversarial reviews and verify verdicts.
+        """
+        try:
+            payload = wave_audit_tail.get_wave_audit_tail()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            print(f"[serve_api_wave_audit_tail] Uncaught exception: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_wave_reasoning_tail(self):
+        """GET /api/wave/reasoning-tail — per-agent live reasoning/transcript summary.
+
+        Read-only; reads at call time (no caching). Returns latest transcript activity
+        summary for each live agent (redacted). Shows thinking/tool-call sequences
+        in a compact format suitable for Activity view transparency.
+        """
+        try:
+            payload = wave_reasoning_tail.get_wave_reasoning_tail()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            print(f"[serve_api_wave_reasoning_tail] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
