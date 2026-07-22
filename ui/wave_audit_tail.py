@@ -74,9 +74,18 @@ def _parse_ledger_recent_verdicts() -> List[Dict]:
 
     Looks for recent lines showing agent results: OK/FAILED/EMPTY/HUNG.
 
+    Ledger format (9-column, optionally 7-column legacy):
+      | ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |
+
+    Verdict whitelist: only OK, FAILED, EMPTY, HUNG are valid.
+    Forged/invalid verdicts are skipped.
+
     Returns:
         list: [{"agent": str, "verdict": "OK|FAILED|EMPTY|HUNG", "timestamp": iso, ...}, ...]
     """
+    # Whitelist of valid verdicts
+    VALID_VERDICTS = {"OK", "FAILED", "EMPTY", "HUNG"}
+
     try:
         ledger_file = config.LEDGER_FILE
         if not ledger_file.exists():
@@ -87,30 +96,45 @@ def _parse_ledger_recent_verdicts() -> List[Dict]:
 
         recent_verdicts = []
 
-        # Parse ledger table rows (simplified; actual format may vary)
+        # Parse ledger table rows (supports 7-column and 9-column formats)
         for line in reversed(lines[-50:]):  # Check last 50 lines
             line_stripped = line.strip()
             # Look for table rows with verdict info
-            # Pattern: | timestamp | agent | verdict | ... |
-            if '|' in line_stripped and ('OK' in line_stripped or 'FAILED' in line_stripped or
-                                        'EMPTY' in line_stripped or 'HUNG' in line_stripped):
-                parts = [p.strip() for p in line_stripped.split('|')]
-                if len(parts) >= 4:
-                    # Try to extract timestamp, agent, verdict
-                    try:
-                        timestamp_str = parts[1]
-                        agent_str = parts[2]
-                        verdict_str = parts[3]
+            # Pattern: | timestamp | agent_type | model | ... | verdict | ... |
+            if '|' not in line_stripped:
+                continue
 
-                        # Verify timestamp looks like ISO format
-                        if 'T' in timestamp_str or '-' in timestamp_str[:10]:
-                            recent_verdicts.append({
-                                "timestamp": timestamp_str,
-                                "agent": agent_str.split('-')[-1][:13],  # Short agent ID
-                                "verdict": verdict_str.upper(),
-                            })
-                    except (IndexError, ValueError):
-                        pass
+            parts = [p.strip() for p in line_stripped.split('|')]
+
+            # Accept both 7-column (9 parts) and 9-column (11 parts) formats
+            # 7 columns: ['', col1, col2, col3, col4, col5, col6, col7, '']  -> parts[7] = verdict
+            # 9 columns: ['', col1, col2, col3, col4, col5, col6, col7, col8, col9, ''] -> parts[7] = verdict
+            if len(parts) < 9:
+                continue
+
+            # Try to extract timestamp (parts[1]), agent_type (parts[2]), and verdict (parts[7])
+            try:
+                timestamp_str = parts[1]
+                agent_str = parts[2]
+                # IMPORTANT: verdict is at parts[7], not parts[3] (which is model)
+                verdict_str = parts[7].upper()
+
+                # Validate verdict against whitelist
+                if verdict_str not in VALID_VERDICTS:
+                    # Skip forged/invalid verdicts
+                    continue
+
+                # Verify timestamp looks like ISO format
+                if 'T' not in timestamp_str and '-' not in timestamp_str[:10]:
+                    continue
+
+                recent_verdicts.append({
+                    "timestamp": timestamp_str,
+                    "agent": agent_str.split('-')[-1][:13],  # Short agent ID
+                    "verdict": verdict_str,
+                })
+            except (IndexError, ValueError):
+                pass
 
         # Return most recent (first in reversed list)
         return recent_verdicts[-10:] if recent_verdicts else []
