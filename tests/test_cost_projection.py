@@ -554,6 +554,113 @@ class TestCostProjection(unittest.TestCase):
         # Clean up the directory
         alert_file_path.rmdir()
 
+    def test_90_percent_90_append_fails_70_succeeds(self):
+        """When 90% append fails but 70% append succeeds at >=90% threshold,
+        fired_alert should be True (70% alert was written).
+
+        This is a regression test for the P1 bug: if 90% append fails and 70%
+        append succeeds, the function returns fired_alert=false while an alert
+        WAS written — a dishonest Report field.
+        """
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        # 9500 tokens = 95% of 10000 ceiling
+        self._append_ledger_line(ts, 0, 9500, wave=1)
+
+        # Patch append_alert_log to fail for 90%, succeed for 70%
+        call_count = {'count': 0}
+        original_append = cost_projection.append_alert_log
+
+        def mock_append_alert_log(state_dir, alert_line):
+            call_count['count'] += 1
+            # Fail on first call (90% alert)
+            if '90%' in alert_line:
+                return False
+            # Succeed on second call (70% alert)
+            return original_append(state_dir, alert_line)
+
+        cost_projection.append_alert_log = mock_append_alert_log
+
+        try:
+            result = cost_projection.check_and_alert(
+                window_minutes=30,
+                ceiling=10000,
+                wave=1,
+                config={"limits": {"max_wave_tokens": 10000}}
+            )
+
+            # Even though 90% append failed, 70% succeeded, so fired_alert should be True
+            self.assertTrue(result['fired_alert'],
+                           f"fired_alert should be True when 70% append succeeds, "
+                           f"but got {result['fired_alert']}")
+
+            # alert_level should still be 90
+            self.assertEqual(result['alert_level'], "90")
+
+            # The 70% alert should be in the log (70% append succeeded)
+            alert_file = self.state_dir / "SECURITY-ALERTS.log"
+            if alert_file.exists():
+                content = alert_file.read_text(encoding='utf-8')
+                self.assertIn("70%", content)
+        finally:
+            cost_projection.append_alert_log = original_append
+
+    def test_90_percent_both_appends_fail(self):
+        """When both 90% and 70% appends fail at >=90% threshold,
+        fired_alert should be False.
+        """
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        # 9500 tokens = 95% of 10000 ceiling
+        self._append_ledger_line(ts, 0, 9500, wave=1)
+
+        # Patch append_alert_log to always fail
+        def mock_append_alert_log(state_dir, alert_line):
+            return False
+
+        original_append = cost_projection.append_alert_log
+        cost_projection.append_alert_log = mock_append_alert_log
+
+        try:
+            result = cost_projection.check_and_alert(
+                window_minutes=30,
+                ceiling=10000,
+                wave=1,
+                config={"limits": {"max_wave_tokens": 10000}}
+            )
+
+            # When both appends fail, fired_alert should be False
+            self.assertFalse(result['fired_alert'],
+                            f"fired_alert should be False when all appends fail, "
+                            f"but got {result['fired_alert']}")
+
+            # alert_level should still be 90 (reflects the threshold)
+            self.assertEqual(result['alert_level'], "90")
+        finally:
+            cost_projection.append_alert_log = original_append
+
+    def test_70_percent_alert_sets_fired_flag(self):
+        """When 70% alert fires (pct >= 70% but < 90%), fired_alert should be True
+        after successful append (existing behavior, regression check).
+        """
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        # 7500 tokens = 75% of 10000 ceiling (between 70 and 90)
+        self._append_ledger_line(ts, 0, 7500, wave=1)
+
+        result = cost_projection.check_and_alert(
+            window_minutes=30,
+            ceiling=10000,
+            wave=1,
+            config={"limits": {"max_wave_tokens": 10000}}
+        )
+
+        # fired_alert should be True for the 70% alert
+        self.assertTrue(result['fired_alert'],
+                       f"fired_alert should be True after 70% alert, "
+                       f"but got {result['fired_alert']}")
+        self.assertEqual(result['alert_level'], "70")
+
 
 if __name__ == '__main__':
     unittest.main()
