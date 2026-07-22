@@ -216,6 +216,38 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/secret_scan.py .
 
+  windows:
+    # Non-required check: runs Node and Python tests only
+    # Excludes: shell test suite (Git Bash variance on Windows), browser proofs (Playwright setup cost)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python test dependencies
+        run: pip install pyyaml
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Run Node.js tests
+        run: npm run test:node
+
+      - name: Run Python tests (PYTHONUTF8=1 for Windows encoding)
+        env:
+          PYTHONUTF8: '1'
+        run: npm run test:py
+
   browser-proofs:
     needs: docs-only-gate
     runs-on: ubuntu-latest
