@@ -263,18 +263,16 @@ class TestPerRepoShip(unittest.TestCase):
         """
         for repo_path in [_FIXTURE_REPO_A, _FIXTURE_REPO_B]:
             # Reset to the PINNED initial commit (not HEAD — HEAD drifts as
-            # tests commit; see setUpModule).
+            # tests commit; see setUpModule). List-form: fixtures never shell.
             subprocess.run(
-                f"git reset --hard {_INITIAL_SHAS[str(repo_path)]}",
+                ["git", "reset", "--hard", _INITIAL_SHAS[str(repo_path)]],
                 cwd=str(repo_path),
-                shell=True,
                 capture_output=True,
             )
             # Clean up any extra files
             subprocess.run(
-                "git clean -fd",
+                ["git", "clean", "-fd"],
                 cwd=str(repo_path),
-                shell=True,
                 capture_output=True,
             )
 

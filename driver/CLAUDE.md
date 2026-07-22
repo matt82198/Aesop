@@ -21,6 +21,8 @@
 - **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.).
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json,
   spot_check_frac, repair_cap, require_adversarial_review).
+- **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
+  bounded repair, adversarial review, per-repo batched git ship, recovery journal.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items.
   build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
   by capability and decides green ONLY from test exit code (not model's say-so).
@@ -30,8 +32,7 @@
 - **../tests/test_codex_driver_e2e.py** — Phase 2 end-to-end offline tests
   (FakeTransport, red-to-green verification, retry logic, ownership enforcement)
   + gated live test (AESOP_CODEX_LIVE env var).
-- **../tests/test_wave_bridge.py** — Phase 3 end-to-end offline tests proving
-  non-Claude backend drives a real RED stub to verified-GREEN offline (no API key,
+- **../tests/test_wave_bridge.py** — Phase 3 offline e2e (honest green: exit 0 only).
   no network). Tests: manifest building, routing, fail-safe, ownership enforcement,
   headline test (red stub + FakeTransport fix + test pass -> ok=True).
 

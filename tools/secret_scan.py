@@ -740,6 +740,7 @@ def main():
     all_findings = []
     fatal_findings = []
     allowed_doc_count = 0
+    allowed_redaction_count = 0
     file_count = 0
 
     if args.staged:
@@ -768,7 +769,10 @@ def main():
                 if is_fatal:
                     fatal_findings.append((label, line_num, rule, match_str))
                 else:
-                    allowed_doc_count += 1
+                    if rule == "connection_string":
+                        allowed_redaction_count += 1
+                    else:
+                        allowed_doc_count += 1
 
     elif args.range:
         # Scan the COMMITTED blob at the TIP of the range for each changed
@@ -798,7 +802,10 @@ def main():
                 if is_fatal:
                     fatal_findings.append((label, line_num, rule, match_str))
                 else:
-                    allowed_doc_count += 1
+                    if rule == "connection_string":
+                        allowed_redaction_count += 1
+                    else:
+                        allowed_doc_count += 1
 
     elif args.history:
         # History scanning mode: unaffected by the blob-scan fix above, since
@@ -833,7 +840,10 @@ def main():
                 if is_fatal:
                     fatal_findings.append((filepath, line_num, rule, match_str))
                 else:
-                    allowed_doc_count += 1
+                    if rule == "connection_string":
+                        allowed_redaction_count += 1
+                    else:
+                        allowed_doc_count += 1
 
     # Output findings
     for filepath, line_num, rule, match_str, is_fatal in all_findings:
@@ -848,14 +858,19 @@ def main():
 
     # Summary and exit
     if len(fatal_findings) == 0:
-        if allowed_doc_count == 0:
+        if allowed_doc_count == 0 and allowed_redaction_count == 0:
             if args.history:
                 print(f"CLEAN: git history scanned")
             else:
                 print(f"CLEAN: {file_count} files scanned")
         else:
             pragma_file_count = len(set(f for f, _, _, _, is_fatal in all_findings if not is_fatal))
-            print(f"CLEAN: scanned ({allowed_doc_count} allowed-doc findings in {pragma_file_count} pragma files)")
+            parts = []
+            if allowed_doc_count:
+                parts.append(f"{allowed_doc_count} allowed-doc findings in {pragma_file_count} pragma files")
+            if allowed_redaction_count:
+                parts.append(f"{allowed_redaction_count} allowed-redaction-source findings")
+            print(f"CLEAN: scanned ({'; '.join(parts)})")
         sys.exit(0)
     else:
         print(f"FOUND: {len(fatal_findings)} secret(s)")
