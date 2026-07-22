@@ -203,19 +203,93 @@ function runRepoMode() {
   return results;
 }
 
+// Classify doctor failures: expected pre-init findings vs real failures
+// Expected on fresh systems: missing config, missing hooks, missing dirs (if tarball unpack incomplete)
+// Real failures: Node version < 18, Python missing, not in git repo
+function classifyDoctorFailure(output) {
+  const lines = output.split('\n');
+  const failures = [];
+  const expectedPreInitPatterns = [
+    'aesop.config.json not found',
+    'Pre-push hook not installed',
+    'Missing:' // For required directories
+  ];
+
+  for (const line of lines) {
+    if (line.includes('✗') || line.includes('FAIL')) {
+      failures.push(line);
+    }
+  }
+
+  // Check if all failures match expected pre-init patterns
+  const allExpected = failures.every(failure =>
+    expectedPreInitPatterns.some(pattern => failure.includes(pattern))
+  );
+
+  return { allExpected, failures };
+}
+
 // Installed mode: shipped self-checks
 function runInstalledMode() {
   console.log(`\n${COLORS.BOLD}Running Shipped Self-Checks (Installed Mode)${COLORS.RESET}\n`);
 
   const results = [];
 
-  // Step 1: Doctor check
+  // Step 1: Doctor check — distinguish expected pre-init findings from real failures
   const doctorJs = path.join(PACKAGE_ROOT, 'tools', 'doctor.js');
-  results.push(runSubprocess(
-    'Preflight checks (aesop doctor)',
-    ['node', doctorJs],
-    { stdio: 'pipe', skipIfMissing: doctorJs }
-  ));
+  const doctorResult = (() => {
+    if (!fs.existsSync(doctorJs)) {
+      return {
+        label: 'Preflight checks (aesop doctor)',
+        status: 'SKIP',
+        timing: 0,
+        passed: true,
+        hint: 'doctor.js not found'
+      };
+    }
+
+    const startTime = Date.now();
+    try {
+      const result = spawnSync('node', [doctorJs], {
+        stdio: 'pipe',
+        encoding: 'utf8'
+      });
+      const timing = Date.now() - startTime;
+
+      if (result.status === 0) {
+        return { label: 'Preflight checks (aesop doctor)', status: 'PASS', timing, passed: true };
+      } else {
+        // Doctor failed; classify whether it's expected pre-init findings or real failure
+        const output = result.stdout || result.stderr || '';
+        const { allExpected } = classifyDoctorFailure(output);
+
+        if (allExpected) {
+          // Expected pre-init findings (missing config, hooks, etc.) — pass but note it
+          return {
+            label: 'Preflight checks (aesop doctor)',
+            status: 'PASS',
+            timing,
+            passed: true,
+            hint: 'Expected pre-init findings (run `aesop doctor` to initialize)'
+          };
+        } else {
+          // Real failure (e.g., Node/Python missing, not in git repo)
+          const hint = result.stderr ? result.stderr.split('\n')[0].slice(0, 80) : 'doctor check failed';
+          return { label: 'Preflight checks (aesop doctor)', status: 'FAIL', timing, passed: false, hint };
+        }
+      }
+    } catch (e) {
+      const timing = Date.now() - startTime;
+      return {
+        label: 'Preflight checks (aesop doctor)',
+        status: 'FAIL',
+        timing,
+        passed: false,
+        hint: e.message.slice(0, 80)
+      };
+    }
+  })();
+  results.push(doctorResult);
 
   // Step 2: Health score check
   const healthScoreJs = path.join(PACKAGE_ROOT, 'tools', 'health-score.js');
