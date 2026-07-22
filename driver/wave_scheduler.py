@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""Wave scheduler: single-cycle orchestration of backlog intake, manifest build, and wave dispatch.
+
+WS3a pilot: deterministic one-cycle loop that:
+  1. Intakes up to N file-disjoint todo items from tracker.json (respects ownsFiles)
+  2. Validates required fields + path normalization (P1-6, P1-2)
+  3. Builds a run_wave manifest via wave_templates conventions
+  4. Invokes driver.wave_loop.run_wave with recovery journal + git ship config
+  5. STOPS before merge: emits Report JSON for human/orchestrator review
+  6. Bounded by: HALT file check (before each phase) + cost ceiling check (P1-3, P1-4)
+  7. Double-dispatch prevention: write "in_progress" status to tracker.json (P1-5)
+
+CLI: python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute
+
+stdlib-only, ASCII-only, Windows + Linux safe.
+"""
+
+import argparse
+import json
+import os
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Set, Tuple
+
+# Add driver/ and tools/ to path
+REPO = Path(__file__).resolve().parent.parent
+DRIVER_DIR = REPO / "driver"
+TOOLS_DIR = REPO / "tools"
+if str(DRIVER_DIR) not in sys.path:
+    sys.path.insert(0, str(DRIVER_DIR))
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+# Import core modules
+from wave_loop import run_wave
+from agent_driver import AgentDriver
+from verification_policy import verification_policy
+
+# Import safety gates (P1-3: fail-closed if unavailable)
+try:
+    import halt
+except ImportError:
+    halt = None
+
+try:
+    import cost_ceiling
+except ImportError:
+    cost_ceiling = None
+
+try:
+    from common import get_state_dir
+except ImportError:
+    from tools.common import get_state_dir
+
+
+# ========================================================================
+# Path Normalization (P1-2)
+# ========================================================================
+
+def _normalize_path(path: str) -> str:
+    """Normalize a path for comparison: posixify, strip ./, casefold on Windows.
+
+    Args:
+        path: file path (potentially with backslashes, ./ prefix)
+
+    Returns:
+        normalized path (forward slashes, no leading ./, lowercased on Windows)
+    """
+    # Replace backslashes with forward slashes (posixify)
+    normalized = path.replace("\\", "/")
+
+    # Strip leading ./
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+
+    # Casefold on Windows
+    if sys.platform == "win32":
+        normalized = normalized.lower()
+
+    return normalized
+
+
+# ========================================================================
+# Tracker & Manifest Loading
+# ========================================================================
+
+def load_tracker_items(tracker_path: str) -> List[Dict[str, Any]]:
+    """Load tracker.json items.
+
+    Args:
+        tracker_path: absolute path to tracker.json
+
+    Returns:
+        list of item dicts, or [] if file missing/invalid
+    """
+    p = Path(tracker_path)
+    if not p.exists():
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Handle both {"items": [...]} and [...]
+        if isinstance(data, dict):
+            return data.get("items", [])
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def _validate_item(item: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """Validate required fields and ownsFiles for an item (P1-6).
+
+    Args:
+        item: tracker item dict
+
+    Returns:
+        (is_valid: bool, error_reason: str|None)
+    """
+    # Check ownsFiles first (P1-1: special handling for empty)
+    owns = item.get("ownsFiles")
+    if not owns or (isinstance(owns, list) and len(owns) == 0):
+        return False, "no_file_ownership"
+
+    # Ensure all entries in ownsFiles are non-empty strings
+    if isinstance(owns, list) and not all(isinstance(f, str) and f for f in owns):
+        return False, "invalid_ownsFiles_entries"
+
+    # Check other required fields
+    required = ["slug", "prompt", "testCmd"]
+    for field in required:
+        if field not in item or not item[field]:
+            return False, f"missing_or_empty_{field}"
+
+    return True, None
+
+
+def filter_todo_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter items to only status=todo, sorted by priority then creation date.
+
+    Priority order: P1 > P2 > P3
+    Within same priority: oldest first
+    """
+    todo = [item for item in items if item.get("status") == "todo"]
+
+    # Sort by priority (P1=0, P2=1, P3=2), then by createdAt
+    def priority_rank(item):
+        prio = item.get("priority", "P3")
+        rank = {"P1": 0, "P2": 1, "P3": 2}.get(prio, 2)
+        created = item.get("createdAt", "2999-01-01")
+        return (rank, created)
+
+    return sorted(todo, key=priority_rank)
+
+
+def select_disjoint_items(
+    items: List[Dict[str, Any]], max_count: int
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Greedily select up to max_count items with no file overlap (P1-1, P1-2).
+
+    Greedy algorithm: sort by (file_count, priority), pick items that don't
+    overlap ownsFiles (after normalization) with already-selected items.
+
+    Returns:
+        (selected_items, skipped_item_ids) — skipped due to overlap
+    """
+    selected = []
+    used_files: Set[str] = set()
+    skipped = []
+
+    # Sort by file count (ascending) to pack smaller items first
+    def item_sort_key(item):
+        files = item.get("ownsFiles", [])
+        prio = item.get("priority", "P3")
+        rank = {"P1": 0, "P2": 1, "P3": 2}.get(prio, 2)
+        return (len(files), rank)
+
+    items_to_process = sorted(items, key=item_sort_key)
+
+    for item in items_to_process:
+        if len(selected) >= max_count:
+            break
+
+        owns = [_normalize_path(f) for f in item.get("ownsFiles", [])]
+        owns_set = set(owns)
+
+        # Check for overlap
+        if owns_set & used_files:
+            skipped.append(item.get("id", "unknown"))
+            continue
+
+        # No overlap, select it
+        selected.append(item)
+        used_files.update(owns_set)
+
+    return selected, skipped
+
+
+def _check_halt_file(state_dir: Optional[Path] = None) -> Tuple[bool, Optional[str]]:
+    """Check if .HALT file exists (P1-3, P1-4).
+
+    Returns:
+        (is_halted: bool, reason: str|None)
+
+    Raises:
+        RuntimeError if halt module is unavailable
+    """
+    if halt is None:
+        raise RuntimeError("halt module unavailable (import failed)")
+
+    try:
+        if halt.is_halted(state_dir):
+            info = halt.get_halt_info(state_dir)
+            reason = info.get("reason", "Unknown halt") if info else "Unknown halt"
+            return True, reason
+    except Exception as e:
+        # P1-4: gate check error = halt, not pass
+        raise RuntimeError(f"halt file check failed: {e}")
+
+    return False, None
+
+
+def _check_cost_ceiling(state_dir: Optional[Path] = None) -> Tuple[bool, Optional[str]]:
+    """Check cost ceiling (P1-3, P1-4, P2a).
+
+    Returns:
+        (ceiling_exceeded: bool, reason: str|None)
+
+    Raises:
+        RuntimeError if cost_ceiling module is unavailable or check fails
+    """
+    if cost_ceiling is None:
+        raise RuntimeError("cost_ceiling module unavailable (import failed)")
+
+    try:
+        # P2a: use trip=True to enforce (fail-closed on exceeded)
+        result = cost_ceiling.check(spent=None, period="wave", state_dir=state_dir, trip=False)
+        if result.get("exceeded"):
+            return True, f"Cost ceiling exceeded: {result.get('spent', 0)}/{result.get('ceiling', 0)} tokens"
+    except Exception as e:
+        # P1-4: gate check error = halt, not pass
+        raise RuntimeError(f"cost ceiling check failed: {e}")
+
+    return False, None
+
+
+def _verify_gate_availability() -> Tuple[bool, Optional[str]]:
+    """Pre-flight gate availability check (P1-3).
+
+    Returns:
+        (gates_available: bool, error_reason: str|None)
+    """
+    if halt is None:
+        return False, "halt module unavailable"
+    if cost_ceiling is None:
+        return False, "cost_ceiling module unavailable"
+    return True, None
+
+
+# ========================================================================
+# Manifest Building
+# ========================================================================
+
+def build_wave_manifest(
+    selected_items: List[Dict[str, Any]], driver: AgentDriver
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Build a wave manifest from selected tracker items (P1-6).
+
+    Returns:
+        (manifest_dict, items_failed_build_ids)
+
+    Items that fail to build are excluded from manifest and reported separately.
+    """
+    try:
+        from wave_bridge import build_manifest_item
+    except ImportError:
+        from driver.wave_bridge import build_manifest_item
+
+    manifest_items = []
+    failed_ids = []
+
+    for item in selected_items:
+        try:
+            m_item = build_manifest_item(driver, item)
+            manifest_items.append(m_item)
+        except Exception as e:
+            # P1-6: failed builds are recorded, not selected
+            failed_ids.append(item.get("id", "unknown"))
+            print(f"[wave_scheduler] Failed to build manifest for {item.get('id')}: {e}", file=sys.stderr)
+            continue
+
+    wave_id = str(uuid.uuid4())
+    return (
+        {
+            "wave_id": wave_id,
+            "items": manifest_items,
+            "wave_description": f"WS3a pilot wave {wave_id[:8]}",
+        },
+        failed_ids,
+    )
+
+
+# ========================================================================
+# Tracker Update (P1-5)
+# ========================================================================
+
+def _write_tracker_status_atomic(
+    tracker_path: str, items_to_update: List[str], new_status: str, wave_id: str
+) -> Tuple[bool, Optional[str]]:
+    """Write item status updates to tracker.json atomically (P1-5).
+
+    Uses temp file + os.replace for atomicity.
+
+    Args:
+        tracker_path: path to tracker.json
+        items_to_update: list of item IDs to mark "in_progress"
+        new_status: new status (should be "in_progress" for pilot)
+        wave_id: wave ID to record in notes
+
+    Returns:
+        (success: bool, error_reason: str|None)
+    """
+    try:
+        # Load current tracker
+        p = Path(tracker_path)
+        if not p.exists():
+            return True, None  # No tracker to update (dry-run or first pass)
+
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Normalize to items list
+        if isinstance(data, dict):
+            items = data.get("items", [])
+        elif isinstance(data, list):
+            items = data
+        else:
+            return False, "invalid_tracker_format"
+
+        # Update items
+        items_to_update_set = set(items_to_update)
+        for item in items:
+            if item.get("id") in items_to_update_set:
+                item["status"] = new_status
+                notes = item.get("notes", "")
+                item["notes"] = f"{notes} [wave {wave_id[:8]}]".strip()
+
+        # Write atomically: temp file + replace
+        temp_path = p.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
+            if isinstance(data, dict):
+                data["items"] = items
+                json.dump(data, f, indent=2)
+            else:
+                json.dump(items, f, indent=2)
+
+        os.replace(temp_path, p)
+        return True, None
+
+    except Exception as e:
+        return False, f"Failed to update tracker: {e}"
+
+
+# ========================================================================
+# Reporting
+# ========================================================================
+
+def emit_report(
+    phase: str,
+    wave_id: str,
+    items_selected: List[str],
+    items_shipped: Optional[List[str]] = None,
+    items_failed_build: Optional[List[str]] = None,
+    items_skipped: Optional[List[Dict[str, str]]] = None,
+    branch: Optional[str] = None,
+    sha: Optional[str] = None,
+    halt_reason: Optional[str] = None,
+    ceiling_reason: Optional[str] = None,
+    error: Optional[str] = None,
+    success: bool = False,
+    merged: bool = False,
+) -> Dict[str, Any]:
+    """Emit a Report JSON structure.
+
+    Returns:
+        report dict (ready to serialize)
+    """
+    report = {
+        "phase": phase,
+        "wave_id": wave_id,
+        "items_selected": items_selected,
+        "items_shipped": items_shipped or [],
+        "merged": merged,  # P2c: explicit merged=false in pilot
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "success": success,
+    }
+
+    if items_failed_build:
+        report["items_failed_build"] = items_failed_build
+    if items_skipped:
+        report["items_skipped"] = items_skipped
+    if branch:
+        report["branch"] = branch
+    if sha:
+        report["sha"] = sha
+    if halt_reason:
+        report["halt_reason"] = halt_reason
+    if ceiling_reason:
+        report["ceiling_reason"] = ceiling_reason
+    if error:
+        report["error"] = error
+
+    return report
+
+
+# ========================================================================
+# Main Orchestrator
+# ========================================================================
+
+def run_wave_scheduler(
+    tracker_path: str,
+    max_items: int = 5,
+    dry_run: bool = False,
+    driver: Optional[AgentDriver] = None,
+    state_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Run one complete wave cycle (intake -> manifest -> dispatch -> report).
+
+    Args:
+        tracker_path: path to tracker.json
+        max_items: max items to select
+        dry_run: if True, print manifest without dispatch
+        driver: AgentDriver instance (defaults to FakeDriver for testing)
+        state_dir: state directory (defaults to ./state)
+
+    Returns:
+        Report dict (phase, wave_id, items_selected, items_shipped, etc.)
+    """
+    if state_dir is None:
+        try:
+            state_dir = get_state_dir()
+        except Exception:
+            state_dir = Path("./state")
+
+    state_dir = Path(state_dir)
+    wave_id = str(uuid.uuid4())
+
+    # ====== PHASE 0: GATE AVAILABILITY CHECK (P1-3) ======
+    gates_ok, gate_error = _verify_gate_availability()
+    if not gates_ok:
+        return emit_report(
+            phase="gate_unavailable",
+            wave_id=wave_id,
+            items_selected=[],
+            error=gate_error,
+            success=False,
+        )
+
+    # ====== PHASE 1: HALT CHECK ======
+    try:
+        is_halted, halt_reason = _check_halt_file(state_dir)
+    except RuntimeError as e:
+        return emit_report(
+            phase="halt",
+            wave_id=wave_id,
+            items_selected=[],
+            error=str(e),
+            success=False,
+        )
+
+    if is_halted:
+        return emit_report(
+            phase="halt",
+            wave_id=wave_id,
+            items_selected=[],
+            halt_reason=halt_reason,
+            success=False,
+        )
+
+    # ====== PHASE 2: INTAKE + VALIDATION (P1-6) ======
+    all_items = load_tracker_items(tracker_path)
+    todo_items = filter_todo_items(all_items)
+
+    # Separate valid from invalid items
+    valid_items = []
+    items_skipped = []
+    for item in todo_items:
+        is_valid, error_reason = _validate_item(item)
+        if is_valid:
+            valid_items.append(item)
+        else:
+            items_skipped.append({"id": item.get("id", "unknown"), "reason": error_reason})
+
+    if not valid_items:
+        return emit_report(
+            phase="intake",
+            wave_id=wave_id,
+            items_selected=[],
+            items_skipped=items_skipped if items_skipped else None,
+            success=True,
+        )
+
+    # ====== PHASE 3: DISJOINT SELECTION ======
+    selected_items, skipped_ids = select_disjoint_items(valid_items, max_items)
+
+    if not selected_items:
+        return emit_report(
+            phase="intake",
+            wave_id=wave_id,
+            items_selected=[],
+            items_skipped=items_skipped if items_skipped else None,
+            success=True,
+        )
+
+    selected_ids = [item.get("id", "unknown") for item in selected_items]
+
+    # ====== PHASE 4: MANIFEST BUILD (P1-6) ======
+    if driver is None:
+        from tests.test_wave_loop import FakeDriver
+        driver = FakeDriver()
+
+    try:
+        manifest, failed_build_ids = build_wave_manifest(selected_items, driver)
+    except Exception as e:
+        return emit_report(
+            phase="manifest",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            error=str(e),
+            success=False,
+        )
+
+    # Remove failed items from selected
+    if failed_build_ids:
+        selected_ids = [id for id in selected_ids if id not in failed_build_ids]
+
+    # ====== PHASE 5: DRY-RUN CHECK ======
+    if dry_run:
+        return emit_report(
+            phase="manifest",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            items_failed_build=failed_build_ids if failed_build_ids else None,
+            success=True,
+        )
+
+    # ====== PHASE 6: HALT CHECK (BEFORE DISPATCH) ======
+    try:
+        is_halted, halt_reason = _check_halt_file(state_dir)
+    except RuntimeError as e:
+        return emit_report(
+            phase="halt",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            error=str(e),
+            success=False,
+        )
+
+    if is_halted:
+        return emit_report(
+            phase="halt",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            halt_reason=halt_reason,
+            success=False,
+        )
+
+    # ====== PHASE 7: COST CEILING CHECK (P2b: before manifest, after halt) ======
+    try:
+        ceiling_exceeded, ceiling_reason = _check_cost_ceiling(state_dir)
+    except RuntimeError as e:
+        return emit_report(
+            phase="ceiling",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            error=str(e),
+            success=False,
+        )
+
+    if ceiling_exceeded:
+        return emit_report(
+            phase="ceiling",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            ceiling_reason=ceiling_reason,
+            success=False,
+        )
+
+    # ====== PHASE 8: RUN WAVE ======
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        wave_result = run_wave(
+            driver=driver,
+            manifest=manifest,
+            state_dir=state_dir,
+            git={"expectTopLevel": str(REPO)},
+            resume_journal=True,
+        )
+
+        # P2c: verify no merged=True, record merged=false
+        items_shipped = [
+            item.get("id", "unknown")
+            for item in wave_result.get("shipped", []) or []
+        ]
+
+        branch = wave_result.get("branch")
+        sha = wave_result.get("sha")
+
+        return emit_report(
+            phase="dispatch",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            items_shipped=items_shipped,
+            items_failed_build=failed_build_ids if failed_build_ids else None,
+            branch=branch,
+            sha=sha,
+            success=wave_result.get("success", False),
+            merged=False,  # P2c: pilot stops before merge
+        )
+
+    except Exception as e:
+        return emit_report(
+            phase="dispatch",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            error=str(e),
+            success=False,
+            merged=False,
+        )
+
+
+# ========================================================================
+# CLI
+# ========================================================================
+
+def main():
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(
+        description="Wave scheduler: intake -> manifest -> dispatch -> report"
+    )
+    parser.add_argument(
+        "--tracker",
+        required=True,
+        help="Path to tracker.json",
+    )
+    parser.add_argument(
+        "--max-items",
+        type=int,
+        default=5,
+        help="Maximum items to select (default: 5)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print manifest without dispatch",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Execute the wave (default: dry-run)",
+    )
+    parser.add_argument(
+        "--state-dir",
+        help="State directory (default: ./state)",
+    )
+
+    args = parser.parse_args()
+
+    dry_run = not args.execute
+
+    # Run scheduler
+    report = run_wave_scheduler(
+        tracker_path=args.tracker,
+        max_items=args.max_items,
+        dry_run=dry_run,
+        state_dir=Path(args.state_dir) if args.state_dir else None,
+    )
+
+    # Output report as JSON
+    print(json.dumps(report, indent=2))
+
+    # Exit with success/failure
+    sys.exit(0 if report.get("success") else 1)
+
+
+if __name__ == "__main__":
+    main()

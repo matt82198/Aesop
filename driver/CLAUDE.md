@@ -138,11 +138,46 @@ items, making verification tier driven by backend capability, not config.
 stub, applies a fix, runs the test, and returns ok=True ONLY because the test passed
 (exit 0). All offline, no API key, no network.
 
+## Wave Scheduler (WS3a Pilot)
+
+**wave_scheduler.py**: single-cycle orchestration of backlog intake, manifest building, and wave dispatch.
+
+**Algorithm**: (1) Intake up to N file-disjoint todo items from tracker.json (greedy selection by file count + priority). (2) Build manifest via build_manifest_item() enrichment (model + verificationTier from driver.probe). (3) Check HALT file before each phase (fail-closed). (4) Check cost ceiling before dispatch (fail-closed). (5) Call run_wave() with recovery journal + git ship config. (6) STOP before merge: emit Report JSON (items selected, wave result, branch/sha) for human/orchestrator review. (7) Emit checkpoint to STATE.md + BUILDLOG.md.
+
+**CLI**: `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute`
+
+**Report schema**: {phase, wave_id, items_selected, items_shipped, branch, sha, halt_reason?, ceiling_reason?, error?, timestamp, success}
+
+**Phase 1 scope (wave-27 pilot)**: scaffold + disjoint filter + one run_wave call + manual merge. Proves: (a) disjoint filter rejects overlaps, (b) run_wave executes 3+ items in parallel (all verified green), (c) ci_merge_wait blocks correctly until CI green, (d) checkpoint STATE/BUILDLOG written atomically, (e) manual review before wave-28 loop proceeds unattended.
+
+**Mandatory gates** (before each phase):
+- HALT file check (tools/halt.py conventions: .HALT exists → reason is JSON → parsed on read).
+- Cost ceiling check (tools/cost_ceiling.py conventions: check() returns {exceeded, spent, ceiling, margin}; fail-closed).
+
+**Test coverage** (tests/test_wave_scheduler.py):
+- Disjoint selection: overlapping items rejected, only first selected.
+- Dry-run: produces valid manifest without dispatch.
+- HALT file: aborts before dispatch with honest reason.
+- Ceiling exceeded: aborts with honest reason.
+- Happy path: produces Report with wave result + branch/sha (requires FakeDriver + fixture tracker.json).
+- Empty tracker: clean EMPTY report (inputs always produce outputs).
+- Module-tmpdir guard (setUpModule/tearDownModule, no cwd pollution).
+- All test classes subclass unittest.TestCase (AST scanner gate).
+
+**Dependencies**: wave_loop.run_wave, agent_driver.AgentDriver, wave_bridge.build_manifest_item, verification_policy.verification_policy, halt, cost_ceiling (optional safety gates).
+
+**Invariants**: 
+- stdlib-only (no external provider SDKs), ASCII-only, Windows + Linux safe (sys.executable for subprocesses, no shell=True with quotes).
+- Manifest items carry resolved policy knobs (repairCap, spotCheckFrac, requireAdversarialReview, validateAllJson) from verification_policy(driver.probe_capabilities()) — template cannot recompute/drift.
+- Fail-safe: HALT + ceiling gates are fail-closed (absence of either gate file = no abort, present = abort).
+- Honest Report: every phase returns a result, never hangs or silently fails.
+
 ## Status
 
 - **Phase 1**: shipped. Interface + Claude reference adapter + contract tests.
 - **Phase 2**: shipped. Codex OpenAI Chat Completions implementation. Offline tests GREEN.
 - **Phase 3**: shipped. Wave bridge: driver → manifest, orchestrator-side dispatch.
   Proves non-Claude backends drive items end-to-end with honest green (test exit 0 only).
+- **Wave Scheduler (WS3a)**: shipped. Single-cycle orchestration: intake → manifest → dispatch → report (manual merge). Pilot gate: disjoint filter, HALT/ceiling, run_wave integration.
 - **Next**: Refactor wave-flat-dispatch onto the driver (Phase 1 handoff).
 - **Future**: Open-model adapter (Tier-4 backend).
