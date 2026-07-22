@@ -252,7 +252,7 @@ check_branch_policy() {
   # Finding 3: Handle tty mode and final line without trailing newline
   if [ -t 0 ]; then
     # Running interactively on a tty; skip stdin processing with note
-    # but still check current branch as fallback
+    # but still check current branch as fallback. Note: main() blocks tty before this can matter.
     :
   else
     # Not a tty; read stdin normally
@@ -323,10 +323,10 @@ get_commit_range() {
   local saw_any_tuple=0
 
   if [ -t 0 ]; then
-    # Running interactively on a tty; no stdin to parse → nothing to scan → allow (rc=3)
-    # This is consistent with check_branch_policy's tty handling (treats tty as benign).
-    # A real `git push` ALWAYS pipes stdin; tty means human ran hook directly.
-    return 3
+    # Running interactively on a tty; no stdin to parse → fail-closed (direct hook invocation)
+    # main() blocks tty before this is reached via the normal flow; nearly dead code but tests exercise it
+    printf 'Error: No stdin on tty; cannot parse pre-push ref tuples (interactive hook invocation)\n' >&2
+    return 1
   fi
 
   local saw_delete=0
@@ -1040,15 +1040,23 @@ main() {
     exit $?
   fi
 
+  # Option B: Fail-closed TTY semantics — block interactive invocation before stdin capture.
+  # git pre-push ALWAYS pipes stdin; tty means human ran hook directly (not via git push).
+  # Refusing to skip security checks in interactive mode closes the window where empty stdin
+  # could be misinterpreted as a legitimate up-to-date push.
+  if [ -t 0 ]; then
+    printf 'Error: interactive invocation: this hook runs under git push; refusing to skip security checks (fail-closed)\n' >&2
+    log_block "interactive_invocation_blocked"
+    exit 1
+  fi
+
   # git pre-push provides ref info on stdin, and BOTH check_branch_policy and
   # check_secret_scan (via get_commit_range) need to read every ref tuple.
   # Capture the real pipe ONCE here and hand each consumer its own here-string
   # copy -- reading a pipe twice on the same fd starves the second reader
   # (once check_branch_policy drains it, get_commit_range would see nothing
   # but EOF and fail-closed on every push). A here-string preserves each
-  # function's existing tty-vs-pipe read semantics unchanged (an interactive
-  # tty yields no captured content, which both functions already treat the
-  # same way as "no ref tuples" via their existing fallback/fail-closed paths).
+  # function's existing tty-vs-pipe read semantics unchanged.
   local prepush_stdin=""
   if [ ! -t 0 ]; then
     prepush_stdin=$(cat)

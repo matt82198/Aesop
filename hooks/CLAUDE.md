@@ -13,9 +13,10 @@
 Runs on `git push` via `.git/hooks/pre-push` (symlink on Unix/macOS/Git Bash; copy on Windows).
 
 **Checks & Exit Contract**:
-1. `check_branch_policy()` — blocks direct pushes to main/master; exit 1 on violation
-2. `check_secret_scan()` — runs `tools/secret_scan.py --staged`; exit 1 on failure
-3. Both trigger `log_block()` to append audit record (JSON-lines) before exit
+1. `main()` TTY guard — rejects interactive hook invocation (tty stdin) with exit 1 before any checks (fail-closed); logs `interactive_invocation_blocked`. Real `git push` always pipes stdin; tty means human ran hook directly.
+2. `check_branch_policy()` — blocks direct pushes to main/master; exit 1 on violation
+3. `check_secret_scan()` — runs `tools/secret_scan.py --staged`; exit 1 on failure
+4. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
 
 **Audit Ledger**: Append-only path: `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log` (git-ignored). 
 Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure"|"push_to_protected_branch","user":"alice"}`
