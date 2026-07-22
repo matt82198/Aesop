@@ -20,6 +20,7 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 No dependencies: no openai, no jsonschema, no pytest.
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -562,6 +563,263 @@ class TestCodexDriverLive(unittest.TestCase):
                 cwd=tmpdir,
             )
             self.assertEqual(after.exit_code, 0)
+
+
+class TestCodexDriverDigestIntegrity(unittest.TestCase):
+    """Verify SHA-256 digest field presence and correctness in file objects."""
+
+    def test_digest_present_in_transported_payload(self):
+        """Capture transport payload and verify each file has sha256 digest."""
+        # Create a transport that captures the payload.
+        captured_payload = {}
+
+        class CaptureTransport:
+            def __call__(self, payload):
+                captured_payload["payload"] = payload
+                # Return a valid response.
+                return make_response({
+                    "files": [{"path": "test.py", "contents": "fixed"}],
+                    "summary": "Fixed",
+                    "done": True,
+                })
+
+        driver = CodexDriver(transport=CaptureTransport())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a test file with known content.
+            test_file = Path(tmpdir) / "test.py"
+            test_content = "print('hello')\n"
+            test_file.write_text(test_content)
+
+            # Dispatch.
+            request = WorkerRequest(
+                prompt="Fix test.py",
+                owned_files=("test.py",),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+            self.assertTrue(result.ok, f"Dispatch failed: {result.error}")
+
+            # Extract payload and verify structure.
+            payload = captured_payload.get("payload", {})
+            self.assertIn("messages", payload)
+
+            # Find user message which contains file objects.
+            user_msg = None
+            for msg in payload.get("messages", []):
+                if msg.get("role") == "user":
+                    user_msg = msg.get("content", "")
+                    break
+
+            self.assertIsNotNone(user_msg)
+
+            # Verify the user message contains JSON file objects with sha256.
+            # The file object should be in JSON format within the message.
+            self.assertIn("sha256", user_msg, "sha256 field not found in user message")
+            self.assertIn("test.py", user_msg)
+
+    def test_digest_value_is_correct_sha256(self):
+        """Verify the sha256 digest matches the actual content hash."""
+        # Capture transport to inspect the payload.
+        captured_payload = {}
+
+        class CaptureTransport:
+            def __call__(self, payload):
+                captured_payload["payload"] = payload
+                return make_response({
+                    "files": [],
+                    "summary": "Checked",
+                    "done": True,
+                })
+
+        driver = CodexDriver(transport=CaptureTransport())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a test file with known content.
+            test_file = Path(tmpdir) / "integrity_test.py"
+            test_content = "def func():\n    return 42\n"
+            test_file.write_text(test_content)
+
+            # Calculate expected digest.
+            expected_digest = hashlib.sha256(test_content.encode("utf-8")).hexdigest()
+
+            # Dispatch.
+            request = WorkerRequest(
+                prompt="Check integrity",
+                owned_files=("integrity_test.py",),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+            self.assertTrue(result.ok)
+
+            # Extract user message.
+            payload = captured_payload.get("payload", {})
+            user_msg = None
+            for msg in payload.get("messages", []):
+                if msg.get("role") == "user":
+                    user_msg = msg.get("content", "")
+                    break
+
+            self.assertIsNotNone(user_msg)
+            # Verify the expected digest appears in the message.
+            self.assertIn(expected_digest, user_msg,
+                          f"Expected digest {expected_digest} not found in payload")
+
+    def test_byte_accounting_includes_digest_field(self):
+        """Verify total_bytes accounting includes the sha256 field size."""
+        # Create a transport that records how many times it's called.
+        call_count = {"count": 0}
+
+        class CountingTransport:
+            def __call__(self, payload):
+                call_count["count"] += 1
+                return make_response({
+                    "files": [],
+                    "summary": "",
+                    "done": False,
+                })
+
+        # Budget set just high enough to include file + digest, but low enough
+        # to fail if digest is not counted.
+        driver = CodexDriver(transport=CountingTransport(), max_owned_bytes=120)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a file with known size.
+            # Content is 50 bytes raw.
+            # JSON structure: {"path":"file.py","contents":"...", "sha256":"..."}
+            # sha256 hex is 64 chars, so digest line adds ~66 bytes.
+            # Total should exceed 120 if properly accounted.
+            test_file = Path(tmpdir) / "file.py"
+            test_content = "x" * 50  # 50 bytes
+            test_file.write_text(test_content)
+
+            request = WorkerRequest(
+                prompt="Test accounting",
+                owned_files=("file.py",),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+
+            # With digest accounted for, this should exceed budget and fail pre-dispatch.
+            # If digest is not accounted for, it would attempt transport and succeed.
+            self.assertFalse(result.ok, "Should fail due to budget with digest accounted")
+            self.assertIn("exceed context budget", result.error)
+            # Transport should never have been called (fail-safe check).
+            self.assertEqual(call_count["count"], 0, "Transport was called despite budget failure")
+
+
+class TestCodexDriverRetryNudge(unittest.TestCase):
+    """Verify retry-on-malformed-JSON includes a deterministic nudge line."""
+
+    def test_retry_includes_nudge_line_in_second_request(self):
+        """Malformed first response -> retry adds nudge line to user message."""
+        # Capture transport to inspect both requests (deep copy to avoid mutation issues).
+        import copy
+        captured_payloads = []
+
+        class CaptureAllTransport:
+            def __call__(self, payload):
+                # Deep copy to preserve state at time of call (payload is mutated in-place).
+                captured_payloads.append(copy.deepcopy(payload))
+                if len(captured_payloads) == 1:
+                    # First call: malformed JSON.
+                    return {
+                        "choices": [{"message": {"content": "not json"}}],
+                        "usage": {"total_tokens": 10},
+                    }
+                else:
+                    # Second call: valid JSON.
+                    return make_response({
+                        "files": [{"path": "test.py", "contents": "fixed"}],
+                        "summary": "Fixed",
+                        "done": True,
+                    })
+
+        driver = CodexDriver(transport=CaptureAllTransport(), max_retries=2)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir).joinpath("test.py").write_text("broken")
+
+            request = WorkerRequest(
+                prompt="Fix it",
+                owned_files=("test.py",),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+            self.assertTrue(result.ok, "Should succeed on retry")
+
+            # Verify two requests were made.
+            self.assertEqual(len(captured_payloads), 2, "Should make two requests (initial + retry)")
+
+            # Extract messages from both payloads.
+            msgs1 = captured_payloads[0].get("messages", [])
+            msgs2 = captured_payloads[1].get("messages", [])
+
+            # Second payload should have more messages (original + error + nudge).
+            self.assertGreater(len(msgs2), len(msgs1),
+                               f"Second payload should have additional error/retry messages. "
+                               f"First: {len(msgs1)}, Second: {len(msgs2)}")
+
+            # Find the last user message in the second request (should be the nudge).
+            last_user_msg = None
+            for msg in msgs2:
+                if msg.get("role") == "user":
+                    last_user_msg = msg.get("content", "")
+
+            self.assertIsNotNone(last_user_msg, "Second request should have a user message")
+            # Verify the nudge line is present.
+            self.assertIn("Previous response was not valid JSON", last_user_msg,
+                          f"Retry nudge line not found. Last user msg: {last_user_msg}")
+            self.assertIn("return ONLY the JSON object", last_user_msg,
+                          "Retry instruction not complete")
+
+    def test_retry_nudge_is_deterministic(self):
+        """Verify retry nudge line is deterministic (no sampling change)."""
+        # Capture two separate retry sequences and verify the nudge is identical.
+        captured_payloads1 = []
+        captured_payloads2 = []
+
+        class CaptureTransport1:
+            def __call__(self, payload):
+                captured_payloads1.append(payload)
+                if len(captured_payloads1) == 1:
+                    return {"choices": [{"message": {"content": "bad"}}], "usage": {"total_tokens": 0}}
+                return make_response({"files": [], "summary": "", "done": False})
+
+        class CaptureTransport2:
+            def __call__(self, payload):
+                captured_payloads2.append(payload)
+                if len(captured_payloads2) == 1:
+                    return {"choices": [{"message": {"content": "bad"}}], "usage": {"total_tokens": 0}}
+                return make_response({"files": [], "summary": "", "done": False})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir).joinpath("test.py").write_text("test")
+
+            # First retry sequence.
+            driver1 = CodexDriver(transport=CaptureTransport1(), max_retries=1)
+            request = WorkerRequest(prompt="Fix", owned_files=("test.py",), workdir=tmpdir)
+            driver1.dispatch_worker(request)
+
+            # Second retry sequence.
+            driver2 = CodexDriver(transport=CaptureTransport2(), max_retries=1)
+            driver2.dispatch_worker(request)
+
+            # Extract nudge from both sequences.
+            def extract_nudge(payloads):
+                if len(payloads) < 2:
+                    return None
+                for msg in payloads[1].get("messages", []):
+                    if msg.get("role") == "user" and "Previous response" in msg.get("content", ""):
+                        return msg.get("content", "")
+                return None
+
+            nudge1 = extract_nudge(captured_payloads1)
+            nudge2 = extract_nudge(captured_payloads2)
+
+            self.assertIsNotNone(nudge1, "First retry nudge not found")
+            self.assertIsNotNone(nudge2, "Second retry nudge not found")
+            self.assertEqual(nudge1, nudge2, "Retry nudges should be identical (deterministic)")
 
 
 class TestCodexDriverPromptInjection(unittest.TestCase):

@@ -106,6 +106,10 @@ acquire_lock() {
 release_lock() {
   local lock_dir="$1"
   rm -rf "$lock_dir" 2>/dev/null || true
+  if [ -d "$lock_dir" ]; then
+    ensure_log_dir
+    log_heal "WARN: release_lock: failed to remove lock dir: $lock_dir (may be in-use on Windows)"
+  fi
 }
 
 is_heartbeat_stale() {

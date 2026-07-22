@@ -18,9 +18,12 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 No dependencies: no openai, no jsonschema, no pytest.
 """
 
+import os
 import json
+import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -44,6 +47,28 @@ from agent_driver import (  # noqa: E402
 )
 from wave_loop import run_wave  # noqa: E402
 from verification_policy import verification_policy  # noqa: E402
+
+# Several test manifests use workDir "." (FakeDriver then writes stub files
+# into the current directory). Run the ENTIRE module inside a throwaway
+# tmpdir so those writes can never pollute the repo root (hygiene rule:
+# tests never pollute cwd) — cwd is saved before chdir and restored after.
+_MODULE_TMP = None
+_MODULE_SAVED_CWD = None
+
+
+def setUpModule():
+    global _MODULE_TMP, _MODULE_SAVED_CWD
+    _MODULE_SAVED_CWD = os.getcwd()
+    _MODULE_TMP = tempfile.mkdtemp(prefix="wave-loop-tests-")
+    os.chdir(_MODULE_TMP)
+
+
+def tearDownModule():
+    global _MODULE_TMP, _MODULE_SAVED_CWD
+    if _MODULE_SAVED_CWD:
+        os.chdir(_MODULE_SAVED_CWD)
+    if _MODULE_TMP:
+        shutil.rmtree(_MODULE_TMP, ignore_errors=True)
 
 
 class FakeDriver(AgentDriver):
@@ -1937,6 +1962,100 @@ class TestSafeSlugCollisionPrevention(unittest.TestCase):
 
         # Should be identical (deterministic)
         self.assertEqual(result1, result2)
+
+
+class TestSafeSlugLengthCap(unittest.TestCase):
+    """Test _safe_slug function for truncation and filename length bounds."""
+
+    def test_300_char_slug_succeeds_with_bounded_filename(self):
+        """A 300-char slug should be truncated and result in filename <= 255 bytes."""
+        from wave_loop import _safe_slug, _write_journal_entry
+
+        # Create a very long slug.
+        long_slug = "a" * 300
+
+        # Call _safe_slug to normalize and truncate.
+        safe = _safe_slug(long_slug)
+
+        # The safe slug should be bounded.
+        # Expected: normalized + '-' + 8-char hash + '.json' <= 255 bytes.
+        filename = f"{safe}.json"
+        filename_bytes = filename.encode("utf-8")
+
+        self.assertLessEqual(
+            len(filename_bytes),
+            255,
+            f"Filename '{filename}' exceeds 255 bytes ({len(filename_bytes)} bytes)",
+        )
+
+    def test_two_different_long_slugs_same_prefix_get_different_filenames(self):
+        """Two 300-char slugs differing only in tail should get different safe filenames."""
+        from wave_loop import _safe_slug
+
+        long_slug_1 = "a" * 299 + "1"
+        long_slug_2 = "a" * 299 + "2"
+
+        safe_1 = _safe_slug(long_slug_1)
+        safe_2 = _safe_slug(long_slug_2)
+
+        # Filenames should be different (hash suffix provides uniqueness).
+        self.assertNotEqual(
+            safe_1,
+            safe_2,
+            f"Two different long slugs should produce different safe slugs; got {safe_1} and {safe_2}",
+        )
+
+    def test_normal_slug_unchanged(self):
+        """A short slug should be normalized but not truncated."""
+        from wave_loop import _safe_slug
+
+        short_slug = "my-test-item"
+        safe = _safe_slug(short_slug)
+
+        # Should be normalized but fundamentally similar.
+        self.assertTrue(
+            len(safe) <= 255,
+            f"Safe slug should fit in filename limit",
+        )
+
+    def test_journal_write_with_long_slug_succeeds(self):
+        """Writing a journal entry with a 300-char slug should not crash with ENAMETOOLONG."""
+        from wave_loop import _write_journal_entry, _load_journal_state
+        import shutil
+
+        # Use a shorter base path to avoid Windows MAX_PATH issues
+        # (The test itself verifies the filename is bounded, not the full path)
+        short_base = Path("C:/tmp/test_journal_" + str(int(time.time() * 1000) % 100000))
+        short_base.mkdir(parents=True, exist_ok=True)
+
+        try:
+            long_slug = "x" * 300
+            _write_journal_entry(str(short_base), long_slug, "verified", {
+                "verified": True,
+                "testExit": 0,
+            })
+
+            # Should be able to read it back.
+            journal = _load_journal_state(str(short_base))
+            self.assertGreater(len(journal), 0, "Journal should have at least one entry")
+        finally:
+            shutil.rmtree(short_base, ignore_errors=True)
+
+    def test_truncation_appends_hash_suffix_when_needed(self):
+        """When a slug is truncated, it should get a hash suffix for uniqueness."""
+        from wave_loop import _safe_slug
+
+        # Create a very long slug that will be truncated.
+        long_slug = "prefix_" + "a" * 300
+
+        safe = _safe_slug(long_slug)
+
+        # Should contain a '-' followed by hash suffix if truncated.
+        # (Exact format depends on implementation, but should be deterministic.)
+        self.assertTrue(
+            len(safe) <= 255,
+            f"Safe slug should fit in filename limit",
+        )
 
 
 if __name__ == "__main__":

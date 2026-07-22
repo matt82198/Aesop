@@ -267,7 +267,12 @@ printf '\n=== Test 7 (existing): Secret scan unavailable fails-CLOSED ===\n'
   export AESOP_ROOT="$TEST_ROOT/aesop_no_scanner"
   mkdir -p "$AESOP_ROOT/state"
 
-  stderr_output=$( { check_secret_scan; } 2>&1 1>/dev/null )
+  # Provide a valid 4-field tuple to get past empty-stdin check
+  # This tests that when scanner is missing, it fails-closed (not when stdin is empty)
+  # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+  stdin_input="refs/heads/feature/test abc123def456 refs/heads/feature/test 0000000000000000000000000000000000000000"
+
+  stderr_output=$( { printf '%s\n' "$stdin_input" | check_secret_scan; } 2>&1 1>/dev/null )
   exit_code=$?
 
   if [ "$exit_code" -eq 0 ]; then
@@ -509,7 +514,7 @@ printf '\n=== P1 Bug1: verify_audit_log holds the write lock (no false truncatio
 )
 if [ $? -eq 0 ]; then test_passed=$((test_passed + 1)); else test_failed=$((test_failed + 1)); fi
 
-printf '\n=== SECURITY P1: check_secret_scan fails CLOSED on malformed stdin ===\n'
+printf '\n=== SECURITY P1: check_secret_scan handles empty vs malformed stdin (P1 fix) ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_malformed_stdin"
   mkdir -p "$AESOP_ROOT/state"
@@ -526,12 +531,28 @@ sys.exit(1)
 SCANNER
   chmod +x "$AESOP_ROOT/tools/secret_scan.py"
 
-  # Test 1: Empty stdin (malformed)
+  # Test 1: Empty stdin (P1 fix: now ALLOWED with log_event, not fail-closed)
   stderr_output=$( { printf '' | check_secret_scan; } 2>&1 1>/dev/null )
   exit_code=$?
 
+  if [ "$exit_code" -ne 0 ]; then
+    printf 'FAIL: Empty stdin should be allowed (rc 0) with P1 fix, got rc %d\n' "$exit_code"
+    exit 1
+  fi
+
+  # Verify log_event was created
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created for empty stdin\n'
+    exit 1
+  fi
+
+  # Test 2: Garbage stdin with insufficient tokens (still fails-closed)
+  rm "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null
+  stderr_output=$( { printf 'garbage garbage\n' | check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
   if [ "$exit_code" -eq 0 ]; then
-    printf 'FAIL: check_secret_scan should return 1 (nonzero) when stdin is empty (fail-closed)\n'
+    printf 'FAIL: check_secret_scan should return 1 on unparseable stdin (fail-closed)\n'
     exit 1
   fi
 
@@ -542,16 +563,7 @@ SCANNER
     exit 1
   fi
 
-  # Test 2: Garbage stdin with insufficient tokens (will not parse as valid ref)
-  stderr_output=$( { printf 'garbage garbage\n' | check_secret_scan; } 2>&1 1>/dev/null )
-  exit_code=$?
-
-  if [ "$exit_code" -eq 0 ]; then
-    printf 'FAIL: check_secret_scan should return 1 on unparseable stdin (fail-closed)\n'
-    exit 1
-  fi
-
-  printf 'PASS: check_secret_scan correctly blocks push when stdin is malformed\n'
+  printf 'PASS: Empty stdin allowed with log_event; malformed stdin fails-closed\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
@@ -662,6 +674,114 @@ printf '\n=== Test 21: deleting refs/heads/main itself is still BLOCKED ===\n'
     fi
   } || exit 1
   printf 'PASS: deleting refs/heads/main is blocked\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== P1 BUG FIX: Empty stdin (no tuples) → allowed with log_event ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_empty_stdin"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy scanner script (should not be called for empty stdin)
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(1)  # Fail if called (it shouldn't be for empty stdin)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  # Test 1: truly empty stdin (no lines at all)
+  stderr_output=$( { printf '' | check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -ne 0 ]; then
+    printf 'FAIL: Empty stdin should be allowed (rc 0), got rc %d\n' "$exit_code"
+    exit 1
+  fi
+
+  # Should have log_event "secret_scan_skipped_empty_stdin" in audit log
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created for empty stdin\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+  if ! printf '%s' "$audit_line" | grep -q 'secret_scan_skipped_empty_stdin'; then
+    printf 'FAIL: Audit log missing "secret_scan_skipped_empty_stdin" event\n'
+    printf 'Audit entry: %s\n' "$audit_line"
+    exit 1
+  fi
+
+  if ! printf '%s' "$audit_line" | grep -q '"event":"secret_scan_event"'; then
+    # log_event uses "event" field (not "push_blocked"); verify it's valid JSON
+    if ! printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
+      printf 'FAIL: Audit log entry is not valid JSON\n'
+      exit 1
+    fi
+  fi
+
+  printf 'PASS: Empty stdin allowed with log_event "secret_scan_skipped_empty_stdin"\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== P1 BUG FIX: Malformed 3-field tuple (missing remote_sha) → blocked ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_malformed_3field"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy scanner script
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(0)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  # Test: malformed 3-field line (missing remote_sha)
+  # Format should be: <local-ref> <local-sha> <remote-ref> <remote-sha>
+  # We'll provide: <local-ref> <local-sha> <remote-ref> (only 3 fields)
+  stderr_output=$( { printf 'refs/heads/feature/test abc123def456 refs/heads/feature/test\n' | check_secret_scan; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: Malformed 3-field tuple should fail-closed (rc nonzero), got rc 0\n'
+    exit 1
+  fi
+
+  # Should log a block event
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created for malformed stdin\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+  if ! printf '%s' "$audit_line" | grep -q 'secret_scan_stdin_parse_failed'; then
+    printf 'FAIL: Audit log missing "secret_scan_stdin_parse_failed" reason\n'
+    exit 1
+  fi
+
+  # Verify audit log is valid JSON
+  if ! printf '%s' "$audit_line" | python3 -m json.tool >/dev/null 2>&1; then
+    printf 'FAIL: Audit log entry is not valid JSON\n'
+    exit 1
+  fi
+
+  # Verify stderr message mentions malformed
+  if ! printf '%s' "$stderr_output" | grep -qi 'malformed'; then
+    printf 'FAIL: stderr does not mention "malformed"\n'
+    printf 'stderr was: %s\n' "$stderr_output"
+    exit 1
+  fi
+
+  printf 'PASS: Malformed 3-field tuple blocked with audit log\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

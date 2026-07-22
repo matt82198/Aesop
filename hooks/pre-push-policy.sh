@@ -313,10 +313,14 @@ get_commit_range() {
   # FIRST tuple, so a multi-ref push only ever scanned the first branch's
   # range and every other ref in the same push silently bypassed the secret
   # scan. Returns 0 if at least one range was emitted, 1 if none could be
-  # parsed (tty, empty stdin, or no valid tuple) -- single-ref callers see
-  # exactly the same one-line output as before.
+  # parsed (malformed/invalid tuples), 2 if delete-only (tuples present but
+  # all deletions), 3 if truly empty stdin (no tuples at all, e.g. up-to-date
+  # push) -- single-ref callers see exactly the same one-line output as before.
+  # P1 bug fix: distinguish empty stdin (rc=3, allow) from malformed stdin
+  # (rc=1, fail-closed).
   local local_ref local_sha remote_ref remote_sha
   local found=0
+  local saw_any_tuple=0
 
   if [ -t 0 ]; then
     # Running interactively on a tty; no stdin to parse
@@ -325,10 +329,21 @@ get_commit_range() {
 
   local saw_delete=0
   while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
-    # Skip empty lines
-    if [ -z "$remote_ref" ]; then
+    # Skip truly empty lines (no fields at all)
+    # A line with any content (even if malformed) will have at least one non-empty field
+    if [ -z "$local_ref" ] && [ -z "$local_sha" ] && [ -z "$remote_ref" ] && [ -z "$remote_sha" ]; then
       continue
     fi
+
+    # Harden tuple parsing: require all 4 fields present (P1 fix)
+    # If we have some content but not all 4 fields, it's malformed
+    if [ -z "$remote_ref" ] || [ -z "$remote_sha" ]; then
+      # Malformed line: has fewer than 4 fields
+      printf 'Error: Malformed pre-push stdin: insufficient fields (expected 4, got fewer) in line: %s %s %s %s\n' "$local_ref" "$local_sha" "$remote_ref" "$remote_sha" >&2
+      return 1
+    fi
+
+    saw_any_tuple=1
 
     # Delete refspec (local sha all zeros): no content is pushed, so there is
     # no commit range to scan. Skipped here; if the WHOLE push is deletes we
@@ -362,6 +377,11 @@ get_commit_range() {
     # Delete-only push: nothing to scan (distinct from unparseable stdin)
     return 2
   fi
+  if [ "$saw_any_tuple" -eq 0 ]; then
+    # Truly empty stdin: no tuples at all (e.g., up-to-date push) (P1 fix: rc=3)
+    return 3
+  fi
+  # Malformed stdin: tuples present but none were valid
   return 1
 }
 
@@ -383,6 +403,8 @@ check_secret_scan() {
   # invocation) yields one range per line from get_commit_range(); scan EVERY
   # one and fail if ANY range is dirty (P3 wave-25 fix: previously only the
   # first ref tuple's range was ever scanned).
+  # P1 bug fix: distinguish empty stdin (rc=3, allow) from malformed stdin
+  # (rc=1, fail-closed).
   local commit_ranges
   commit_ranges=$(get_commit_range)
   local parse_exit_code=$?
@@ -392,6 +414,13 @@ check_secret_scan() {
     # (rc=2 is only emitted when tuples WERE parsed and all were deletions);
     # unparseable/empty stdin still fails closed below.
     log_event "secret_scan_skipped_delete_only_push"
+    return 0
+  fi
+
+  if [ $parse_exit_code -eq 3 ]; then
+    # Empty stdin: no tuples at all (e.g., up-to-date push), nothing to scan (P1 fix: rc=3)
+    # This is distinct from malformed stdin (rc=1) and is explicitly allowed
+    log_event "secret_scan_skipped_empty_stdin"
     return 0
   fi
 
@@ -406,10 +435,11 @@ check_secret_scan() {
   fi
 
   if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
-    # Malformed stdin or unable to parse: fail-CLOSED (security P1 fix)
+    # Malformed stdin: fail-CLOSED (security P1 fix)
     # Only fail-open for missing scanner tool, not for malformed input
+    # rc=1 is returned for malformed tuples (e.g., 3-field lines), which must fail-closed
     log_block "secret_scan_stdin_parse_failed"
-    printf 'Error: Could not parse pre-push stdin for commit range (malformed or empty)\n' >&2
+    printf 'Error: Could not parse pre-push stdin for commit range (malformed tuple)\n' >&2
     return 1
   fi
 
@@ -677,8 +707,13 @@ run_test_mode() {
     export AESOP_ROOT="$tmpdir/aesop_no_scanner"
     mkdir -p "$AESOP_ROOT/state"
 
+    # Provide a valid 4-field tuple to test the scanner-missing condition
+    # (empty stdin would now skip the scan with log_event "secret_scan_skipped_empty_stdin")
+    # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+    stdin_input="refs/heads/feature/test abc123def456 refs/heads/feature/test 0000000000000000000000000000000000000000"
+
     # Capture stderr to verify warning is printed
-    stderr_output=$( { check_secret_scan; } 2>&1 1>/dev/null )
+    stderr_output=$( { printf '%s\n' "$stdin_input" | check_secret_scan; } 2>&1 1>/dev/null )
     exit_code=$?
 
     # Should return 1 (fail-closed, security-safe default)
