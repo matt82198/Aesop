@@ -62,8 +62,9 @@ def build_root_with_agents(num_agents=3):
     root = Path(tempfile.mkdtemp(prefix="aesop-verify-dispatch-panel-"))
     (root / "state").mkdir(exist_ok=True)
 
-    # Create agent transcripts
-    transcripts_root = root / "transcripts" / "aesop" / "memory"
+    # Create agent transcripts in real Claude Code layout
+    # Real structure: {project}/subagents/agent-*.jsonl (not memory/)
+    transcripts_root = root / "transcripts" / "aesop" / "subagents"
     transcripts_root.mkdir(parents=True)
 
     # Create fixture agents
