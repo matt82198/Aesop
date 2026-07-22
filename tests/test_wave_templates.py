@@ -226,5 +226,158 @@ class TestWaveTemplatesIntegration(unittest.TestCase):
         )
 
 
+class TestWaveTemplatesValidateSubcommand(unittest.TestCase):
+    """Test the validate subcommand functionality."""
+
+    def test_validate_valid_preset(self):
+        """Validate should pass for a valid preset."""
+        preset = load_preset("saas")
+        # Should not raise for valid preset
+        validate_manifest(preset)
+
+    def test_validate_all_presets_pass(self):
+        """All shipped presets should validate clean."""
+        presets_to_test = ["saas", "data", "library"]
+        for preset_name in presets_to_test:
+            preset = load_preset(preset_name)
+            # Should not raise for any preset
+            try:
+                validate_manifest(preset)
+            except ValueError as e:
+                self.fail(f"Preset {preset_name} validation failed: {e}")
+
+    def test_validate_preset_with_missing_slug(self):
+        """Validation should fail when slug is missing."""
+        invalid_preset = {
+            "name": "Invalid",
+            "items": [
+                {
+                    # slug missing
+                    "prompt": "test",
+                    "ownsFiles": ["file.py"],
+                    "testCmd": "test"
+                }
+            ]
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(invalid_preset)
+        self.assertIn("missing", str(ctx.exception).lower())
+
+    def test_validate_preset_with_missing_ownsfiles(self):
+        """Validation should fail when ownsFiles is missing."""
+        invalid_preset = {
+            "name": "Invalid",
+            "items": [
+                {
+                    "slug": "test",
+                    "prompt": "test",
+                    "testCmd": "test",
+                    # ownsFiles missing
+                }
+            ]
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(invalid_preset)
+        self.assertIn("missing", str(ctx.exception).lower())
+
+    def test_validate_preset_with_missing_prompt(self):
+        """Validation should fail when prompt is missing."""
+        invalid_preset = {
+            "name": "Invalid",
+            "items": [
+                {
+                    "slug": "test",
+                    # prompt missing
+                    "ownsFiles": ["file.py"],
+                    "testCmd": "test"
+                }
+            ]
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(invalid_preset)
+        self.assertIn("missing", str(ctx.exception).lower())
+
+    def test_validate_preset_with_overlapping_ownfiles(self):
+        """Validation should fail when two items own the same file."""
+        invalid_preset = {
+            "name": "Invalid",
+            "items": [
+                {
+                    "slug": "item1",
+                    "prompt": "test",
+                    "ownsFiles": ["shared.py"],
+                    "testCmd": "test"
+                },
+                {
+                    "slug": "item2",
+                    "prompt": "test",
+                    "ownsFiles": ["shared.py"],  # Overlap!
+                    "testCmd": "test"
+                }
+            ]
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(invalid_preset)
+        self.assertIn("overlap", str(ctx.exception).lower())
+
+    def test_validate_preset_missing_items_array(self):
+        """Validation should fail when items array is missing."""
+        invalid_preset = {
+            "name": "Invalid"
+            # items missing
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(invalid_preset)
+        self.assertIn("items", str(ctx.exception).lower())
+
+    def test_validate_preset_empty_items(self):
+        """Validation should fail when items array is empty."""
+        invalid_preset = {
+            "name": "Invalid",
+            "items": []
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(invalid_preset)
+        self.assertIn("empty", str(ctx.exception).lower())
+
+    def test_validate_preset_with_empty_ownfiles(self):
+        """Validation should fail when ownsFiles is empty."""
+        invalid_preset = {
+            "name": "Invalid",
+            "items": [
+                {
+                    "slug": "test",
+                    "prompt": "test",
+                    "ownsFiles": []  # Empty!
+                }
+            ]
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(invalid_preset)
+        self.assertIn("empty", str(ctx.exception).lower())
+
+    def test_validate_preset_with_testcmd_field(self):
+        """Presets should support testCmd field (required by wave engine)."""
+        # Instantiated presets require testCmd for the wave engine
+        preset = load_preset("saas")
+        manifest = instantiate_template(preset, project_name="test", base_dir="/tmp")
+        # All items should have testCmd
+        for item in manifest.get("items", []):
+            self.assertIn("testCmd", item,
+                f"Item {item.get('slug', 'unknown')} missing testCmd")
+            self.assertIsInstance(item["testCmd"], str)
+            self.assertGreater(len(item["testCmd"]), 0)
+
+    def test_validate_preset_with_workdir_field(self):
+        """Presets should support workDir field (used by wave engine)."""
+        # Instantiated presets should have workDir
+        preset = load_preset("saas")
+        manifest = instantiate_template(preset, project_name="test", base_dir="/tmp")
+        # All items should have workDir after instantiation
+        for item in manifest.get("items", []):
+            self.assertIn("workDir", item,
+                f"Item {item.get('slug', 'unknown')} missing workDir")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,7 +29,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 # Presets directory (relative to this file's location).
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -101,20 +101,29 @@ def instantiate_template(
     return manifest
 
 
-def validate_manifest(manifest: Dict[str, Any]) -> None:
+def validate_manifest(
+    manifest: Dict[str, Any],
+    allow_placeholders: bool = True,
+    require_testcmd: bool = True
+) -> None:
     """Validate manifest schema and invariants.
 
     Checks:
       - items array exists and is non-empty
-      - each item has required fields (slug, prompt, ownsFiles)
-      - no file ownership overlap
-      - no placeholder strings remain
+      - each item has required fields (slug, prompt, ownsFiles, and optionally testCmd)
+      - no file ownership overlap (per-manifest)
+      - optionally: no placeholder strings remain (for instantiated manifests)
 
     Args:
         manifest: the manifest dict to validate
+        allow_placeholders: if False, reject unsubstituted placeholders (default: True,
+                           for backward compatibility with presets). Set to False for
+                           instantiated manifests.
+        require_testcmd: if True, require testCmd field (default: True, since the wave
+                        engine needs it). Set to False to validate presets only.
 
     Raises:
-        ValueError: if validation fails
+        ValueError: if validation fails with detailed error per item
     """
     if "items" not in manifest:
         raise ValueError("Manifest missing 'items' array")
@@ -123,65 +132,143 @@ def validate_manifest(manifest: Dict[str, Any]) -> None:
     if not isinstance(items, list) or len(items) == 0:
         raise ValueError("'items' must be a non-empty list")
 
-    # Check required fields and validate structure.
-    required_fields = {"slug", "prompt", "ownsFiles"}
+    # Core required fields (always required).
+    required_core_fields = {"slug", "prompt", "ownsFiles"}
+    # Optional fields for instantiated manifests.
+    optional_fields = {"testCmd", "workDir"} if require_testcmd else set()
+    required_fields = required_core_fields | ({"testCmd"} if require_testcmd else set())
+
     owner_map = {}
     conflicts = []
+    errors = []
 
-    for item in items:
+    for item_idx, item in enumerate(items):
         if not isinstance(item, dict):
-            raise ValueError(f"Item must be a dict, got {type(item)}")
+            errors.append(f"Item {item_idx}: must be a dict, got {type(item)}")
+            continue
 
-        # Check required fields.
-        for field in required_fields:
+        # Check required core fields.
+        for field in required_core_fields:
             if field not in item:
-                raise ValueError(f"Item {item.get('slug', 'unknown')} missing '{field}'")
+                errors.append(f"Item {item_idx} ({item.get('slug', 'unknown')}): missing required field '{field}'")
 
-        slug = item["slug"]
-        if not isinstance(slug, str) or not slug:
-            raise ValueError(f"Item slug must be non-empty string, got {slug}")
+        # Check required testCmd if flag is set.
+        if require_testcmd and "testCmd" not in item:
+            errors.append(f"Item {item_idx} ({item.get('slug', 'unknown')}): missing required field 'testCmd'")
+
+        slug = item.get("slug")
+        if slug is not None:
+            if not isinstance(slug, str) or not slug:
+                errors.append(f"Item {item_idx}: slug must be non-empty string, got {slug}")
 
         # Check ownsFiles.
         owned_files = item.get("ownsFiles", [])
-        if not isinstance(owned_files, list) or not owned_files:
-            raise ValueError(f"Item {slug} must have non-empty ownsFiles list")
+        if not isinstance(owned_files, list):
+            errors.append(f"Item {item_idx} ({slug}): ownsFiles must be a list")
+            continue
+        if len(owned_files) == 0:
+            errors.append(f"Item {item_idx} ({slug}): ownsFiles must be non-empty")
+            continue
 
-        # Track file ownership.
+        # Track file ownership (within this manifest only).
         for f in owned_files:
             if f in owner_map:
                 conflicts.append((f, owner_map[f], slug))
             else:
                 owner_map[f] = slug
 
-    if conflicts:
-        raise ValueError(f"File ownership overlap: {conflicts}")
+    # Report all collected errors first.
+    if errors:
+        error_msg = "Manifest validation failed:\n  " + "\n  ".join(errors)
+        raise ValueError(error_msg)
 
-    # Check no placeholders remain.
-    manifest_str = json.dumps(manifest)
-    if "{project_name}" in manifest_str or "{base_dir}" in manifest_str:
-        raise ValueError("Manifest contains unsubstituted placeholders")
+    if conflicts:
+        conflict_msg = "File ownership overlap (within manifest):\n  " + "\n  ".join(
+            [f"{f!r}: owned by both {o1!r} and {o2!r}" for f, o1, o2 in conflicts]
+        )
+        raise ValueError(conflict_msg)
+
+    # Check no placeholders remain (if instantiated manifest).
+    if not allow_placeholders:
+        manifest_str = json.dumps(manifest)
+        if "{project_name}" in manifest_str or "{base_dir}" in manifest_str:
+            raise ValueError("Manifest contains unsubstituted placeholders (not fully instantiated)")
+
+
+def validate_presets(preset_names: List[str]) -> Tuple[bool, List[str]]:
+    """Validate one or more presets.
+
+    Args:
+        preset_names: list of preset names to validate (e.g., ["saas", "data", "library"])
+
+    Returns:
+        tuple (success: bool, errors: List[str])
+          - success is True if all presets validate clean
+          - errors is a list of formatted error messages per preset/item
+    """
+    errors = []
+    all_valid = True
+
+    for preset_name in preset_names:
+        try:
+            preset = load_preset(preset_name)
+            # Validate the preset: allow placeholders (presets have them), require testCmd (wave engine needs it)
+            validate_manifest(preset, allow_placeholders=True, require_testcmd=True)
+            print(f"✓ {preset_name}: valid", file=sys.stderr)
+        except FileNotFoundError as e:
+            errors.append(f"✗ {preset_name}: {e}")
+            all_valid = False
+        except ValueError as e:
+            errors.append(f"✗ {preset_name}: {e}")
+            all_valid = False
+        except Exception as e:
+            errors.append(f"✗ {preset_name}: unexpected error: {e}")
+            all_valid = False
+
+    return all_valid, errors
 
 
 def main():
-    """CLI entry point: load preset and output resolved manifest."""
+    """CLI entry point: load preset, instantiate, validate, or validate presets."""
     parser = argparse.ArgumentParser(
-        description="Load and instantiate a wave manifest preset"
+        description="Wave manifest preset manager: load, instantiate, and validate presets"
     )
-    parser.add_argument(
+
+    # Create subparsers for different commands
+    subparsers = parser.add_subparsers(dest="command", help="command to run")
+
+    # Subcommand: validate
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="validate preset template(s) for completeness"
+    )
+    validate_parser.add_argument(
+        "--template",
+        choices=["saas", "data", "library", "all"],
+        default="all",
+        help="which preset(s) to validate (default: all)"
+    )
+
+    # Subcommand: instantiate
+    inst_parser = subparsers.add_parser(
+        "instantiate",
+        help="load and instantiate a preset manifest"
+    )
+    inst_parser.add_argument(
         "preset",
         help="preset name: saas, data, or library"
     )
-    parser.add_argument(
+    inst_parser.add_argument(
         "--project-name",
         required=True,
         help="project/app name (e.g., 'payment-api')"
     )
-    parser.add_argument(
+    inst_parser.add_argument(
         "--base-dir",
         required=True,
         help="base working directory (e.g., '/workspace/my-app')"
     )
-    parser.add_argument(
+    inst_parser.add_argument(
         "--output",
         default=None,
         help="output file (default: stdout)"
@@ -190,21 +277,46 @@ def main():
     args = parser.parse_args()
 
     try:
-        # Load and instantiate.
-        preset = load_preset(args.preset)
-        manifest = instantiate_template(preset, args.project_name, args.base_dir)
+        if args.command == "validate":
+            # Validate preset(s)
+            if args.template == "all":
+                presets = ["saas", "data", "library"]
+            else:
+                presets = [args.template]
 
-        # Validate.
-        validate_manifest(manifest)
+            success, errors = validate_presets(presets)
 
-        # Output.
-        output_json = json.dumps(manifest, indent=2)
-        if args.output:
-            output_path = Path(args.output)
-            output_path.write_text(output_json, encoding="utf-8")
-            print(f"Manifest written to {output_path}", file=sys.stderr)
+            # Print errors if any
+            for error in errors:
+                print(error, file=sys.stderr)
+
+            if not success:
+                sys.exit(1)
+            else:
+                print(f"\nAll {len(presets)} preset(s) validated successfully.", file=sys.stderr)
+                sys.exit(0)
+
+        elif args.command == "instantiate":
+            # Instantiate preset
+            preset = load_preset(args.preset)
+            manifest = instantiate_template(preset, args.project_name, args.base_dir)
+
+            # Validate the instantiated manifest (disallow placeholders, require testCmd)
+            validate_manifest(manifest, allow_placeholders=False, require_testcmd=True)
+
+            # Output.
+            output_json = json.dumps(manifest, indent=2)
+            if args.output:
+                output_path = Path(args.output)
+                output_path.write_text(output_json, encoding="utf-8")
+                print(f"Manifest written to {output_path}", file=sys.stderr)
+            else:
+                print(output_json)
+
         else:
-            print(output_json)
+            # No command specified - print help
+            parser.print_help()
+            sys.exit(0)
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
