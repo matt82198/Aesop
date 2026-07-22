@@ -246,20 +246,48 @@ class CodexDriver(AgentDriver):
 
             # 2. Assemble context: read owned files.
             # Reject absolute/escape paths; compute total bytes.
+            # CRITICAL: resolve paths to catch Windows drive-relative forms (C:foo),
+            # POSIX absolute forms (/foo), UNC paths, and normalized escapes.
             file_contents = {}
             total_bytes = 0
+            workdir_resolved = Path(request.workdir).resolve()
+
             for path_str in request.owned_files:
-                path = Path(path_str)
-                # Safety: reject absolute paths and .. traversal.
-                if path.is_absolute() or ".." in path.parts:
+                # Cross-platform manifest policy (matches wave_loop preflight): backslashes
+                # are separators on every OS, so Windows-authored ownsFiles resolve on Linux.
+                path = Path(path_str.replace("\\", "/"))
+                # Resolve the path (strict=False allows symlinks; normalization is primary goal).
+                try:
+                    full_path = (Path(request.workdir) / path).resolve()
+                except (OSError, RuntimeError) as exc:
+                    # resolve() can fail on invalid paths (e.g., too many symlinks).
                     return WorkerResult(
                         worker_id=worker_id,
                         status=WORKER_FAILED,
                         ok=False,
-                        error=f"owned file path is absolute or escapes: {path_str}",
+                        error=f"failed to resolve owned file path {path_str}: {exc}",
                     )
-                # Read relative to workdir.
-                full_path = Path(request.workdir) / path
+
+                # After resolve(), check containment: full_path must be under workdir_resolved.
+                # Use os.path.commonpath to detect escapes (platform-correct).
+                try:
+                    common = os.path.commonpath([str(workdir_resolved), str(full_path)])
+                    # If common path is NOT the workdir, path escapes containment.
+                    if Path(common).resolve() != workdir_resolved:
+                        return WorkerResult(
+                            worker_id=worker_id,
+                            status=WORKER_FAILED,
+                            ok=False,
+                            error=f"owned file path is absolute or escapes containment: {path_str}",
+                        )
+                except ValueError:
+                    # os.path.commonpath raises ValueError if paths are on different drives (Windows).
+                    return WorkerResult(
+                        worker_id=worker_id,
+                        status=WORKER_FAILED,
+                        ok=False,
+                        error=f"owned file path is absolute or escapes containment (different drive): {path_str}",
+                    )
                 try:
                     contents = full_path.read_text(encoding="utf-8")
                     file_contents[path_str] = contents

@@ -252,6 +252,66 @@ class TestTestHygiene(unittest.TestCase):
             msg += "\n".join(f"  {v}" for v in violations)
             self.fail(msg)
 
+    def test_no_mangled_path_files_in_repo_root(self):
+        """Fail if repo root contains files with mangled Windows paths.
+
+        Root cause: code writes a file using a path that became a literal filename.
+        Mangled-path pattern: drive letter (C/D/etc) + U+F03A (colon replacement) + rest of path.
+        Examples: "CUsersscratc hpadreview.txt", "CUsersAppDataLocalTempclaudetestfile.log"
+
+        This is a FATAL error indicating a file write gone wrong (path used as filename).
+        Detects both recent and committed artifacts with mangled names.
+        """
+        repo_root = Path(__file__).parent.parent
+        mangled_files = []
+
+        # Scan repo root (not recursively) for files with mangled-path pattern
+        for item in repo_root.iterdir():
+            if item.is_file():
+                name = item.name
+                # Check for U+F03A (colon replacement, appears as  in source)
+                # or plain colons in a drive-letter-like pattern
+                # Mangled pattern: single letter + U+F03A/colon followed immediately by more path
+                # (NOT general filenames that happen to contain these words)
+
+                # Look for pattern: single letter + (colon or U+F03A) + more letters (no spaces/dots until end)
+                # Examples: C:Users, D:AppData, C:Temp
+                is_mangled = False
+
+                if len(name) > 3:
+                    # Pattern 1: single letter + U+F03A + more path
+                    if name[0].isalpha() and '' in name[:5]:  # U+F03A early in filename
+                        # Extract prefix before U+F03A
+                        idx = name.find('')
+                        if idx == 1:  # Second character
+                            # Check if rest looks like a path (Users, Appdata, etc without spaces)
+                            after_colon = name[idx+1:20]
+                            if after_colon and after_colon[0].isalpha() and ' ' not in after_colon[:10]:
+                                is_mangled = True
+                    # Pattern 2: single letter + real colon + more path (Windows UNC-like)
+                    elif name[0].isalpha() and name[1] == ':' and len(name) > 3:
+                        # Check what comes after colon
+                        after_colon = name[2:20]
+                        # Must start with a path component (Users, AppData, etc) - no space, no extension yet
+                        if after_colon and after_colon[0].isalpha() and ' ' not in after_colon[:10]:
+                            # And should have lots of path-like stuff (CUsers, CAppData, CTemp, etc)
+                            rest = name[2:].lower()
+                            if any(rest.startswith(frag) for frag in ['users', 'appdata', 'temp', 'local']):
+                                is_mangled = True
+
+                if is_mangled:
+                    mangled_files.append(name)
+
+        if mangled_files:
+            msg = f"CRITICAL: {len(mangled_files)} mangled-path file(s) in repo root (file-write bug):\n"
+            for fname in mangled_files:
+                msg += f"  {fname}\n"
+            msg += "\nRoot cause: code opened/wrote file using a path string as the filename itself.\n"
+            msg += "Search for: open(full_path_string, 'w') or Path(full_path_string).write_text()\n"
+            msg += "where full_path_string was not validated for separators (Windows vs POSIX mismatch).\n"
+            msg += "Fix: use pathlib.Path() + resolve() to normalize, or validate path separators.\n"
+            self.fail(msg)
+
 
 if __name__ == "__main__":
     unittest.main()

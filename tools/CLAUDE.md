@@ -56,6 +56,9 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
 - `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged; --json (guards one-file-per-domain)
+- `claudemd_drift.py` — Semantic drift detector: CLAUDE.md claims vs disk reality (missing refs, unmapped dirs, dead map entries, absent CLI flags); exit 1 on drift; --json
+- `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `<preset> --project-name --base-dir`
+- `verify_scorecards.py` — Browser proof for the wave quality scorecards panel (self-hosted test port + fixtures; AESOP_PROOF_FIXTURES gated)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
 - `verify_activity_filter.py` — Browser proof for Activity view agent status filter

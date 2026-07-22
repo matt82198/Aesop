@@ -37,6 +37,7 @@ import json
 import os
 import posixpath
 import sys
+import threading
 import time
 import uuid
 from math import ceil
@@ -72,17 +73,144 @@ except ImportError:
     coordination = None
 
 
+# ========================================================================
+# Wave Recovery: Journal and Resume Support
+# ========================================================================
+
+def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, Any]) -> None:
+    """Write a journal entry for an item's progress.
+
+    Args:
+        state_dir: directory path for state files
+        slug: item slug (identifier)
+        phase: phase name (e.g., "verified", "failed", "dispatched")
+        data: dict with outcome data (verified, testExit, repairs, etc.)
+
+    Journal is stored as: state_dir/journal/<slug>.json with timestamp.
+    """
+    state_path = Path(state_dir)
+    journal_dir = state_path / "journal"
+    journal_dir.mkdir(parents=True, exist_ok=True)
+
+    journal_file = journal_dir / f"{slug}.json"
+    entry = {
+        "slug": slug,
+        "phase": phase,
+        "timestamp": time.time(),
+        **data,
+    }
+
+    try:
+        journal_file.write_text(json.dumps(entry, default=str) + "\n")
+    except Exception:
+        # Fail-closed: if journal write fails, continue without journaling.
+        pass
+
+
+def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
+    """Load journal state from state_dir.
+
+    Reads all JSON files from state_dir/journal/ and returns a dict
+    mapping slug -> journal_entry.
+
+    Returns:
+        dict mapping slug -> {phase, verified, testExit, ...}
+        Returns empty dict if journal dir doesn't exist.
+    """
+    state_path = Path(state_dir)
+    journal_dir = state_path / "journal"
+
+    if not journal_dir.exists():
+        return {}
+
+    journal_state = {}
+    try:
+        for journal_file in journal_dir.glob("*.json"):
+            try:
+                entry = json.loads(journal_file.read_text())
+                slug = entry.get("slug")
+                if slug:
+                    journal_state[slug] = entry
+            except Exception:
+                # Skip malformed entries.
+                pass
+    except Exception:
+        # Fail-closed: if reading fails, return empty state.
+        pass
+
+    return journal_state
+
+
+def _should_skip_from_journal(journal_entry: Dict[str, Any]) -> bool:
+    """Determine if an item should be skipped based on journal entry.
+
+    Skip only if verified=True (even then, trust-but-verify will re-run the test).
+    Re-run if verified=False or not present.
+
+    Args:
+        journal_entry: dict with verified, testExit, etc.
+
+    Returns:
+        bool: True if item should be skipped from build (only trust-verify),
+              False if item should be re-built.
+    """
+    return journal_entry.get("verified", False) is True
+
+
+def _release_stale_leases(state_dir: str, journal_state: Dict[str, Dict[str, Any]]) -> None:
+    """Release stale leases from dead instances.
+
+    Scans journal for old instance_ids and releases their coordination leases
+    so resume can re-claim resources. Fail-closed: any release error is ignored.
+
+    Args:
+        state_dir: directory path for state files
+        journal_state: dict of journal entries by slug
+    """
+    if coordination is None:
+        return
+
+    try:
+        STATE_STORE_DIR = REPO / "state_store"
+        if str(STATE_STORE_DIR) not in sys.path:
+            sys.path.insert(0, str(STATE_STORE_DIR))
+        from state_store import store
+
+        db_path = Path(state_dir) / "state.db"
+        if not db_path.exists():
+            return
+
+        event_store = store.EventStore(str(db_path))
+
+        for slug, entry in journal_state.items():
+            old_instance_id = entry.get("instance_id")
+            if old_instance_id:
+                try:
+                    coordination.release(event_store, resource=slug, instance_id=old_instance_id)
+                except Exception:
+                    # Ignore release errors; fail-closed.
+                    pass
+    except Exception:
+        # Fail-closed: if coordination is unavailable, continue without release.
+        pass
+
+
 def run_wave(
     driver: AgentDriver,
     manifest: Dict[str, Any],
     *,
     state_dir: Optional[str] = None,
     git: Optional[Dict[str, str]] = None,
+    resume_journal: bool = False,
 ) -> Dict[str, Any]:
     """Run a full multi-item wave through an AgentDriver backend.
 
     Implements the complete wave algorithm: preflight ownership guard, parallel
     build, bounded repair, optional adversarial review, and batched git ship.
+
+    Supports resumable waves: if resume_journal=True and state_dir exists,
+    skips items marked as verified in the journal and does trust-but-verify
+    re-running of their tests. Releases stale leases from dead instances.
 
     Args:
         driver: AgentDriver instance providing dispatch_worker, run_command, etc.
@@ -93,6 +221,8 @@ def run_wave(
                    cost_ceiling ledger. If None, these features are skipped.
         git: optional dict with {expectTopLevel: str} for git operations. If None,
              ship phase is skipped.
+        resume_journal: if True and state_dir exists, load journal and skip items
+                       marked as verified (but re-run their tests for trust-but-verify).
 
     Returns:
         dict with structure:
@@ -109,12 +239,18 @@ def run_wave(
                 "repairs": int,
                 "error": str or None,
                 "filesWritten": [str],
+                "skipped_from_journal": bool (only if resume_journal=True),
               },
               ...
             ],
             "shipped": [str] or None (list of slugs, or None if git not configured),
             "ceiling": dict or None (from cost_ceiling.check, or None if no ceiling),
             "policy": dict (the resolved verification_policy),
+            "resume_stats": dict (only if resume_journal=True) with:
+              {
+                "skipped_from_journal": int,
+                "rebuilt": int,
+              }
           }
 
     Fail-safe invariants:
@@ -131,10 +267,23 @@ def run_wave(
         "shipped": None,
         "ceiling": None,
         "policy": None,
+        "resume_stats": None,
     }
 
     # Extract items from manifest.
     items = manifest.get("items", [])
+
+    # ========================================================================
+    # PHASE 0 (optional): Resume - Load journal state and release stale leases
+    # ========================================================================
+    journal_state = {}
+    resume_stats = {"skipped_from_journal": 0, "rebuilt": 0}
+    resume_stats_lock = threading.Lock()  # Protect resume_stats from concurrent access
+    if resume_journal and state_dir:
+        journal_state = _load_journal_state(state_dir)
+        _release_stale_leases(state_dir, journal_state)
+        if journal_state:
+            result["resume_stats"] = resume_stats
 
     # ========================================================================
     # PHASE 1: Preflight ownership guard
@@ -208,6 +357,96 @@ def run_wave(
         slug = item.get("slug", f"item-{item_index}")
         workdir = item.get("workDir", ".")
 
+        # ====================================================================
+        # RESUME CHECK: If in journal and verified, skip dispatch and trust-verify
+        # ====================================================================
+        journal_entry = journal_state.get(slug)
+        skipped_from_journal = False
+        if journal_entry and _should_skip_from_journal(journal_entry):
+            skipped_from_journal = True
+            with resume_stats_lock:
+                resume_stats["skipped_from_journal"] += 1
+
+            # Trust-but-verify: re-run the test for the journaled item
+            test_cmd = item.get("testCmd", "")
+            if test_cmd:
+                try:
+                    test_result = driver.run_command(test_cmd, cwd=workdir)
+                    if test_result.exit_code == 0:
+                        # Test still passes; mark verified.
+                        return (
+                            item_index,
+                            {
+                                "slug": slug,
+                                "dispatched": False,
+                                "verified": True,
+                                "testExit": 0,
+                                "repairs": 0,
+                                "error": None,
+                                "filesWritten": [],
+                                "skipped_from_journal": True,
+                                "trust_verified": True,
+                            },
+                        )
+                    else:
+                        # Test failed on re-run; flip to False and mark for rebuild.
+                        with resume_stats_lock:
+                            resume_stats["rebuilt"] += 1
+                        return (
+                            item_index,
+                            {
+                                "slug": slug,
+                                "dispatched": False,
+                                "verified": False,
+                                "testExit": test_result.exit_code,
+                                "repairs": 0,
+                                "error": "trust-verify test failed (re-run)",
+                                "filesWritten": [],
+                                "skipped_from_journal": True,
+                                "trust_verified": False,
+                            },
+                        )
+                except Exception as exc:
+                    # Test re-run failed; flip to False and mark for rebuild.
+                    with resume_stats_lock:
+                        resume_stats["rebuilt"] += 1
+                    return (
+                        item_index,
+                        {
+                            "slug": slug,
+                            "dispatched": False,
+                            "verified": False,
+                            "testExit": None,
+                            "repairs": 0,
+                            "error": f"trust-verify exception: {exc}",
+                            "filesWritten": [],
+                            "skipped_from_journal": True,
+                            "trust_verified": False,
+                        },
+                    )
+            else:
+                # No test command; just mark as skipped but not verified (safe).
+                return (
+                    item_index,
+                    {
+                        "slug": slug,
+                        "dispatched": False,
+                        "verified": False,
+                        "testExit": None,
+                        "repairs": 0,
+                        "error": "no test command for trust-verify",
+                        "filesWritten": [],
+                        "skipped_from_journal": True,
+                        "trust_verified": False,
+                    },
+                )
+
+        # ====================================================================
+        # NORMAL BUILD: Not in journal or was marked as failed
+        # ====================================================================
+        with resume_stats_lock:
+            resume_stats["rebuilt"] += 1
+
         # Try to claim the item if state_dir is given (fail-closed on claim failure).
         instance_id = f"wave-{uuid.uuid4()}"
         claim_held = False
@@ -257,10 +496,26 @@ def run_wave(
                 "workerId": dispatch_result.get("workerId"),
             }
 
+            # Write journal entry for this item's outcome.
+            if state_dir:
+                _write_journal_entry(state_dir, slug, "dispatched", {
+                    "verified": item_result["verified"],
+                    "testExit": item_result["testExit"],
+                    "instance_id": instance_id,
+                })
+
             return (item_index, item_result)
 
         except Exception as exc:
             # Catch-all: any exception -> failed result, never a false green.
+            if state_dir:
+                _write_journal_entry(state_dir, slug, "failed", {
+                    "verified": False,
+                    "testExit": None,
+                    "instance_id": instance_id,
+                    "error": str(exc),
+                })
+
             return (
                 item_index,
                 {
@@ -358,6 +613,14 @@ def run_wave(
                 item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
                 item_result["repairs"] += 1
 
+                # Write journal entry for repair outcome.
+                if state_dir:
+                    _write_journal_entry(state_dir, slug, "repaired", {
+                        "verified": item_result["verified"],
+                        "testExit": item_result["testExit"],
+                        "repairs": item_result["repairs"],
+                    })
+
                 # If still failed, mark for next round.
                 if not item_result["verified"]:
                     next_failed.append((item_index, item, item_result))
@@ -365,6 +628,16 @@ def run_wave(
             except Exception as exc:
                 item_result["error"] = f"repair exception: {exc}"
                 item_result["repairs"] += 1
+
+                # Write journal entry for repair failure.
+                if state_dir:
+                    _write_journal_entry(state_dir, slug, "repair_failed", {
+                        "verified": False,
+                        "testExit": None,
+                        "repairs": item_result["repairs"],
+                        "error": str(exc),
+                    })
+
                 next_failed.append((item_index, item, item_result))
 
         # Update failed_items for next round.

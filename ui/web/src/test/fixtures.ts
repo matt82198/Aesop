@@ -22,6 +22,7 @@ import type {
   HeartbeatStatus,
   Message,
   OrchestratorStatus,
+  QualityScorecardData,
   RepoStatus,
   TrackerItem,
   TrackerSnapshot,
@@ -77,6 +78,7 @@ export const TESTIDS = {
   // Work view
   viewWork: 'view-work',
   waveTelemetryCost: 'wave-telemetry-cost',
+  qualityScorecards: 'quality-scorecards',
   trackerBoard: 'tracker-board',
   trackerLane: 'tracker-lane',
   trackerCard: 'tracker-card',
@@ -511,6 +513,59 @@ export const fixtureCostWithPricing: CostSummary = {
     cost_per_empty: 4.72,
     cost_per_hung: 10.02,
   },
+};
+
+export const fixtureQualityScorecard: QualityScorecardData = {
+  specialties: {
+    haiku: {
+      total_runs: 150,
+      success_count: 142,
+      failed_count: 6,
+      empty_count: 2,
+      hung_count: 0,
+      success_rate: 0.9467,
+      repair_count: 8,
+      retry_frequency: 0.0533,
+    },
+    sonnet: {
+      total_runs: 78,
+      success_count: 76,
+      failed_count: 2,
+      empty_count: 0,
+      hung_count: 0,
+      success_rate: 0.9744,
+      repair_count: 3,
+      retry_frequency: 0.0385,
+    },
+    orchestrator: {
+      total_runs: 34,
+      success_count: 33,
+      failed_count: 1,
+      empty_count: 0,
+      hung_count: 0,
+      success_rate: 0.9706,
+      repair_count: 1,
+      retry_frequency: 0.0294,
+    },
+  },
+  top_by_success: [
+    { agent_type: 'sonnet', success_rate: 0.9744, total_runs: 78 },
+    { agent_type: 'orchestrator', success_rate: 0.9706, total_runs: 34 },
+    { agent_type: 'haiku', success_rate: 0.9467, total_runs: 150 },
+  ],
+  top_by_retry: [
+    { agent_type: 'haiku', retry_frequency: 0.0533, total_runs: 150 },
+    { agent_type: 'sonnet', retry_frequency: 0.0385, total_runs: 78 },
+    { agent_type: 'orchestrator', retry_frequency: 0.0294, total_runs: 34 },
+  ],
+  skipped_lines: 0,
+};
+
+export const fixtureQualityScorecardEmpty: QualityScorecardData = {
+  specialties: {},
+  top_by_success: [],
+  top_by_retry: [],
+  skipped_lines: 0,
 };
 
 export const fixtureWavePRs: WavePR[] = [

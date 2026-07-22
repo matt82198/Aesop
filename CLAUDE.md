@@ -17,6 +17,7 @@
 - **ui/** — Web dashboard (SSE, CSRF protection, collector thread) — read ui/CLAUDE.md
 - **state_store/** — Event-sourced state layer (SQLite WAL, projections) — read state_store/CLAUDE.md
 - **bench/** — Held-out model benchmark (quality scorer) — read bench/README.md
+- **templates/** — Wave-manifest presets (saas/data/library JSON) consumed by tools/wave_templates.py — read tools/CLAUDE.md
 - **tests/** — Test suites (shell, Node, Python) and fixtures — read tests/CLAUDE.md
 - **docs/** — Architecture guides, tutorials, setup — read docs/
 - **assets/** — Logo, branding, media

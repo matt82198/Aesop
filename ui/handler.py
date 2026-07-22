@@ -12,6 +12,7 @@ from pathlib import Path
 import config
 import cost
 import csrf
+import quality_scorecard
 import sse
 import wave_prs
 import wave_telemetry
@@ -204,6 +205,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_wave_telemetry()
         elif self.path == "/api/wave/dispatch":
             self.serve_api_wave_dispatch()
+        elif self.path == "/api/wave/quality-scorecards":
+            self.serve_api_wave_quality_scorecards()
         elif self.path.startswith("/api/wave/failure"):
             self.serve_api_wave_failure()
         elif self.path == "/api/backlog":
@@ -472,6 +475,27 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
             print(f"[serve_api_wave_dispatch] Uncaught exception: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_wave_quality_scorecards(self):
+        """GET /api/wave/quality-scorecards — per-agent-specialty quality metrics.
+
+        Read-only; reads at call time (no caching). Returns per-specialty quality:
+        success rate (green/total) and retry/repair frequency from ledger.
+        Includes top rankings by success and retry frequency.
+        """
+        try:
+            payload = quality_scorecard.get_quality_scorecard()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            print(f"[serve_api_wave_quality_scorecards] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
