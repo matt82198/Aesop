@@ -1,127 +1,143 @@
-# Aesop 0.2.0
+# aesop 0.3.0 — Multi-core waves
 
-**Multi-model orchestration portability shipped.** AgentDriver Phase 1-3 enables orchestration to work with any backend: Claude Code (reference), OpenAI-compatible services (Ollama, OpenRouter, Hugging Face Inference, etc.), and extensible driver architecture for future backends. Verification safety auto-adapts to backend capability — weaker models get stronger safety checking without code changes. Multi-instance identity and lease-by-append coordination enable team-scale deployments on single-machine SQLite.
+0.2.0 shipped the seams; 0.3.0 ships the proof: **a non-Claude model core ran a full
+supervised wave — intake → build → verify → ship — through the same engine, with the
+same gates**, and the release was preceded by a fresh adversarial hardening loop that
+exited clean.
 
-A source-available, portable orchestration harness for any coding-capable backend; durable git-backed state for team coordination; Haiku-first cost optimization; and transparent verification that adapts to driver capability.
+## Headline: the wave engine is core-agnostic (WS3)
 
----
+- **wave_scheduler.py (WS3a pilot)**: deterministic single-cycle orchestration — tracker
+  intake with fail-closed validation (empty/missing ownership rejected; paths normalized
+  platform-independently; absolute/traversal paths rejected), HALT + cost-ceiling gates
+  that abort on module failure (never fail open), manifest via the driver bridge, one
+  run_wave call, stop-before-merge Report. Atomic tracker claim (mkstemp + os.replace,
+  content-hash conflict abort) prevents double-dispatch across runs.
+- **Gate-1 handoff kit**: `--driver claude|codex` CLI injection; per-item Report
+  observability `{slug, backend, tier, verified, testExit}`; documented orchestrator
+  REPORT-CONTRACT; offline FakeTransport codex route proven in CI.
+- **LIVE PROOF (gate 1, DONE)**: a supervised codex wave (gpt-4o-mini via CodexDriver)
+  took a real backlog item (`wave_templates validate --json`), implemented it, passed the
+  real 25-test suite (testExit 0, tier 2), and the ship phase committed and pushed —
+  human-reviewed and merged as PR #325. Two supervised corrections were applied (unicode
+  glyphs ASCII-coerced by full-file replacement), and four scheduler Report-plumbing
+  defects the live run exposed were fixed with real-shape regression tests.
+- Survived two adversarial review rounds pre-merge (12 verified defects fixed, including
+  a dead-code tracker write and a symlink TOCTOU) — see the hardening section.
 
-## What's New in 0.2.0
+## Measured, not asserted
 
-**Multi-model driver abstraction:**
-- **AgentDriver Phase 1-3 complete.** Three production drivers ship: Claude Code reference adapter (full capability), OpenAI-compatible driver (Ollama, OpenRouter, local Hugging Face), and Phase 3 wave bridge for end-to-end task execution with verified-honest decisions.
-- **Backend configuration.** Single `aesop.config.json` file configures model, base_url, and API key for any OpenAI-compatible backend; no code changes required.
-- **Honest verification-tier system.** Weaker backends automatically get higher verification (tier 2→tier 4); orchestrator probes backend capability at startup and adapts safety rigor transparently.
+- **Live structured-output accuracy**: gpt-4o-mini **32/32 (100%)** composite
+  (valid-JSON / schema-exact / ownership-respect) under the driver-faithful payload
+  (bench/results/accuracy-live-2026-07-22.json). Single run, N=32 curated tasks —
+  supports the probe's conservative 0.92 assertion; not a transfer claim. The path to
+  this number (33% → 0% → 4% → 100%, each step a real harness defect fixed and
+  regression-guarded) is documented in the bench history.
+- **Frontier discrimination slice**: 20 hard judgment tasks with per-task discrimination
+  rationales, deterministic scoring, live runs cost-gated behind `--confirm-spend`
+  (exit 2 USER-GATED otherwise).
+- **Transcript-sampled judgment set**: N=150 sanitized tasks from real fleet transcripts.
+- **Cross-OS drift measurement**: tools/crossos_drift.py quantifies windows-vs-ubuntu CI
+  divergence from real run history. Baseline at introduction: windows 0/6 where present;
+  after the parity campaign (env-tunable child timeouts, eod_sweep repo-delimiter root
+  cause, 8.3 containment fixes) the windows job went GREEN on main — the promote-to-
+  required streak is counting from run 29955999466.
 
-**Team-scale coordination:**
-- **Multi-instance identity & claims.** Instance ID tagging (hostname:pid:nonce) and lease-by-append state mutations enable safe multi-writer coordination on shared git repo and SQLite without collisions.
-- **Cost-ceiling enforcement.** Per-wave spend limit enforced at dispatch time; blocks work if budget exceeded, preventing runaway costs.
+## State consolidation (WS4)
 
-**Observability and extensibility:**
-- **Transcript-sampled benchmark Phase 1.** Infrastructure extracts coding tasks from real Claude Code transcripts; benchmark grows dynamically beyond hand-written examples.
-- **Backend config & role resolution.** `backend_config.py` maps per-deployment model roles (worker/setup/verify) without orchestrator changes.
+- **ReadAPI facade** (state_store/read_api.py): one read seam over tracker / orchestrator
+  status / heartbeats / ledger — delegates to existing parsers, never forks logic.
+- **WriteAPI seam** (state_store/write_api.py): event-append + atomic projection with
+  conflict detection; first two tracker write ops behind one facade (caller migration
+  is the 0.4 track).
+- **StateAPI ratchet in CI**: stateapi_lint gate live — new direct state reads outside
+  the facade fail CI against a committed, posix-normalized baseline (currently 33
+  entries: a visible migration worklist that can only shrink).
+- **Agent lifecycle events**: dispatched/working/done/stalled event types + projection
+  with transition history, feeding the Activity view live.
 
-## What's Fixed Since 0.1.1
+## Cost: observed, projected, bounded, unified
 
-- Authorization header cross-origin stripping (PR #221): Blocks Authorization headers on cross-origin redirects to prevent credential leakage; security hardening.
-- Secret-scan fail-closed on read errors (PR #226): `secret_scan.py` now fails CLOSED when unable to read files or git data, blocking pushes instead of silently passing.
-- Driver subsystem in npm package (PR #220): Multi-model AgentDriver backend abstraction now ships in the npm package.
-- CI/publish Node version parity (PR #225): Unified Node.js version across CI and npm publish workflows for reproducible builds.
-- Adversarial-review safety fixes (wave-32): Multiple orchestration loop hardening fixes identified and validated by external review.
+- **cost_projection.py**: burn-rate from a ledger window, end-of-wave projection,
+  idempotent 70%/90% ceiling alerts (honest fired_alert semantics under partial failure).
+- **One window contract**: projection and ceiling share a single window helper — they can
+  no longer disagree about "spent".
+- **Cost Analytics dashboard panel**: spend per wave, per-model split with the all-Opus
+  counterfactual, burn vs ceiling — with honest DATA-UNAVAILABLE states and a Playwright
+  proof (verify_cost_panel.py).
 
-## Security & Hardening (Post-Release Fixes)
+## Operability
 
-Hardening round integrated after release-artifact preparation (fe6bb04):
+- **`aesop reproduce`**: offline verification suite from a clean clone/install; doctor
+  failure classification is exact-match (a real missing dependency can no longer be
+  mistaken for a pre-init condition).
+- **docs/PORTING.md**: step-by-step adopter port with the 10 likeliest failure modes and
+  recoveries, sourced from this repo's real incident history.
+- **Windows CI job** (non-required): node+python on windows-latest; parity fixes for
+  file-locking, SSE disconnect noise (WinError 10053/10054 as normal lifecycle), and
+  eod_sweep failing CLOSED on git errors (the 8.3 short-path fail-open root cause). Promotion to required tracked at
+  5 green merges.
+- **Monitor stall detection**: stall_check.py active-task predicate + advisory recovery
+  emission, surfaced as a monitor signal.
+- **Wave preflight**: backlog validation flags (missing ownership, stale refs, overlaps,
+  ledger-aggregate retry rate with DATA-UNAVAILABLE honesty).
 
-**AI & Prompt Security:**
-- **Codex prompt-injection hardening** (fix/codex-prompt-injection, fix/codex-frame-integrity): JSON-wrapped framing to prevent prompt injection attacks in orchestration context; SHA-256 digest + retry nudge for frame integrity verification across API boundaries.
-- **Codex path containment** (fix/codex-driver-path-containment): Cross-platform path normalization (Windows/Unix) with `resolve()` + `commonpath()` to block directory traversal in task execution.
+## Security
 
-**System & Daemon Hardening:**
-- **Daemon fail-closed on lock errors** (fix/daemons-lock-portability): Pre-push and coordination daemons now fail CLOSED on file-write errors or lock-acquisition timeouts, preventing silently-skipped enforcements; portability fixes for CONDUCTOR_ROOT.
-- **Cost-ceiling fail-closed** (fix/cost_ceiling): Enforced at every dispatch gate on ALL backends: drivers reporting live token spend are metered directly; drivers that cannot observe per-instance spend (the Claude Code reference driver, by honest contract) return None and the ceiling reads the outcomes ledger itself with proper period windowing.
+- **Redaction hardening**: URL-credential patterns are scheme-agnostic, consume
+  embedded-@ userinfo to the last @, handle IPv6 hosts, and refuse to over-redact
+  letterless ratios; over-redaction is the documented failure direction.
+- **Scanner exemption, done in the open**: connection_string stays fatal everywhere;
+  ONE file (the redaction-pattern source) downgrades to a reported, never-silent
+  ALLOWED-REDACTION-SOURCE — a user-approved, single-rule, test-pinned exemption.
+  Notable property it surfaced: the pre-push hook runs main's scanner, so a branch
+  cannot weaken its own gate.
+- **Ship-phase hygiene**: git-add failures unstage their residue; per-repo ship errors
+  carry stderr detail in the Report.
 
-**Data & Audit Security:**
-- **Audit log JSON escaping** (fix/audit-log-repo-escape): Escape repo_name and other fields in audit-log JSON to block injection attacks on durable audit trail.
-- **Audit-tail verdict fix** (fix/audit-tail-verdict): Correct column index and validation whitelist in wave_audit_tail.py to prevent misclassified verdicts.
-- **Redaction-proof transcript hardening** (verify_ui_trio.py): Single-source redaction patterns in transcript digest to ensure sensitive data is consistently masked across all observability paths.
+## Hardening (the release gate)
 
-**Pre-Push & CI Hardening:**
-- **Pre-push delete-refspec handling** (fix/prepush-delete-refspecs): Enforce branch-protection on force-delete operations; empty-stdin handling to block stalled CI merge-waits.
+- 0.3.0's release condition was a full /refinesystem loop: expert + adversarial lens
+  fleets with regression re-verification, every P1 deterministically verified by the
+  orchestrator before any fix was paid for. This cycle's honest ledger:
+  - Round 1 (7 lenses): ~14 verified defects fixed pre-merge (incl. a symlink TOCTOU,
+    a dead-code double-dispatch guard, and 4 redaction under/over-redaction defects);
+    5 findings refuted with evidence.
+  - Round 2 (6 lenses, full): 12 verified defects fixed (incl. codex broken-by-default,
+    write_api OCC contract lie, 16-site dead-client 500 discipline, the eod_sweep ':'
+    delimiter root cause) + a LIVE incident caught by the regression lens's README
+    canary (fixture escape into the working tree — contained, guarded, two long-lived
+    identity polluters eliminated); 4 severities corrected downward.
+  - Round 3 (3 lenses): 3 small findings fixed; the new identity tripwire caught a
+    polluter predating the entire cycle (hook self-test rewriting git identity on every
+    run — active for months, invisible until instrumented).
+  - Round 4: exit verification (fix re-attack + tripwires) — clean.
+  Net: ~30 verified defects fixed across 4 rounds, ~10 lens claims refuted with
+  evidence, 3 integration trains + 2 solo ships, ending at a fully-green main
+  including windows for the first time in the repo's history.
+- Test-infrastructure classes fixed this cycle: zero-collection test classes (a gate now
+  fails baseless Test* classes), scaffold-test load-sensitivity (shared fixtures,
+  env-tunable child timeouts), local-server timeout starvation, stdin-inheritance hangs.
 
-## Install
+## Breaking / behavior changes
 
-```bash
-npx @matt82198/aesop my-fleet --name "my-orchestration" --repos "/path/to/coding/repo"
-```
+- Mixed git-ship manifests (some items with explicit `repo`, some without) are rejected
+  at preflight; pure-legacy and fully-explicit manifests are unchanged.
+- `npm run test:sh` no longer invokes `reconstitute.sh --test` directly (its wrapper suite
+  exercises `--test` internally); the pre-push hook's own self-test remains an explicit
+  invocation because its wrapper suite does not run it.
+- NEW CLI surfaces: `frontier_slice.py` exits 2 (USER-GATED) without `--confirm-spend`;
+  `cost_ceiling.py` gains `--window` (backward-compatible); `stall_check.py` gains
+  `--active-from`, `--emit-recovery`, `--recovery-dir`; `wave_scheduler.py` gains
+  `--driver claude|codex`; `test_battery.py` added (parallel local union battery).
+- eod_sweep: repo list delimiters are now os.pathsep (';' on Windows); nonexistent or
+  non-git explicitly-listed repos are AT-RISK findings (exit 1), never silent skips.
 
-Then configure your backend in `aesop.config.json`:
+## Honest residuals
 
-```json
-{
-  "backend": "openai-compatible",
-  "model": "mistral-small",
-  "base_url": "http://localhost:1234/v1",
-  "api_key_env": "OPENAI_API_KEY"
-}
-```
-
-## Honest Limits
-
-- **Small-N benchmark.** The Haiku≈Opus result in 0.1.0 was measured over 39 judgment tasks — directional for this workload, not universal. Benchmark grows with Phase 1 transcript sampling.
-- **Out-of-repo dispatch core.** Orchestration loop runs via Claude Code and your operator workflow; this package ships harness, guardrails, dashboard, and tooling.
-- **Early 0.x.** This is stable 0.2.0; APIs, config, and dashboard contracts may evolve across future 0.x versions. Pin exact version if you need stability.
-- **Single-box SQLite.** State lives in git + local SQLite; multi-machine deployments use git as serializer with lease-by-append claims. Postgres/hosted control plane unscheduled.
-- **Driver extensibility proof.** Three drivers (Claude Code, OpenAI-compatible, bridge) demonstrated end-to-end. Fourth-driver proof (local Ollama) not yet shipped; on roadmap.
-
-See [CHANGELOG.md](./CHANGELOG.md) for the full itemized list.
-
----
-
-# Aesop 0.1.1
-
-**Patch release for production adopters.** Aesop 0.1.1 addresses first-hour blockers discovered
-during 0.1.0 adoption and adds critical production observability: port-conflict detection,
-doctor preflight validation, wave-dispatch performance fixes, OUTCOMES-LEDGER for fleet
-analytics, gitignore-aware secret scanning, CI workflow linting, and the full aesop fleet CLI.
-A source-available, self-building orchestration harness for Claude Code with a plain-file
-"brain", git as the durable state layer, cheap Haiku-first subagent fleets, and guardrails
-enforced in code.
-
-## What's in 0.1.1
-
-**First-hour fixes for early adopters:**
-- **Port-conflict detection.** CLI and doctor preflight now detect port-binding conflicts before
-  dashboard startup; helpful error messages point adopters to resolution steps.
-- **Doctor preflight validation.** New `aesop doctor` subcommand validates configuration, hooks,
-  state store health, and port availability before wave startup — a safety harness for first runs.
-- **Git init + --no-git option.** Scaffolder now supports `--no-git` flag for adopters integrating
-  into existing repos without re-initializing version control; `git init` in new repos works out of the box.
-
-**Production orchestration improvements:**
-- **Wave-dispatch latency fixes.** Template self-check parallelization, postBuild hooks, and
-  multi-testCmd batching provide faster feedback cycles on active waves.
-- **OUTCOMES-LEDGER producer.** Append-only ledger tracks per-wave execution outcomes (dispatch
-  time, duration, merge timing) for fleet analytics and historical trend analysis.
-- **CI workflow linter.** New `tools/ci_workflow_lint.py` statically validates GitHub Actions YAML (lockfile + suite-coverage checks)
-  (phase structure, job naming, cost-log artifacts); CI gate catches schema drift at merge time.
-- **CI merge-wait fail-closed.** `ci_merge_wait` timeout now blocks dispatch instead of silently
-  passing — prevents merging while CI is still running.
-
-**Observability and production readiness:**
-- **Gitignore-respecting secret scan.** `secret_scan.py` now respects `.gitignore` patterns;
-  skips ephemeral runtime files to reduce false positives and scan time on large repos.
-- **Failure drilldown + cost analytics.** Enhanced dashboard drill-down shows failure reasons,
-  cost metrics per model, per-day spend bar chart (pure SVG), and verdict scorecard.
-- **Aesop fleet CLI.** New `aesop fleet` subcommand suite for production fleet inspection: list
-  agents, query costs, export telemetry for monitoring and troubleshooting.
-- **Transcript digest + domain-map linting.** New tools for post-wave transcript summarization
-  and CLAUDE.md scope enforcement (3-line max per section).
-
-**Documentation and portability:**
-- **ANY-REPO scaffolding.** Aesop now deploys into any existing Node/Python repo; includes
-  setup guides, CONTRIBUTING.md, and GitHub community files (SECURITY.md, issue templates).
-- **MCP cost tools.** Read-only MCP server exposes cost-ledger and cost-ceiling for external
-  Claude integrations in monitoring dashboards.
-
-See [CHANGELOG.md](./CHANGELOG.md) for full details.
+- Windows job remains non-required until 5 consecutive green merges post-parity.
+- StateAPI baseline: 33 direct-read sites remain; burn-down is the 0.4 track alongside
+  caller migration to WriteAPI and validation-ownership consolidation.
+- Codex live proof is one supervised wave on one small item — the unsupervised loop,
+  failure-recovery ownership (WS3b), and multi-item non-Claude waves remain future work.
+- Benchmark discrimination slice is authored but not yet live-run (spend-gated).
