@@ -53,6 +53,15 @@ Ledger Source:
   Filters entries within window_minutes of NOW (UTC).
   No naive datetimes; all UTC epoch-based.
 
+WINDOW CONTRACT (shared with cost_ceiling.py):
+  Both cost_projection.py and cost_ceiling.py import and use the shared
+  calculate_window_bounds() helper to ensure identical window calculations.
+  When both tools are called with the same window_minutes value, they will
+  compute identical spend figures from the ledger.
+
+  This prevents disagreement between projection and ceiling checks that use
+  different window calculations.
+
 Alert Idempotency:
   Flag files: state/.cost-alert-{70,90}-w{wave}
   Once fired for a (threshold, wave) pair, no duplicate log entries until next wave.
@@ -77,9 +86,11 @@ from collections import defaultdict
 try:
     import fleet_ledger
     import common
+    import cost_ceiling
 except ImportError:
     from tools import fleet_ledger
     from tools import common
+    from tools import cost_ceiling
 
 
 def get_state_dir(config=None):
@@ -114,25 +125,32 @@ def get_horizon_minutes(config):
 def filter_ledger_by_window(rows, window_minutes):
     """Filter ledger rows to those within the last window_minutes (UTC).
 
+    Uses the shared calculate_window_bounds() helper from cost_ceiling.py
+    to ensure consistent window calculations with cost_ceiling.check().
+
     Args:
         rows: List of dicts from fleet_ledger.parse_ledger_rows()
         window_minutes: Time window in minutes
 
     Returns:
         Filtered list of rows within the window
+
+    Window contract:
+      When cost_projection.project(window_minutes=W) and
+      cost_ceiling.check(window_minutes=W) both use the same W value,
+      they produce identical spend calculations.
     """
     if not rows:
         return []
 
-    now_utc = datetime.now(timezone.utc)
-    window_start = now_utc - timedelta(minutes=window_minutes)
+    # Use shared window bounds helper from cost_ceiling
+    window_start, window_end = cost_ceiling.calculate_window_bounds(window_minutes)
 
     filtered = []
     for row in rows:
         try:
             iso_ts = row['iso_ts']
             # Parse ISO timestamp (format: YYYY-MM-DDTHH:MM:SS[Z] or with offset)
-            # Remove Z and try parsing
             ts_clean = iso_ts.replace('Z', '+00:00') if 'Z' in iso_ts else iso_ts
             row_dt = datetime.fromisoformat(ts_clean)
             # Ensure UTC
