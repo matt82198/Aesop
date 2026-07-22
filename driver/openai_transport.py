@@ -140,6 +140,39 @@ def default_openai_transport(
 
         return json.loads(body)
 
+    except urllib.error.HTTPError as exc:
+        # Extract error details from response body if available.
+        # HTTPError.fp contains the response body with potentially actionable
+        # error codes (e.g., insufficient_quota vs rate_limit_exceeded).
+        error_code = None
+        error_message = None
+        if exc.fp:
+            try:
+                # Read bounded response body (~500 bytes) to avoid memory issues.
+                error_body = exc.fp.read(500).decode("utf-8", errors="replace")
+                error_data = json.loads(error_body)
+                if isinstance(error_data, dict) and "error" in error_data:
+                    error_obj = error_data["error"]
+                    if isinstance(error_obj, dict):
+                        error_code = error_obj.get("code")
+                        error_message = error_obj.get("message")
+            except (json.JSONDecodeError, ValueError, AttributeError):
+                # If we can't parse the body, fall back to plain message.
+                pass
+
+        # Build exception message with extracted details if available.
+        # Never include request headers or API key material.
+        if error_code or error_message:
+            details = []
+            if error_code:
+                details.append(error_code)
+            if error_message:
+                details.append(error_message)
+            exc_msg = f"OpenAI API request failed: HTTP Error {exc.code}: {exc.msg} [{', '.join(details)}]"
+        else:
+            exc_msg = f"OpenAI API request failed: HTTP Error {exc.code}: {exc.msg}"
+        raise RuntimeError(exc_msg) from exc
+
     except urllib.error.URLError as exc:
         raise RuntimeError(f"OpenAI API request failed: {exc}") from exc
     except json.JSONDecodeError as exc:
