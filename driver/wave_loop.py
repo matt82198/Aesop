@@ -36,6 +36,8 @@ import concurrent.futures
 import json
 import os
 import posixpath
+import re
+import shlex
 import sys
 import threading
 import time
@@ -74,6 +76,38 @@ except ImportError:
 
 
 # ========================================================================
+# Sanitization and Security
+# ========================================================================
+
+def _safe_slug(slug: str) -> str:
+    """Sanitize a slug to prevent path traversal attacks.
+
+    Whitelists [A-Za-z0-9_-]+ and rejects or normalizes everything else.
+    This prevents '../../../etc/x' style escape attempts when slug is used
+    in path joins.
+
+    Args:
+        slug: the slug to sanitize
+
+    Returns:
+        str: sanitized slug with only alphanumeric, underscore, hyphen
+
+    Raises:
+        ValueError: if slug is empty or contains only invalid characters
+    """
+    if not slug:
+        raise ValueError("slug cannot be empty")
+
+    # Keep only alphanumeric, underscore, and hyphen
+    sanitized = re.sub(r'[^A-Za-z0-9_-]', '', slug)
+
+    if not sanitized:
+        raise ValueError(f"slug contains no valid characters: {slug}")
+
+    return sanitized
+
+
+# ========================================================================
 # Wave Recovery: Journal and Resume Support
 # ========================================================================
 
@@ -87,12 +121,20 @@ def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, 
         data: dict with outcome data (verified, testExit, repairs, etc.)
 
     Journal is stored as: state_dir/journal/<slug>.json with timestamp.
+    Slug is sanitized to prevent path traversal attacks.
     """
     state_path = Path(state_dir)
     journal_dir = state_path / "journal"
     journal_dir.mkdir(parents=True, exist_ok=True)
 
-    journal_file = journal_dir / f"{slug}.json"
+    # Sanitize slug to prevent path traversal.
+    try:
+        safe_slug = _safe_slug(slug)
+    except ValueError:
+        # Fail-closed: if slug is invalid, skip journaling.
+        return
+
+    journal_file = journal_dir / f"{safe_slug}.json"
     entry = {
         "slug": slug,
         "phase": phase,
@@ -125,7 +167,8 @@ def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
 
     journal_state = {}
     try:
-        for journal_file in journal_dir.glob("*.json"):
+        # Only read files that match the safe slug pattern to avoid traversal attacks.
+        for journal_file in journal_dir.glob("[A-Za-z0-9_-]*.json"):
             try:
                 entry = json.loads(journal_file.read_text())
                 slug = entry.get("slug")
@@ -725,17 +768,18 @@ def run_wave(
                 files_to_add.extend(item_result.get("filesWritten", []))
 
             if files_to_add:
-                # Add files.
-                add_cmd = "git add " + " ".join(files_to_add)
+                # Add files. Escape each filename to prevent shell injection.
+                escaped_files = [shlex.quote(f) for f in files_to_add]
+                add_cmd = "git add " + " ".join(escaped_files)
                 add_result = driver.run_command(add_cmd)
                 if add_result.exit_code != 0:
                     result["aborted"] = True
                     result["abort_reason"] = "git_add_failed"
                     return result
 
-                # Commit.
+                # Commit. Escape the message to prevent shell injection.
                 commit_msg = f"Wave: {len(verified_items)} items verified"
-                commit_cmd = f"git commit -m '{commit_msg}'"
+                commit_cmd = f"git commit -m {shlex.quote(commit_msg)}"
                 commit_result = driver.run_command(commit_cmd)
                 if commit_result.exit_code != 0:
                     # Might be "nothing to commit"; not necessarily a failure.

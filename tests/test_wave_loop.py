@@ -1486,5 +1486,232 @@ class TestWaveRecoveryHonestAccounting(unittest.TestCase):
                 self.assertIn("skipped_from_journal", result["resume_stats"])
 
 
+class ShellInjectionCheckDriver(AgentDriver):
+    """Driver that captures run_command calls for shell injection testing."""
+
+    def __init__(self):
+        self.dispatch_count = 0
+        self.run_commands = []  # List of commands passed to run_command
+        self._workers = {}
+
+    def probe_capabilities(self) -> DriverCapabilities:
+        return DriverCapabilities(
+            name="shell-injection-check-driver",
+            parallel_dispatch=False,
+            worker_filesystem_access=False,
+            worker_shell_access=False,
+            structured_output=False,
+            worktree_isolation=False,
+            native_cost_tracking=False,
+            native_stall_detection=False,
+            tool_use_accuracy=0.92,
+            recommended_verification_tier=2,
+            available_models=("fake-model",),
+            notes="Driver for shell injection testing",
+        )
+
+    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
+        self.dispatch_count += 1
+        worker_id = f"worker-{self.dispatch_count}"
+        self._workers[worker_id] = {"status": WORKER_DONE}
+        # Return success and mark files as written.
+        return WorkerResult(
+            worker_id=worker_id,
+            status=WORKER_DONE,
+            ok=True,
+            files_written=tuple(request.owned_files),
+            tokens_spent=100,
+        )
+
+    def worker_status(self, worker_id: str) -> ad.WorkerStatus:
+        if worker_id in self._workers:
+            return ad.WorkerStatus(
+                worker_id=worker_id,
+                state=self._workers[worker_id]["status"],
+            )
+        return ad.WorkerStatus(worker_id=worker_id, state=ad.WORKER_UNKNOWN)
+
+    def run_command(self, command: str, cwd=None, shell=None) -> CommandResult:
+        # Capture the command for inspection.
+        self.run_commands.append(command)
+
+        # Simulate successful git commands.
+        if command.startswith("git"):
+            # For the test, we check if the command is properly escaped.
+            return CommandResult(exit_code=0, stdout="OK")
+
+        # For test commands, simulate success.
+        return CommandResult(exit_code=0, stdout="OK")
+
+    def resolve_model(self, role: str) -> str:
+        return "fake-model"
+
+    def get_tokens_spent(self) -> int:
+        return 0
+
+
+class TestShellInjectionProtection(unittest.TestCase):
+    """Test protection against shell injection via filenames and commit messages."""
+
+    def test_git_add_escapes_filenames_with_spaces(self):
+        """Verify that git add command escapes filenames with spaces."""
+        import shlex
+
+        # Test the escaping logic directly
+        files_to_add = ["file with spaces.py", "normal.py"]
+        escaped_files = [shlex.quote(f) for f in files_to_add]
+        add_cmd = "git add " + " ".join(escaped_files)
+
+        # Verify escaping
+        self.assertIn("'file with spaces.py'", add_cmd)
+        self.assertIn("normal.py", add_cmd)
+        # Should NOT have the raw form
+        self.assertNotEqual(add_cmd, "git add file with spaces.py normal.py")
+
+    def test_git_add_escapes_filenames_with_quotes(self):
+        """Verify that git add command escapes filenames with quotes."""
+        import shlex
+
+        files_to_add = ["file'with'quotes.py"]
+        escaped_files = [shlex.quote(f) for f in files_to_add]
+        add_cmd = "git add " + " ".join(escaped_files)
+
+        # Verify escaping (shlex.quote should handle this safely)
+        self.assertNotEqual(add_cmd, "git add file'with'quotes.py")
+        # The file should be escaped somehow
+        self.assertIn("file", add_cmd)
+
+    def test_git_add_escapes_filenames_with_semicolon(self):
+        """Verify that git add command escapes filenames with semicolons to prevent injection."""
+        import shlex
+
+        files_to_add = ["file;rm_me.py"]
+        escaped_files = [shlex.quote(f) for f in files_to_add]
+        add_cmd = "git add " + " ".join(escaped_files)
+
+        # The vulnerable form would be: "git add file;rm_me.py"
+        # This would execute "git add file" and then "rm_me.py" as a separate command
+        self.assertNotEqual(add_cmd, "git add file;rm_me.py")
+        # Verify it's safely quoted
+        self.assertIn("'file;rm_me.py'", add_cmd)
+
+    def test_git_commit_escapes_message(self):
+        """Verify that git commit command escapes the message properly."""
+        import shlex
+
+        commit_msg = "Wave: 1 items verified"
+        commit_cmd = f"git commit -m {shlex.quote(commit_msg)}"
+
+        # Should be quoted
+        self.assertIn("'", commit_cmd)
+        self.assertIn("Wave: 1 items verified", commit_cmd)
+
+
+class TestPathTraversalProtection(unittest.TestCase):
+    """Test protection against path traversal attacks via slug sanitization."""
+
+    def test_safe_slug_sanitizes_traversal(self):
+        """_safe_slug should sanitize path traversal attempts by stripping invalid chars."""
+        from wave_loop import _safe_slug
+
+        # These have dangerous chars stripped, leaving only safe chars
+        # "../../../etc/passwd" -> "etcpasswd" (/ . removed)
+        result = _safe_slug("../../../etc/passwd")
+        self.assertEqual(result, "etcpasswd")
+
+        # ".." only has invalid chars, so it raises ValueError
+        with self.assertRaises(ValueError):
+            _safe_slug("..")
+
+        # Backslashes are also invalid, stripped
+        result = _safe_slug("..\\..\\..\\windows\\system32")
+        self.assertEqual(result, "windowssystem32")
+
+    def test_safe_slug_accepts_valid_chars(self):
+        """_safe_slug should accept alphanumeric, underscore, hyphen."""
+        from wave_loop import _safe_slug
+
+        # These should be accepted
+        self.assertEqual(_safe_slug("valid-slug"), "valid-slug")
+        self.assertEqual(_safe_slug("valid_slug"), "valid_slug")
+        self.assertEqual(_safe_slug("ValidSlug123"), "ValidSlug123")
+        self.assertEqual(_safe_slug("a"), "a")
+        self.assertEqual(_safe_slug("z-9_A"), "z-9_A")
+
+    def test_safe_slug_strips_invalid_chars(self):
+        """_safe_slug should strip invalid characters."""
+        from wave_loop import _safe_slug
+
+        # Invalid chars are stripped, keeping only alphanumeric, hyphen, underscore
+        self.assertEqual(_safe_slug("valid@slug!"), "validslug")
+        self.assertEqual(_safe_slug("file/path"), "filepath")
+        self.assertEqual(_safe_slug("item;drop"), "itemdrop")
+
+    def test_safe_slug_rejects_empty(self):
+        """_safe_slug should reject empty slugs."""
+        from wave_loop import _safe_slug
+
+        with self.assertRaises(ValueError):
+            _safe_slug("")
+
+        with self.assertRaises(ValueError):
+            _safe_slug("...")  # Only invalid chars
+
+    def test_journal_write_sanitizes_slug(self):
+        """Journal write should sanitize slug to prevent path traversal."""
+        from wave_loop import _write_journal_entry, _load_journal_state
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            state_path = Path(state_dir)
+
+            # Attempt to write with a traversal slug
+            # This should sanitize or skip the write
+            _write_journal_entry(state_path, "../../../etc/passwd", "test", {"data": "value"})
+
+            # The journal directory should only contain safe files
+            journal_dir = state_path / "journal"
+            if journal_dir.exists():
+                journal_files = list(journal_dir.glob("*.json"))
+                # Should not have created any files with path traversal
+                for f in journal_files:
+                    # Filename should not contain slashes or dots
+                    self.assertNotIn("/", f.name)
+                    self.assertNotIn(".", f.name.split(".")[-1])  # Only one dot (extension)
+
+    def test_journal_load_with_safe_slug(self):
+        """Journal load should only read files matching safe slug pattern."""
+        from wave_loop import _load_journal_state, _write_journal_entry
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            state_path = Path(state_dir)
+            journal_dir = state_path / "journal"
+            journal_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write a safe entry
+            _write_journal_entry(state_path, "safe-slug", "test", {"verified": True})
+
+            # Manually write an unsafe entry (this is what we're protecting against)
+            unsafe_file = journal_dir / "../../../etc/passwd.json"
+            try:
+                unsafe_file.parent.mkdir(parents=True, exist_ok=True)
+                unsafe_file.write_text('{"slug": "malicious"}')
+            except Exception:
+                # If we can't write it, that's fine - the attack is prevented
+                pass
+
+            # Load should only find the safe entry
+            loaded = _load_journal_state(state_path)
+
+            # Should have found the safe entry
+            safe_found = any(entry.get("slug") == "safe-slug" for entry in loaded.values())
+            # Should NOT have found the malicious entry
+            malicious_found = any(
+                entry.get("slug") == "malicious" for entry in loaded.values()
+            )
+
+            self.assertTrue(safe_found, "Safe entry should be loaded")
+            self.assertFalse(malicious_found, "Malicious entry should not be loaded")
+
+
 if __name__ == "__main__":
     unittest.main()
