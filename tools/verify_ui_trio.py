@@ -175,7 +175,7 @@ def verify_redaction_patterns_consistency() -> None:
     for key in ['posix_path_uppercase', 'posix_path_lowercase']:
         posix_test = canonical_probes[key][0]
         # Must match a path starting with / followed by alphanumeric
-        assert re.search(r'/[A-Za-z_][^\s:/<>|*]*', posix_test), \
+        assert re.search(r'/[^\s/:*<>|][^\s:*<>|]*', posix_test), \
             f"PATH_PATTERN failed to match POSIX path: {posix_test}"
 
     # Test EMAIL_PATTERN matches the email
@@ -260,7 +260,7 @@ def test_reasoning_endpoint(base_url: str) -> bool:
 
                     # Check for unredacted POSIX paths (both uppercase and lowercase)
                     # The redactor's PATH_PATTERN covers /[^/:*<>|]* which includes both cases
-                    posix_path_matches = re.findall(r'/[A-Za-z_][^\s:/<>|*]*', reasoning)
+                    posix_path_matches = re.findall(r'/[^\s/:*<>|][^\s:*<>|]*', reasoning)
                     assert not posix_path_matches, \
                         f"Reasoning contains unredacted POSIX path: {posix_path_matches}"
 
