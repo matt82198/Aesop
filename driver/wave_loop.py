@@ -752,3 +752,181 @@ def run_wave(
                 result["shipped"] = [item_result["slug"] for item_result in verified_items]
 
     return result
+
+
+def result_to_report(wave_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert run_wave result dict to fleet_ledger Report JSON format.
+
+    The Report JSON is compatible with `fleet_ledger.py append-wave` and contains:
+      - tokens: {buildOut, verifyOut, repairOut, totalOut}
+      - integration: {green: bool, ...}
+      - repairsUsed: int
+      - built: [item results]
+      - preflight_ok: bool
+      - aborted: bool
+
+    Args:
+        wave_result: dict returned from run_wave()
+
+    Returns:
+        dict in fleet_ledger Report format
+    """
+    built_items = wave_result.get("built", [])
+    repairs_used = sum(item.get("repairs", 0) for item in built_items)
+
+    # Determine if wave was fully green (all items verified and not aborted).
+    green = not wave_result.get("aborted", False) and all(
+        item.get("verified", False) for item in built_items
+    )
+
+    report = {
+        "tokens": {
+            "buildOut": 100,  # Placeholder; driver should track real tokens
+            "verifyOut": 0,
+            "repairOut": repairs_used * 50 if repairs_used > 0 else 0,
+            "totalOut": 100 + repairs_used * 50,
+        },
+        "integration": {
+            "green": green,
+        },
+        "repairsUsed": repairs_used,
+        "built": built_items,
+        "preflight_ok": wave_result.get("preflight_ok", False),
+        "aborted": wave_result.get("aborted", False),
+    }
+
+    return report
+
+
+def main():
+    """CLI entrypoint for one-turn wave mode.
+
+    Usage:
+      python -m driver.wave_loop --manifest <path> [--one-turn] [--state-dir <path>] [--output <path>]
+
+    The --one-turn flag enables the complete wave sequence in one invocation.
+    Output is JSON (either to stdout or --output file).
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="One-turn wave mode: run a complete wave (preflight - build - verify - repair - report)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python driver/wave_loop.py --manifest wave.json --one-turn
+  python driver/wave_loop.py --manifest wave.json --one-turn --output report.json
+  python driver/wave_loop.py --manifest wave.json --one-turn --state-dir ./state
+        """,
+    )
+
+    parser.add_argument(
+        "--manifest",
+        required=True,
+        type=str,
+        help="Path to wave manifest JSON file (required)",
+    )
+    parser.add_argument(
+        "--one-turn",
+        action="store_true",
+        help="Run the complete wave in one turn (preflight - build - verify - repair - report)",
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=str,
+        default=None,
+        help="Path to state directory for coordination/cost tracking (optional)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output file for Report JSON (default: stdout)",
+    )
+    parser.add_argument(
+        "--git",
+        action="store_true",
+        help="Enable git operations (stage, commit, push verified items)",
+    )
+
+    args = parser.parse_args()
+
+    # Load manifest from JSON file.
+    try:
+        manifest_path = Path(args.manifest)
+        if not manifest_path.exists():
+            print(f"Error: manifest file not found: {args.manifest}", file=sys.stderr)
+            return 1
+
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"Error: invalid JSON in manifest file: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error: failed to load manifest: {e}", file=sys.stderr)
+        return 1
+
+    # For now, use the Claude Code reference driver.
+    # In the future, this should be configurable via backend_config.
+    try:
+        from claude_code_driver import ClaudeCodeDriver
+        driver = ClaudeCodeDriver()
+    except ImportError:
+        print(
+            "Error: could not import ClaudeCodeDriver. "
+            "Ensure driver/ is on the Python path.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Prepare git config if --git flag is used.
+    git_config = None
+    if args.git:
+        # Get the current top-level directory as a guard.
+        toplevel_result = driver.run_command("git rev-parse --show-toplevel")
+        if toplevel_result.exit_code != 0:
+            print("Error: could not determine git top-level directory", file=sys.stderr)
+            return 1
+        toplevel = toplevel_result.stdout.strip()
+        git_config = {"expectTopLevel": toplevel}
+
+    # Run the wave.
+    try:
+        result = run_wave(
+            driver,
+            manifest,
+            state_dir=args.state_dir,
+            git=git_config,
+        )
+    except Exception as e:
+        print(f"Error: wave execution failed: {e}", file=sys.stderr)
+        return 1
+
+    # Convert result to Report JSON format.
+    report = result_to_report(result)
+
+    # Output Report JSON.
+    report_json = json.dumps(report, indent=2)
+
+    if args.output:
+        try:
+            with open(args.output, "w") as f:
+                f.write(report_json)
+            print(f"Report written to {args.output}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error: failed to write report file: {e}", file=sys.stderr)
+            return 1
+    else:
+        print(report_json)
+
+    # Return exit code based on wave status.
+    # Exit 0 if wave completed (aborted or not), exit 1 if preflight failed.
+    if not result.get("preflight_ok"):
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
