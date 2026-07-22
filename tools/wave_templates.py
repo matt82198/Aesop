@@ -216,17 +216,17 @@ def validate_presets(preset_names: List[str], output_json: bool = False) -> Tupl
             # Validate the preset: allow placeholders (presets have them), require testCmd (wave engine needs it)
             validate_manifest(preset, allow_placeholders=True, require_testcmd=True)
             results[preset_name] = {"valid": True, "errors": []}
-            print(f" {preset_name}: valid", file=sys.stderr)
+            print(f"✓ {preset_name}: valid", file=sys.stderr)
         except FileNotFoundError as e:
-            errors.append(f" {preset_name}: {e}")
+            errors.append(f"✗ {preset_name}: {e}")
             all_valid = False
             results[preset_name] = {"valid": False, "errors": [str(e)]}
         except ValueError as e:
-            errors.append(f" {preset_name}: {e}")
+            errors.append(f"✗ {preset_name}: {e}")
             all_valid = False
             results[preset_name] = {"valid": False, "errors": [str(e)]}
         except Exception as e:
-            errors.append(f" {preset_name}: unexpected error: {e}")
+            errors.append(f"✗ {preset_name}: unexpected error: {e}")
             all_valid = False
             results[preset_name] = {"valid": False, "errors": [str(e)]}
 
