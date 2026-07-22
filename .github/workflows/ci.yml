@@ -117,6 +117,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/ci_workflow_lint.py
 
+      - name: State API lint gate (ratchet mode)
+        if: matrix.python-shard == 0
+        run: python tools/stateapi_lint.py
+
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
         run: |
           python3 << 'EOF'
