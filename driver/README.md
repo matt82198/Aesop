@@ -209,6 +209,117 @@ verification tier (3+) because their tool-use accuracy is lower. The cost of
 cheaper inference is re-spent on orchestrator verification. See the verification
 thesis in the README for details.
 
+### Configuring a backend
+
+Aesop's backend can be configured via an `aesop.config.json` file in the
+repository root (or any other path). This allows dropping a single JSON file to
+switch backends without changing code. The configuration is **offline-safe**:
+building a driver requires no API key; keys are read from environment variables
+at call time during live dispatch.
+
+**Configuration schema** (backend block):
+```json
+{
+  "backend": "claude" | "codex" | "openai-compatible",
+  "model": "...",                    // Required for codex, openai-compatible
+  "base_url": "...",                 // Required for openai-compatible
+  "api_key_env": "OPENAI_API_KEY",   // Optional (default: OPENAI_API_KEY)
+  "is_local": false,                 // Optional, for openai-compatible only
+  "max_owned_bytes": 200000,         // Optional file-size limit
+  "max_retries": 2,                  // Optional retry cap for malformed JSON
+  "timeout_s": 120.0                 // Optional HTTP timeout
+}
+```
+
+**Default**: If no config file exists, aesop uses Claude Code (preserves today's
+behavior).
+
+**Example configurations**:
+
+```python
+# config.py provides helpers to load and build drivers from JSON:
+
+from config import load_backend_config, build_driver, describe_backend
+
+# Load from aesop.config.json (or default to Claude)
+config = load_backend_config()  # path="aesop.config.json" by default
+
+# Instantiate the driver (offline-safe; no API key required at build time)
+driver = build_driver(config)
+
+# Describe the backend for logging
+print(describe_backend(config))
+# Example output: "claude-code: parallel=1 wfs=1 ... tier=1"
+```
+
+**Claude Code** (production):
+```json
+{
+  "backend": "claude"
+}
+```
+- Haiku workers, Tier 1 verification
+- No API key needed (Claude Code manages auth)
+- Recommended for production
+
+**OpenAI Codex** (experimental):
+```json
+{
+  "backend": "codex",
+  "model": "gpt-3.5-turbo"
+}
+```
+- Requires `OPENAI_API_KEY` environment variable set
+- Tier 2 verification (validate all JSON, spot-check, repair budget)
+- Cheaper than Claude but needs higher orchestrator burden
+
+**OpenAI-compatible hosted model** (OpenRouter, experimental):
+```json
+{
+  "backend": "openai-compatible",
+  "base_url": "https://openrouter.ai/api/v1",
+  "model": "openai/gpt-4-turbo",
+  "api_key_env": "OPENROUTER_API_KEY"
+}
+```
+- Requires the named environment variable set
+- Tier 2 verification (hosted strong model)
+- Supports any OpenAI-compatible endpoint (OpenRouter, Together, etc.)
+
+**OpenAI-compatible local model** (Ollama, experimental):
+```json
+{
+  "backend": "openai-compatible",
+  "base_url": "http://localhost:11434/v1",
+  "model": "neural-chat",
+  "is_local": true
+}
+```
+- No API key required (uses dummy `local-only` if not set)
+- Tier 3 verification (local small model: validate all, heavy spot-check, adversarial review)
+- Requires `ollama serve` running on localhost:11434
+
+**How to run**:
+
+1. Copy `driver/aesop.config.example.json` to `aesop.config.json` in the repo root
+2. Edit `aesop.config.json` to select a backend and set any required fields
+3. For non-Claude backends, set the API key environment variable:
+   ```bash
+   export OPENAI_API_KEY=sk-...        # for Codex
+   export OPENROUTER_API_KEY=sk-...    # for OpenRouter
+   # Ollama needs no key
+   ```
+4. Run aesop; the orchestration loop loads the config and instantiates the driver:
+   ```python
+   config = load_backend_config()
+   driver = build_driver(config)
+   # Pass driver to wave orchestration loop
+   ```
+
+**Testing**: All drivers build offline (no API key required at import or build
+time). Keys are read from `os.environ` only at dispatch time if a live call is
+made. Tests can inject a `FakeTransport` to avoid network entirely.
+
 ### Wiring verification tier into a wave manifest
 
 When building a manifest for `wave-flat-dispatch.template.mjs`, include the
