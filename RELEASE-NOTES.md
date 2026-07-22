@@ -1,4 +1,6 @@
-# aesop 0.3.0 — Multi-core waves
+# aesop 0.3.1 — Multi-core waves
+
+> 0.3.1 ships as the release tag for the 0.3.0 milestone (a defective v0.3.0 tag was burned by an automation error and superseded).
 
 0.2.0 shipped the seams; 0.3.0 ships the proof: **a non-Claude model core ran a full
 supervised wave — intake → build → verify → ship — through the same engine, with the

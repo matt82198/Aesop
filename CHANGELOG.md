@@ -5,7 +5,7 @@ All notable changes to Aesop are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - 0.3.0] - Waves 28-31
+## [0.3.1] - 2026-07-22 - Waves 28-31
 
 ### Added
 - **Non-Claude core proof (release gate 1)**: a Codex-backed worker (gpt-4o-mini via AgentDriver) built, verified, and shipped a full wave increment end to end (PR #325); JSON-schema-capable model gate with `allow_unverified_models` escape.
