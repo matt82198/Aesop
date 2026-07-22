@@ -22,32 +22,24 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `wave-28-round1-built` (2026-07-22, current)
-**v0.2.0 RELEASED by user** (npm latest; publish.yml OIDC green). **0.3.0 gates locked (user)**: (1) a
-non-Claude core runs a full wave cycle, (2) a fresh /refinesystem clean pass immediately pre-release.
-Wave-28 round 1: 12 lanes built+pushed (4 verified P1 fixes; WS3a wave_scheduler pilot — survived a
-6-P1 NO-GO break-it review, all fixed fail-closed; windows parity; stateapi CI ratchet gate live;
-docs/templates/preflight/transport lanes; merge_wait helper in ~/scripts). Scanner episode resolved by
-USER DECISION: narrow REDACTION_SOURCE_FILES exemption (PR #322) — single file, single rule, findings
-still reported; obfuscation removed. Live accuracy measured: gpt-4o-mini 32/32 (PR #321).
-/refinesystem skill created (the hardening loop, separate from /buildsystem); round-1 lens fleet
-(adversarial-on-fixes, scanner-exemption review, security expert, regression sweep, analyst, delta
-audit) dispatched over the wave-28 surface. Train-28 assembling.
+## Phase: `0.3.0-release-ready` (2026-07-22, current)
+**BOTH 0.3.0 GATES COMPLETE.** Gate 1: supervised codex wave shipped a real item end-to-end
+(PR #325; two human corrections; four scheduler defects the live run exposed, fixed with
+real-shape regression tests). Gate 2: /refinesystem loop exited CLEAN at round 4 — ~30
+verified defects fixed across 4 rounds, ~10 lens claims refuted with evidence, one LIVE
+incident caught by the regression canary (fixture escape; two long-lived identity polluters
+eliminated, one predating the cycle). Main FULLY GREEN including windows (streak 2/5 toward
+required-promotion; drift: ubuntu 100%). Live accuracy measured 32/32 (gpt-4o-mini).
+RELEASE-NOTES.md finalized with the honest ledger.
 
-## NEXT STEPS (wave-28)
-- Lead: verified P1 fixes (wave_loop add-residue unstage; cost_projection fired_alert honesty; reproduce.js
-  'Missing:' classifier; stateapi_lint posix-normalized keys + baseline regen) → then wire stateapi_lint into
-  CI and start the 32-violation burn-down.
-- Windows python-parity lane (job red: cost_ceiling ledger perms, tracker SSE WinError 10053, collector
-  NoneType); promote job to required after 5 green merges.
-- P2s: read_api dead fallback delete, redaction URL-credential pattern, state_store/CLAUDE.md read_api entry,
-  CHANGELOG wave-27 backfill, projection/ceiling window contract, explicit-repo-required preflight.
-- USER-GATED: cut 0.2.0 — `gh release create v0.2.0 --notes-file RELEASE-NOTES.md` (publish.yml OIDC -> npm);
-  WS1c outreach; live accuracy run (`python bench/accuracy_harness.py --mode live`, ~$5-10); external
-  benchmark validation spend (wave-29, ~$200-500 grading).
-- Tracked defers: state fragmentation, StateAPI boundary, proof-harness consolidation, MAX_PATH deep-state note,
-  bench validation of tool_use_accuracy (wave-27 release gate candidate), tripwire root-stray widening,
-  codex max_tokens bound, falsifiability script pytest-discovery footnote.
+## NEXT STEPS
+- USER TRIGGER: `gh release create v0.3.0 --notes-file RELEASE-NOTES.md --latest`
+  (publish.yml OIDC -> npm).
+- Running now: /recency outward-surface pass (portfolio AI reviews refreshing, softer tone
+  brief); recursive domain sweep (one-file-per-domain 1:1 contract).
+- Wave-31 backlog (tracked): WS3b failure-recovery + unsupervised loop, WriteAPI caller
+  migration, validation-ownership consolidation, StateAPI 33-entry burndown, windows
+  promotion at 5 greens, frontier live run (spend-gated), external-benchmark $10 slice.
 
 ## Phase history (collapsed)
 - `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/

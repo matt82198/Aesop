@@ -1,6 +1,6 @@
 # bin/ — CLI scaffolder + runtime commands
 
-**Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet).
+**Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet/health-score/reproduce).
 
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
@@ -23,7 +23,7 @@
 
 **Runtime commands** (after scaffolding; dispatch pattern in cli.js lines 14–30):
 ```javascript
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet'];
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health-score', 'reproduce'];
 const commandMap = {
   'doctor': '../tools/doctor.js',   // Preflight check (Node, Python, git, config, dirs, hooks, port)
   'watch': '../tools/watch.js',     // Launch daemon; spawns daemons/run-watchdog.sh

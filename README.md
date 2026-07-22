@@ -111,7 +111,7 @@ The benchmark proves it: across 39 judgment tasks (code review, severity calibra
 - **[docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)** — Cost analysis and scaling  
 - **[docs/CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles  
 - **[docs/autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means (and doesn't), evidence for all claims, honest limits  
-- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.2.0: multi-model drivers, team coordination, transcript sampling
+- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.3.0: non-Claude core proof (Codex wave), refinement-loop convergence, Windows-green CI
 
 ## Contributing
 

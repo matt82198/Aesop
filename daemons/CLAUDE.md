@@ -10,7 +10,7 @@
 
 ## Files
 
-- **run-watchdog.sh**: Daemon supervisor (1.7K); spawns backup-fleet.sh every 150s with atomic lockfile guard, maintains heartbeat, logs to FLEET-BACKUP.log, posts security alerts via alert_bridge.py (opt-in). Traps INT/TERM cleanly. **BASH_SOURCE exec-guard** (line ~272): `if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi` — allows sourcing for test reuse without triggering a cycle.
+- **run-watchdog.sh**: Daemon supervisor (1.7K); spawns backup-fleet.sh every 150s with atomic lockfile guard, maintains heartbeat, logs to FLEET-BACKUP.log, posts security alerts via alert_bridge.py (opt-in). Traps INT/TERM cleanly. **BASH_SOURCE exec-guard** (lines ~276-278): `if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi` — allows sourcing for test reuse without triggering a cycle.
 - **backup-fleet.sh**: Core backup worker (5K); discovers repos (~/.*, ~/*, ~/dev/*), stashes uncommitted work to backup/* branches, pushes unpushed commits, scans tracked/untracked files for secrets. Blocks push if secret-scan fails. **Set -u pipefail** at top; no side effects on source.
 - **selfheal.sh**: Self-healing supervisor; monitors heartbeats of run-watchdog.sh and the sibling monitor daemon (CONDUCTOR_ROOT-resolved, same convention as run-watchdog.sh). On each cycle (~60s), detects stale heartbeats (>600s age) and restarts dead daemons. Single-instance guarded via atomic mkdir. Never kills anything with fresh heartbeat (idempotent). Logs all healing actions to state/SELFHEAL.log (append-only). **BASH_SOURCE exec-guard** and CRLF-safe. Supports `--once` mode for testing.
 

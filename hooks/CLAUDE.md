@@ -71,7 +71,7 @@ Claude Code **PreToolUse** hook enforcing "subagents are always Haiku" cardinal 
 }
 ```
 
-**Test Command**: `node hooks/claude/force-model-policy.mjs --test` (or via `node --test tests/force-model-policy.test.mjs`). Validates Haiku allowed on subagents, non-Haiku (e.g., Opus) blocked, orchestrator not subject to policy, JSON logging format valid. Exit 0 = pass; exit 1 = fail.
+**Test Command**: `node --test tests/force-model-policy.test.mjs` (the .mjs itself has no --test mode). Validates Haiku allowed on subagents, non-Haiku (e.g., Opus) blocked, orchestrator not subject to policy, JSON logging format valid. Exit 0 = pass; exit 1 = fail.
 
 ## Key Invariants
 - POSIX sh compatible, CRLF-safe (no line continuations)
