@@ -264,6 +264,44 @@ class TestGroundTruthValidation(unittest.TestCase):
                         f"Ground truth {obj.get('id')} has neither expected nor expected_regex",
                     )
 
+    def test_regex_ground_truth_has_exemplar_and_counter(self):
+        """Each regex ground truth must have exemplar and counter_example fields."""
+        import re
+        path = bench_dir / "ground_truth_frontier.jsonl"
+        with open(path) as f:
+            for i, line in enumerate(f, 1):
+                if line.strip():
+                    obj = json.loads(line)
+                    if "expected_regex" in obj and obj["expected_regex"]:
+                        # Must have both exemplar and counter_example
+                        self.assertIn(
+                            "exemplar",
+                            obj,
+                            f"Ground truth {obj.get('id')} (line {i}) has regex but missing exemplar",
+                        )
+                        self.assertIn(
+                            "counter_example",
+                            obj,
+                            f"Ground truth {obj.get('id')} (line {i}) has regex but missing counter_example",
+                        )
+
+                        # Exemplar must match the regex
+                        exemplar = obj.get("exemplar", "")
+                        regex_pattern = obj.get("expected_regex")
+                        match = re.search(regex_pattern, exemplar, re.IGNORECASE | re.DOTALL)
+                        self.assertIsNotNone(
+                            match,
+                            f"Ground truth {obj.get('id')} exemplar does NOT match its own regex: {exemplar[:100]}...",
+                        )
+
+                        # Counter-example must NOT match the regex
+                        counter = obj.get("counter_example", "")
+                        match = re.search(regex_pattern, counter, re.IGNORECASE | re.DOTALL)
+                        self.assertIsNone(
+                            match,
+                            f"Ground truth {obj.get('id')} counter_example INCORRECTLY matches its regex: {counter[:100]}...",
+                        )
+
     def test_tasks_and_ground_truth_aligned(self):
         """All tasks should have corresponding ground truth."""
         from frontier_slice import load_frontier_tasks, load_ground_truth

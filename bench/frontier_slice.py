@@ -59,6 +59,8 @@ class GroundTruth:
     id: str
     expected: Optional[str] = None
     expected_regex: Optional[str] = None
+    exemplar: Optional[str] = None  # Correct example that matches the regex/expected
+    counter_example: Optional[str] = None  # Incorrect example that must NOT match
 
 
 def load_frontier_tasks(path: str = "bench/tasks_frontier.jsonl") -> List[FrontierTask]:
