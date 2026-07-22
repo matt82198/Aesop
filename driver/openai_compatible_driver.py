@@ -30,6 +30,7 @@ from agent_driver import (  # noqa: E402
     ROLE_WORKER,
 )
 from codex_driver import CodexDriver  # noqa: E402
+from openai_transport import _AuthStripRedirectHandler  # noqa: E402
 
 
 def make_openai_compatible_transport(
@@ -83,7 +84,10 @@ def make_openai_compatible_transport(
 
         try:
             # POST with hard timeout.
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            # Create a custom opener with auth-stripping redirect handler.
+            # This prevents Authorization header leakage on cross-origin redirects.
+            opener = urllib.request.build_opener(_AuthStripRedirectHandler())
+            with opener.open(request, timeout=timeout_s) as response:
                 status = response.status
                 body = response.read().decode("utf-8")
 

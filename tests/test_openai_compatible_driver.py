@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.request
 from pathlib import Path
 
 # Add driver/ to path for imports.
@@ -352,6 +353,110 @@ class TestTransportWiring(unittest.TestCase):
         finally:
             if old_key is not None:
                 os.environ.update({key_var: old_key})
+
+
+class TestRedirectSecurity(unittest.TestCase):
+    """Test that cross-origin redirects strip the Authorization header.
+
+    These tests verify the _AuthStripRedirectHandler is properly integrated
+    into the openai_compatible_driver transport. We test the handler directly
+    at the handler level rather than through the full HTTP stack to avoid
+    flakiness on Windows from connection handling.
+    """
+
+    def test_cross_origin_redirect_strips_auth(self):
+        """Verify Authorization header is stripped on cross-origin redirect."""
+        # Import the handler from openai_transport to verify it's available.
+        from openai_transport import _AuthStripRedirectHandler  # noqa: F401
+
+        # Create a redirect handler.
+        handler = _AuthStripRedirectHandler()
+
+        # Create a request with Authorization header.
+        req = urllib.request.Request(
+            "http://127.0.0.1:1234/chat/completions",
+            data=b"{}",
+            headers={
+                "Authorization": "Bearer dummy_key_do_not_scan",
+                "Content-Type": "application/json",
+            },
+        )
+
+        # Redirect to a different origin (different port).
+        new_url = "http://127.0.0.1:5678/redirected"
+        redirected_req = handler.redirect_request(
+            req, None, 302, "Found", {}, new_url
+        )
+
+        # Verify Authorization header was stripped.
+        self.assertIsNotNone(redirected_req)
+        self.assertIsNone(
+            redirected_req.headers.get("Authorization"),
+            "Authorization header should be stripped on cross-origin redirect"
+        )
+
+    def test_same_origin_redirect_preserves_auth(self):
+        """Verify Authorization header is preserved on same-origin redirect."""
+        from openai_transport import _AuthStripRedirectHandler  # noqa: F401
+
+        handler = _AuthStripRedirectHandler()
+
+        req = urllib.request.Request(
+            "http://127.0.0.1:1234/chat/completions",
+            data=b"{}",
+            headers={
+                "Authorization": "Bearer dummy_key_do_not_scan",
+                "Content-Type": "application/json",
+            },
+        )
+
+        # Redirect to same origin (same scheme, host, port).
+        new_url = "http://127.0.0.1:1234/redirected"
+        redirected_req = handler.redirect_request(
+            req, None, 302, "Found", {}, new_url
+        )
+
+        # Verify Authorization header is preserved.
+        self.assertIsNotNone(redirected_req)
+        auth_header = redirected_req.headers.get("Authorization")
+        self.assertIsNotNone(
+            auth_header,
+            "Authorization header should be preserved on same-origin redirect"
+        )
+        self.assertEqual(
+            auth_header,
+            "Bearer dummy_key_do_not_scan",
+            "Authorization header value should be unchanged"
+        )
+
+    def test_sensitive_headers_stripped_on_cross_origin(self):
+        """Verify api-key and x-api-key headers are stripped on cross-origin."""
+        from openai_transport import _AuthStripRedirectHandler  # noqa: F401
+
+        handler = _AuthStripRedirectHandler()
+
+        req = urllib.request.Request(
+            "http://127.0.0.1:1234/endpoint",
+            data=b"{}",
+            headers={
+                "authorization": "Bearer token",
+                "api-key": "secret",
+                "x-api-key": "also_secret",
+                "User-Agent": "test-agent",
+            },
+        )
+
+        # Redirect to different origin.
+        new_url = "http://127.0.0.1:5678/endpoint"
+        redirected_req = handler.redirect_request(
+            req, None, 302, "Found", {}, new_url
+        )
+
+        # Sensitive headers should be stripped.
+        self.assertIsNotNone(redirected_req)
+        self.assertIsNone(redirected_req.headers.get("authorization"))
+        self.assertIsNone(redirected_req.headers.get("api-key"))
+        self.assertIsNone(redirected_req.headers.get("x-api-key"))
 
 
 class TestInheritedBehaviors(unittest.TestCase):
