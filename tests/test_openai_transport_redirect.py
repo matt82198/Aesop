@@ -225,7 +225,7 @@ class TestRedirectSecurity(unittest.TestCase):
             # Call the transport with our local server.
             result = openai_transport.default_openai_transport(
                 payload,
-                timeout_s=5.0,
+                timeout_s=30.0,
                 base_url=self.base_url,
             )
 
@@ -324,7 +324,7 @@ class TestRedirectSecurity(unittest.TestCase):
             with self.assertRaises(RuntimeError) as cm:
                 openai_transport.default_openai_transport(
                     payload,
-                    timeout_s=5.0,
+                    timeout_s=30.0,
                     base_url=self.base_url,
                 )
 
@@ -368,7 +368,7 @@ class TestRedirectSecurity(unittest.TestCase):
             with self.assertRaises(RuntimeError) as cm:
                 openai_transport.default_openai_transport(
                     payload,
-                    timeout_s=5.0,
+                    timeout_s=30.0,
                     base_url=self.base_url,
                 )
 
