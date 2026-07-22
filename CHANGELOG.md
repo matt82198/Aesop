@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Verification policy transparent** (wave-32): Verification tiers now driven by `AgentDriver.probe_capabilities()` — config-free, capability-driven safety.
 
 ### Fixed
+- **Authorization header cross-origin stripping** (PR #221): Blocks Authorization headers on cross-origin redirects to prevent credential leakage; security hardening for urllib transport.
+- **Secret-scan fail-closed on read errors** (PR #226): `secret_scan.py` now fails CLOSED when unable to read files or git data, blocking pushes instead of silently passing; P1 security.
+- **Driver subsystem in npm package** (PR #220): Multi-model AgentDriver backend abstraction now ships in the npm package, enabling production use of alternative backends.
+- **CI/publish Node version parity** (PR #225): Unified Node.js version across CI and npm publish workflows for reproducible builds.
 - **Adversarial-review safety fixes** (wave-32): Multiple orchestration loop hardening fixes identified and validated by external review (agent-grading-agent risks eliminated).
 
 ### Documentation
