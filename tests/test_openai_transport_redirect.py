@@ -16,6 +16,7 @@ import os
 import socketserver
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -63,6 +64,22 @@ class _TestHTTPHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         """Suppress default logging."""
         pass
+
+
+def _call_transport(*args, **kwargs):
+    """Invoke the real transport, retrying ONCE on Windows loopback aborts.
+
+    Under full-suite load, localhost sockets on Windows sporadically die with
+    WinError 10053/10054 mid-read (3 occurrences across 2 tests in one day;
+    never isolated, never on ubuntu). One bounded retry converts that host
+    artifact into a stable test while persistent aborts still fail. Production
+    transport behavior is untouched; expected RuntimeErrors propagate normally.
+    """
+    try:
+        return openai_transport.default_openai_transport(*args, **kwargs)
+    except (ConnectionAbortedError, ConnectionResetError):
+        time.sleep(0.5)
+        return openai_transport.default_openai_transport(*args, **kwargs)
 
 
 class TestRedirectSecurity(unittest.TestCase):
@@ -223,7 +240,7 @@ class TestRedirectSecurity(unittest.TestCase):
             }
 
             # Call the transport with our local server.
-            result = openai_transport.default_openai_transport(
+            result = _call_transport(
                 payload,
                 timeout_s=30.0,
                 base_url=self.base_url,
@@ -322,7 +339,7 @@ class TestRedirectSecurity(unittest.TestCase):
 
             # Call should raise RuntimeError
             with self.assertRaises(RuntimeError) as cm:
-                openai_transport.default_openai_transport(
+                _call_transport(
                     payload,
                     timeout_s=30.0,
                     base_url=self.base_url,
@@ -366,7 +383,7 @@ class TestRedirectSecurity(unittest.TestCase):
 
             # Call should raise RuntimeError without crashing on JSON parse
             with self.assertRaises(RuntimeError) as cm:
-                openai_transport.default_openai_transport(
+                _call_transport(
                     payload,
                     timeout_s=30.0,
                     base_url=self.base_url,
