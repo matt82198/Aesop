@@ -73,10 +73,10 @@ class DispatchCacheCase(unittest.TestCase):
     def _create_dummy_agent(self, agent_name):
         """Create a dummy agent transcript file."""
         project_dir = self.transcripts_root / "test-project"
-        memory_dir = project_dir / "memory"
-        memory_dir.mkdir(parents=True, exist_ok=True)
+        subagents_dir = project_dir / "subagents"
+        subagents_dir.mkdir(parents=True, exist_ok=True)
 
-        agent_file = memory_dir / f"agent-{agent_name}.jsonl"
+        agent_file = subagents_dir / f"agent-{agent_name}.jsonl"
         # Write a minimal NDJSON transcript
         content = '{"type":"user","content":"test"}\n{"type":"assistant","content":"response"}\n'
         agent_file.write_text(content, encoding='utf-8')
@@ -111,8 +111,8 @@ class DispatchCacheCase(unittest.TestCase):
 
         # Modify file to confirm we're not re-reading
         project_dir = self.transcripts_root / "test-project"
-        memory_dir = project_dir / "memory"
-        agent_file = memory_dir / "agent-456.jsonl"
+        subagents_dir = project_dir / "subagents"
+        agent_file = subagents_dir / "agent-456.jsonl"
 
         # Overwrite the agent file with different content (simulates agent activity)
         agent_file.write_text('{"type":"tool_use"}\n' * 10, encoding='utf-8')
