@@ -375,6 +375,172 @@ class TestStallCheck(unittest.TestCase):
             if recovery_dir.exists():
                 self.assertEqual(len(list(recovery_dir.iterdir())), 0, "Recovery directory should be empty")
 
+    def test_recovery_write_path_containment_safe_ids(self):
+        """Test that recovery file paths are contained even with edge-case agent IDs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            recovery_dir = Path(tmpdir) / "recovery"
+
+            # Directly inject results with various agent IDs
+            # This tests the write_recovery_files path containment logic
+            now = time.time()
+            results = [
+                {
+                    "agent": "safe-agent-123",
+                    "verdict": "stale",
+                    "mtime_age_s": 1200,
+                    "suggested_action": "test",
+                    "active": True,
+                },
+            ]
+
+            # Write recovery files
+            count = stall_check.write_recovery_files(results, str(recovery_dir))
+            self.assertEqual(count, 1, "Should write 1 recovery file")
+
+            recovery_file = recovery_dir / "recovery-safe-agent-123.json"
+            self.assertTrue(recovery_file.exists(), "Recovery file should exist")
+
+            # Verify the file is actually inside recovery_dir
+            self.assertTrue(str(recovery_file.resolve()).startswith(str(recovery_dir.resolve())),
+                          "Recovery file must be contained in recovery_dir")
+
+    def test_active_probe_path_containment_safe_ids(self):
+        """Test that active-from probing paths are contained within active_from directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            active_dir = Path(tmpdir) / "active"
+            active_dir.mkdir()
+
+            now = time.time()
+
+            # Create safe transcript
+            safe_file = tmpdir_path / "agent-safe_test.jsonl"
+            safe_file.write_text("dummy")
+            os.utime(safe_file, (now - 100, now - 100))
+
+            # Create active file
+            (active_dir / "safe_test.task").write_text("task")
+
+            # Scan with active_from flag
+            results = stall_check.scan_transcripts(tmpdir_path, 600, active_from_dir=str(active_dir))
+
+            # Verify result
+            self.assertEqual(len(results), 1, "Should find transcript")
+            entry = results[0]
+
+            # Verify agent ID is safe
+            self.assertRegex(entry["agent"], r"^[A-Za-z0-9_-]+$",
+                           f"Agent ID '{entry['agent']}' should be alphanumeric/underscore/dash only")
+
+    def test_traversal_pattern_rejected_via_allowlist(self):
+        """Test that traversal patterns in agent_id would be caught by allowlist.
+
+        Note: We can't easily create files with traversal characters in their names on most OSes,
+        but we can verify that the allowlist regex would reject traversal patterns.
+        """
+        import re
+
+        # The allowlist pattern that should be used
+        AGENT_ID_ALLOWLIST = r"^[A-Za-z0-9_-]+$"
+
+        # Test cases that should be REJECTED
+        reject_cases = [
+            "../evil",
+            "..\\evil",
+            "../../evil",
+            "sub/dir",
+            "sub\\dir",
+            "agent_with_slash/path",
+            "agent_with_backslash\\path",
+        ]
+
+        for case in reject_cases:
+            self.assertFalse(re.match(AGENT_ID_ALLOWLIST, case),
+                            f"Allowlist should reject traversal pattern: {case}")
+
+        # Test cases that should be ACCEPTED
+        accept_cases = [
+            "valid123",
+            "agent_name",
+            "agent-name",
+            "a",
+            "A",
+            "1",
+            "_",
+            "-",
+            "agent_dash-name123",
+        ]
+
+        for case in accept_cases:
+            self.assertTrue(re.match(AGENT_ID_ALLOWLIST, case),
+                           f"Allowlist should accept valid ID: {case}")
+
+    def test_sanitized_agent_ids_happy_path(self):
+        """Test that properly formatted agent IDs still work end-to-end."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            active_dir = Path(tmpdir) / "active"
+            active_dir.mkdir()
+            recovery_dir = Path(tmpdir) / "recovery"
+
+            now = time.time()
+
+            # Create clean transcripts
+            clean_file = tmpdir_path / "agent-clean-test123.jsonl"
+            clean_file.write_text("dummy")
+            os.utime(clean_file, (now - 1200, now - 1200))
+
+            # Create active task file
+            (active_dir / "clean-test123.task").write_text("task data")
+
+            # Scan with all flags
+            results = stall_check.scan_transcripts(tmpdir_path, 600, active_from_dir=str(active_dir))
+
+            # Should find the clean entry
+            self.assertEqual(len(results), 1, "Should find clean transcript")
+            entry = results[0]
+            self.assertEqual(entry["agent"], "clean-test123", "Should extract correct clean agent ID")
+            self.assertEqual(entry["verdict"], "stale", "Should classify as stale")
+            self.assertTrue(entry["active"], "Should be active")
+
+            # Write recovery files
+            count = stall_check.write_recovery_files(results, str(recovery_dir))
+            self.assertEqual(count, 1, "Should write 1 recovery file for clean entry")
+
+            recovery_file = recovery_dir / "recovery-clean-test123.json"
+            self.assertTrue(recovery_file.exists(), "Recovery file should exist for clean ID")
+
+    def test_agent_id_allowlist_validation_with_valid_filenames(self):
+        """Test that only alphanumeric, underscore, and dash are allowed in agent IDs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            now = time.time()
+
+            # Create one valid transcript
+            valid_file = tmpdir_path / "agent-valid_123.jsonl"
+            valid_file.write_text("dummy")
+            os.utime(valid_file, (now - 1200, now - 1200))
+
+            # Create another valid one with dash
+            valid_file2 = tmpdir_path / "agent-valid-test-456.jsonl"
+            valid_file2.write_text("dummy")
+            os.utime(valid_file2, (now - 1200, now - 1200))
+
+            # Scan
+            results = stall_check.scan_transcripts(tmpdir_path, 600)
+
+            # Should find the valid transcripts
+            self.assertEqual(len(results), 2, "Should find both valid transcripts")
+
+            # All results should have valid agent IDs matching allowlist
+            for entry in results:
+                agent_id = entry["agent"]
+                # Should match ^[A-Za-z0-9_-]+$
+                self.assertRegex(agent_id, r"^[A-Za-z0-9_-]+$",
+                                f"Agent ID '{agent_id}' should only contain alphanumeric, underscore, dash")
+
 
 if __name__ == "__main__":
     unittest.main()

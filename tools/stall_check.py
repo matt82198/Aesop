@@ -41,7 +41,45 @@ import os
 import time
 import json
 import argparse
+import re
 from pathlib import Path
+
+
+def sanitize_agent_id(agent_id, filename):
+    """Validate and sanitize agent ID to prevent path traversal (CWE-22).
+
+    Args:
+        agent_id: Extracted agent ID from filename
+        filename: Original filename for warning message
+
+    Returns:
+        Sanitized agent_id if valid, None if invalid (caller should skip entry)
+    """
+    # Allowlist: only alphanumeric, underscore, dash
+    if not re.match(r"^[A-Za-z0-9_-]+$", agent_id):
+        # Log warning with filename only, never echo raw agent_id into a path
+        sys.stderr.write(f"Warning: Skipping transcript with invalid agent ID in file: {filename}\n")
+        return None
+    return agent_id
+
+
+def verify_path_containment(resolved_path, base_dir):
+    """Verify that a path is contained within a base directory (defense-in-depth).
+
+    Args:
+        resolved_path: Resolved absolute path to verify
+        base_dir: Base directory that path must be contained in
+
+    Returns:
+        True if path is safely contained, False if escape attempted
+    """
+    resolved_base = base_dir.resolve()
+    try:
+        resolved_path.relative_to(resolved_base)
+        return True
+    except ValueError:
+        # Path is outside base_dir
+        return False
 
 
 def get_transcripts_root():
@@ -56,7 +94,7 @@ def is_agent_active(agent_id, active_from_dir):
     """Check if an agent is active by looking for task/status files.
 
     Args:
-        agent_id: Agent identifier (e.g., 'abc123')
+        agent_id: Agent identifier (e.g., 'abc123') - must be pre-sanitized
         active_from_dir: Directory to scan for <agent_id>.task or <agent_id>.status files
 
     Returns:
@@ -69,10 +107,13 @@ def is_agent_active(agent_id, active_from_dir):
     if not active_from_path.exists():
         return False
 
-    # Check for <agent_id>.task or <agent_id>.status files
+    # Check for <agent_id>.task or <agent_id>.status files with containment verification
     for pattern in [f"{agent_id}.task", f"{agent_id}.status"]:
-        if (active_from_path / pattern).exists():
-            return True
+        candidate_path = (active_from_path / pattern)
+        # Defense-in-depth: verify path is contained in active_from_path
+        if verify_path_containment(candidate_path, active_from_path):
+            if candidate_path.exists():
+                return True
 
     return False
 
@@ -110,6 +151,12 @@ def scan_transcripts(transcripts_root, threshold_seconds, active_from_dir=None):
 
         # Extract agent_id from filename (e.g., agent-abc123.jsonl -> abc123)
         agent_id = jsonl_file.stem.replace("agent-", "")
+
+        # Sanitize agent_id to prevent path traversal (CWE-22)
+        agent_id = sanitize_agent_id(agent_id, str(jsonl_file))
+        if agent_id is None:
+            # Invalid agent_id, skip this entry
+            continue
 
         # Check active status if flag is provided
         active = is_agent_active(agent_id, active_from_dir)
@@ -227,6 +274,12 @@ def write_recovery_files(results, recovery_dir):
         }
 
         recovery_file = recovery_path / f"recovery-{entry['agent']}.json"
+
+        # Defense-in-depth: verify recovery_file is contained in recovery_path
+        if not verify_path_containment(recovery_file, recovery_path):
+            sys.stderr.write(f"Warning: Recovery file path escape detected, skipping: {entry['agent']}\n")
+            continue
+
         try:
             recovery_file.write_text(json.dumps(advisory, indent=2), encoding='utf-8')
             files_written += 1
