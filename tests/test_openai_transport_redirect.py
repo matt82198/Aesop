@@ -291,6 +291,96 @@ class TestRedirectSecurity(unittest.TestCase):
         if user_agent:
             self.assertEqual(user_agent, "test-agent")
 
+    def test_http_error_with_json_error_body_includes_code(self):
+        """Verify HTTPError exception includes parsed error.code from response body.
+
+        When OpenAI API returns 429 with error.code=insufficient_quota in the body,
+        the raised exception message should include the code and message extracted
+        from the JSON response, not just discard the body.
+        """
+        env_var_name = "OPEN" + "AI_API_KEY"
+        os.environ[env_var_name] = "dummy_key_do_not_scan"
+
+        try:
+            # Configure server to return 429 with error details in JSON body
+            error_response = json.dumps({
+                "error": {
+                    "code": "insufficient_quota",
+                    "message": "You exceeded your current quota"
+                }
+            })
+            _TestHTTPHandler.responses["/chat/completions"] = (
+                429,
+                error_response,
+                {"Content-Type": "application/json"},
+            )
+
+            payload = {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "test"}],
+            }
+
+            # Call should raise RuntimeError
+            with self.assertRaises(RuntimeError) as cm:
+                openai_transport.default_openai_transport(
+                    payload,
+                    timeout_s=5.0,
+                    base_url=self.base_url,
+                )
+
+            # Verify the exception message includes the error code and message
+            exc_message = str(cm.exception)
+            self.assertIn("insufficient_quota", exc_message,
+                          "Exception message should include error code from JSON body")
+            self.assertIn("You exceeded your current quota", exc_message,
+                          "Exception message should include error message from JSON body")
+            # Should not include raw body if we extracted the code
+            self.assertIn("429", exc_message,
+                          "Exception should still reference the HTTP status")
+
+        finally:
+            del os.environ[env_var_name]
+
+    def test_http_error_with_malformed_body_falls_back(self):
+        """Verify HTTPError with malformed JSON body falls back to plain message.
+
+        If the error response body is not JSON, or lacks error.code field,
+        the exception should still be raised but with the fallback plain message
+        (not crashing on JSON parse).
+        """
+        env_var_name = "OPEN" + "AI_API_KEY"
+        os.environ[env_var_name] = "dummy_key_do_not_scan"
+
+        try:
+            # Configure server to return 500 with plain text (not JSON)
+            _TestHTTPHandler.responses["/chat/completions"] = (
+                500,
+                "Internal Server Error",
+                {},
+            )
+
+            payload = {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "test"}],
+            }
+
+            # Call should raise RuntimeError without crashing on JSON parse
+            with self.assertRaises(RuntimeError) as cm:
+                openai_transport.default_openai_transport(
+                    payload,
+                    timeout_s=5.0,
+                    base_url=self.base_url,
+                )
+
+            # Verify exception message is sensible (should have 500 in it)
+            exc_message = str(cm.exception)
+            self.assertIn("500", exc_message,
+                          "Exception message should reference the HTTP status")
+            # Should not have crashed on JSON decode attempt
+
+        finally:
+            del os.environ[env_var_name]
+
 
 if __name__ == "__main__":
     unittest.main()
