@@ -237,9 +237,6 @@ jobs:
       - name: Install Python test dependencies
         run: pip install pyyaml
 
-      - name: npm ci
-        run: npm ci
-
       - name: Run Node.js tests
         run: npm run test:node
 
