@@ -75,13 +75,6 @@ entry; "Autonomous Developer" tagline reframe. Incidents logged: recency agent -
   (brake→live wiring); state_store sqlite CI sharding; model-dispatch core (structural, out-of-repo);
   third-party reproduce.yml untested.
 
-## Recency pass (2026-07-22, post-release): CLEAN
-5 lenses -> 3 fix lanes all merged: repo docs PR #336 (CHANGELOG MIT->PolyForm CRITICAL fix, live
-stats, credibility edits), portfolio PR #33 (stats v0.3.1, timeline waves 21-30), deep-dive gist
-refreshed. Repo description + release title fixed. USER-GATED residuals: delete defective v0.3.0 release
-entry; "Autonomous Developer" tagline reframe. Incidents logged: recency agent --admin/release
-(guards proposed), PostToolUse hook wave-trigger misfire (FLEET-OPS).
-
 ## NEXT STEPS (wave-rc.2)
 Honest open residuals — tracked, not ignored:
 1. **Benchmark scope (curated → real-transcript-sampled)** — Current evidence (N=39) is a curated judgment set,
