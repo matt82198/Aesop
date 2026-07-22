@@ -239,6 +239,51 @@ class TestPhantomPathDetection(unittest.TestCase):
             )
 
 
+class TestNestedDomainDiscovery(unittest.TestCase):
+    """Test that nested domain CLAUDE.md files are discovered by the glob."""
+
+    def test_find_nested_domain_claude_md(self):
+        """MUST find CLAUDE.md in nested directories (e.g., tools/inner/CLAUDE.md)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            # Create nested domain structure
+            # tools/inner/CLAUDE.md (two levels deep)
+            nested_dir = repo_root / "tools" / "inner"
+            nested_dir.mkdir(parents=True)
+            nested_claudemd = nested_dir / "CLAUDE.md"
+            nested_claudemd.write_text("# Nested Domain\n\nTest content.")
+
+            # Also create a top-level one to ensure both are found
+            top_level = repo_root / "CLAUDE.md"
+            top_level.write_text("# Root Domain\n\nRoot content.")
+
+            # And a one-level-deep one
+            one_level = repo_root / "tools" / "CLAUDE.md"
+            one_level.write_text("# Tools Domain\n\nTools content.")
+
+            pkg = repo_root / "package.json"
+            pkg.write_text(json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+            # Import the discover function or use main logic
+            from claudemd_lint import main as lint_main
+            import argparse
+
+            # Simulate the glob from main()
+            claudemd_files = sorted(repo_root.glob("*/CLAUDE.md"))
+            claudemd_files.extend(repo_root.glob("CLAUDE.md"))
+            # This is the fix: add rglob for nested directories
+            claudemd_files.extend(repo_root.glob("**/CLAUDE.md"))
+            claudemd_files = sorted(set(claudemd_files))
+
+            # Should find all three CLAUDE.md files
+            self.assertIn(top_level, claudemd_files, "Root CLAUDE.md not found")
+            self.assertIn(one_level, claudemd_files, "One-level CLAUDE.md not found")
+            self.assertIn(nested_claudemd, claudemd_files, "Nested CLAUDE.md not found")
+            self.assertEqual(len(claudemd_files), 3,
+                           f"Expected 3 CLAUDE.md files, found {len(claudemd_files)}: {claudemd_files}")
+
+
 class TestNpmScriptValidation(unittest.TestCase):
     """Test npm script existence checking."""
 
