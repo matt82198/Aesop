@@ -392,14 +392,41 @@ def run_wave(
             result["resume_stats"] = resume_stats
 
     # ========================================================================
-    # PHASE 1: Preflight ownership guard
+    # PHASE 1: Preflight ownership guard (with per-repo validation)
     # ========================================================================
-    owner_map = {}  # normalized file -> slug
+
+    # First, validate that all repos exist (if repo field is specified).
+    repo_paths = set()
+    for item in items:
+        repo = item.get("repo")
+        if repo:
+            repo_paths.add(repo)
+            repo_path = Path(repo)
+            if not repo_path.exists():
+                result["aborted"] = True
+                result["abort_reason"] = "repo_not_found"
+                result["invalid_repo"] = repo
+                return result
+            # Future: also validate is_git_worktree, has_secret_scan_gate
+
+    # Per-repo ownership guard: track ownership within each repo separately.
+    # Structure: {repo: {normalized_file: slug}}
+    repo_owner_map = {}  # repo -> (normalized file -> slug)
     conflicts = []
 
     for item in items:
         slug = item.get("slug", "unknown")
         owned_files = item.get("ownsFiles", [])
+        repo = item.get("repo", ".")  # Default to cwd if no repo specified
+
+        # Normalize repo path
+        repo_normalized = str(Path(repo).resolve()).lower()
+
+        if repo_normalized not in repo_owner_map:
+            repo_owner_map[repo_normalized] = {}
+
+        owner_map = repo_owner_map[repo_normalized]
+
         for f in owned_files:
             # Platform-independent path normalization: handle separators and case uniformly.
             # Replace all backslashes with forward slashes, normalize with posixpath,
@@ -410,6 +437,7 @@ def run_wave(
                     {
                         "file": f,
                         "normalized": normalized,
+                        "repo": repo,
                         "items": [owner_map[normalized], slug],
                     }
                 )

@@ -97,6 +97,7 @@ def build_manifest_item(driver: AgentDriver, item: Dict[str, Any]) -> Dict[str, 
     policy = verification_policy(caps)
 
     # Copy the input item and enrich with model, tier, and all four policy knobs.
+    # Preserve all original fields including the optional `repo` field.
     result = dict(item)
     result["model"] = model
     result["verificationTier"] = caps.recommended_verification_tier
