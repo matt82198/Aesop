@@ -1,11 +1,8 @@
 # driver/ — AgentDriver backend-portability seam
 
-**What**: The one-file domain contract that lets aesop's wave loop run on
-backends other than Claude Code (Codex, open models). The wave loop dispatches
-through the `AgentDriver` interface and nothing else; each backend is a subclass.
-
-Grounded in a multi-model portability design spike.
-**Phase 1 (interface + reference adapter, shipped)** + **Phase 2 (Codex OpenAI Chat Completions, shipped)** + **Phase 3 (wave-manifest bridge, shipped)**.
+**What**: the domain contract letting aesop's wave loop run on non-Claude backends
+(Codex, open models); the loop dispatches only through the `AgentDriver` interface.
+**Phases 1-3 shipped** (interface + reference adapter; Codex Chat Completions; wave bridge).
 
 ## Files
 
@@ -24,6 +21,8 @@ Grounded in a multi-model portability design spike.
 - **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.).
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json,
   spot_check_frac, repair_cap, require_adversarial_review).
+- **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
+  bounded repair, adversarial review, per-repo batched git ship, recovery journal.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items.
   build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
   by capability and decides green ONLY from test exit code (not model's say-so).
@@ -33,8 +32,7 @@ Grounded in a multi-model portability design spike.
 - **../tests/test_codex_driver_e2e.py** — Phase 2 end-to-end offline tests
   (FakeTransport, red-to-green verification, retry logic, ownership enforcement)
   + gated live test (AESOP_CODEX_LIVE env var).
-- **../tests/test_wave_bridge.py** — Phase 3 end-to-end offline tests proving
-  non-Claude backend drives a real RED stub to verified-GREEN offline (no API key,
+- **../tests/test_wave_bridge.py** — Phase 3 offline e2e (honest green: exit 0 only).
   no network). Tests: manifest building, routing, fail-safe, ownership enforcement,
   headline test (red stub + FakeTransport fix + test pass -> ok=True).
 
@@ -87,7 +85,7 @@ Optional (non-abstract): `get_tokens_spent()`.
 
 The Codex driver proves a non-Claude backend can take a real coding task
 end-to-end through the AgentDriver and produce orchestrator-verified results,
-entirely offline (no API key, no network in CI).
+entirely offline (no API key, no network in CI). The probe's `tool_use_accuracy` 0.92 assertion is evidence-backed as conservative by the 2026-07-22 live run (gpt-4o-mini 32/32 composite, `bench/results/accuracy-live-2026-07-22.json`); single-run, N=32 curated — not a transfer claim.
 
 **dispatch_worker**: Orchestrator-managed worker (Tier 2):
 - Injects owned-file contents into the prompt (worker has no filesystem access).
@@ -102,9 +100,8 @@ entirely offline (no API key, no network in CI).
 - CRITICAL: Green is NOT decided by the model's done:true; it is decided by
   the orchestrator running run_command and getting exit 0 (center verification).
 
-**Transport seam**: The injectable transport callable keeps CI offline. Tests
-pass FakeTransport with canned responses; production code reads OPENAI_API_KEY
-from environment and uses default_openai_transport (stdlib urllib, hard timeout).
+**Transport seam**: injectable transport callable keeps CI offline (FakeTransport
+in tests; production reads OPENAI_API_KEY, default_openai_transport, hard timeout).
 
 **Verification policy**: verification_policy(caps) maps tier 2 -> {
 validate_all_json: True, spot_check_frac: 0.50, repair_cap: 2,
@@ -112,20 +109,14 @@ require_adversarial_review: True }. Feeds the wave's integration verifier.
 
 ## Phase 3 Bridge Implementation Details
 
-The wave bridge connects AgentDriver backends to wave-flat-dispatch manifest
-items, making verification tier driven by backend capability, not config.
+Connects AgentDriver backends to wave-flat-dispatch manifest items; verification
+tier is driven by backend capability, not config.
 
-**build_manifest_item(driver, item) -> dict**:
-- Takes a backlog item {slug, ownsFiles, prompt, testCmd, workDir, ...} + driver.
-- Returns manifest-item dict enriched with: model (from driver.resolve_model('worker')),
-  verificationTier (from driver.probe_capabilities().recommended_verification_tier),
-  AND all four resolved policy knobs (repairCap, requireAdversarialReview, spotCheckFrac,
-  validateAllJson from verification_policy(caps)).
-- Preserves all input fields; adds model, tier, and all four policy fields.
-- The policy is RESOLVED ONCE in Python and carried as literal manifest fields, so
-  the template cannot recompute/drift. Tier-1/Claude path with no verificationTier
-  maintains byte-identical behavior (tier-1 defaults: repairCap=1, requireAdversarialReview=false,
-  spotCheckFrac=0.10, validateAllJson=false).
+**build_manifest_item(driver, item) -> dict**: enriches a backlog item with model
+(driver.resolve_model), verificationTier (probe), and the four policy knobs from
+verification_policy(caps) — RESOLVED ONCE, carried as literal manifest fields so the
+template cannot recompute/drift; tier-1/Claude path stays byte-identical (repairCap=1,
+requireAdversarialReview=false, spotCheckFrac=0.10, validateAllJson=false).
 
 **dispatch_item(driver, item) -> dict**:
 - Routes by worker_filesystem_access: True→{route:'harness'}; False→orchestrator-managed
@@ -138,11 +129,21 @@ items, making verification tier driven by backend capability, not config.
 stub, applies a fix, runs the test, and returns ok=True ONLY because the test passed
 (exit 0). All offline, no API key, no network.
 
+## Wave Scheduler (WS3a Pilot)
+
+**wave_scheduler.py** — single-cycle backlog orchestration: intake up to N file-disjoint todo items from tracker.json (empty/missing ownsFiles REJECTED; paths normalized posix+casefold-on-Windows before overlap checks; required fields pre-validated) -> manifest via build_manifest_item (model + verificationTier from driver.probe) -> HALT + cost-ceiling gates (fail-CLOSED: module import failure or check exception = abort with honest Report, phase=gate_unavailable) -> run_wave (recovery journal + git ship) -> STOP before merge; Report JSON {phase, wave_id, items_selected, items_skipped, items_failed_build, items_shipped, branch, sha, merged:false, halt_reason?, ceiling_reason?, success}. After ship, selected items atomically marked in_progress in tracker (temp+os.replace; dry-run never mutates) so a second run cannot double-dispatch.
+
+**CLI**: `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute`
+
+**Tests** (tests/test_wave_scheduler.py, 24): disjoint/normalization/rejection cases, gate fail-closed incl. exception paths, dry-run purity, tracker idempotence, Report honesty, empty-tracker EMPTY report; module-tmpdir hygiene; all TestCase.
+
+**Invariants**: stdlib-only, ASCII, Windows+Linux safe (list-form subprocess); manifest items carry resolved policy knobs from verification_policy (no recompute drift); merge stays manual in the pilot.
+
 ## Status
 
 - **Phase 1**: shipped. Interface + Claude reference adapter + contract tests.
 - **Phase 2**: shipped. Codex OpenAI Chat Completions implementation. Offline tests GREEN.
 - **Phase 3**: shipped. Wave bridge: driver → manifest, orchestrator-side dispatch.
   Proves non-Claude backends drive items end-to-end with honest green (test exit 0 only).
-- **Next**: Refactor wave-flat-dispatch onto the driver (Phase 1 handoff).
-- **Future**: Open-model adapter (Tier-4 backend).
+- **Wave Scheduler (WS3a)**: shipped. Single-cycle orchestration: intake → manifest → dispatch → report (manual merge). Pilot gate: disjoint filter, HALT/ceiling, run_wave integration.
+- **Next**: wave-flat-dispatch onto the driver; then open-model adapter (Tier-4).

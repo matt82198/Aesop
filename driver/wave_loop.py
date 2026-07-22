@@ -1101,12 +1101,20 @@ def run_wave(
                     add_cmd = "git add " + " ".join(escaped_files)
                     add_result = driver.run_command(add_cmd, cwd=repo_path)
                     if add_result.exit_code != 0:
-                        # This repo's add failed; abort THIS repo's ship but continue others.
+                        # GIT ADD FAILURE P1: git add may have partially succeeded,
+                        # leaving staged residue. Run git reset to clean the index.
+                        reset_result = driver.run_command("git reset", cwd=repo_path)
+                        unstage_ok = reset_result.exit_code == 0
+
                         repo_ship_results.append({
                             "repo": repo_path,
                             "committed": False,
                             "error": "git_add_failed",
+                            # Truncated stderr/stdout for diagnostics (same as commit failure path)
+                            "error_detail": ((add_result.stderr or "") + " | " + (add_result.stdout or ""))[:300],
                             "files_count": len(repo_items),
+                            "files_unstaged": unstage_ok,
+                            "unstage_error": None if unstage_ok else reset_result.stderr,
                         })
                         # Mark items from this repo as shipped_error.
                         for _, _, item_result in repo_items:

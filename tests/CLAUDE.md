@@ -12,11 +12,11 @@
 backup-fleet.test.sh, dash-watchdog-gui.test.sh, test_agent_forensics.sh, test_pre_push_policy.sh, test-run-watchdog.sh, test-run-watchdog-halt.sh, test-run-watchdog-lockguard.sh, test_reconstitute.sh, test_reconstitute_fixes.sh, test-selfheal.sh, test_waveguard.sh.
 Run: `bash tests/test_pre_push_policy.sh && bash tests/backup-fleet.test.sh && bash tests/test_reconstitute.sh && bash tests/test_reconstitute_fixes.sh && bash tests/test_agent_forensics.sh && bash tests/test-selfheal.sh && bash hooks/pre-push-policy.sh --test && bash tools/reconstitute.sh --test`
 
-**Node (19 suites)**:
-buildsystem-template.test.mjs, cli-config.test.mjs, collect-signals.test.mjs, config-doc-drift.test.mjs, dash-agents-panel.test.mjs, dash-extra.test.mjs, demo-e2e.test.mjs, domain-map-drift.test.mjs, first-hour.test.mjs, fleet-cli.test.mjs, force-model-policy.test.mjs, lock.test.mjs, mcp-fleet.test.mjs, packaging-portability.test.mjs, proposals.test.mjs, scaffold-hook-install.test.mjs, scaffold-onboarding.test.mjs, test_orchestration_core.test.mjs, wizard.test.mjs.
+**Node (20 suites)**:
+buildsystem-template.test.mjs, cli-config.test.mjs, collect-signals.test.mjs, config-doc-drift.test.mjs, dash-agents-panel.test.mjs, dash-extra.test.mjs, demo-e2e.test.mjs, domain-map-drift.test.mjs, first-hour.test.mjs, fleet-cli.test.mjs, force-model-policy.test.mjs, lock.test.mjs, mcp-fleet.test.mjs, packaging-portability.test.mjs, proposals.test.mjs, reproduce-classifier.test.mjs, scaffold-hook-install.test.mjs, scaffold-onboarding.test.mjs, test_orchestration_core.test.mjs, wizard.test.mjs.
 Run: `npm run test:node` or `node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
 
-**Python (118 suites)**:
+**Python (119 suites)**:
 Organized by category: API state/tracker (test_api_state, test_api_tracker, test_tracker_*), UI/SSE (test_serve*, test_sse_*, test_ui_*, test_wave13_ui_correctness, test_wave_*), Bench (test_bench_*, test_accuracy_harness, test_sample_transcripts_judgment), Security (test_csrf_https_origins, test_secret_scan, test_secret_scan_gaps, test_symlink_guard), State store (test_state_store*), StateAPI facade (test_stateapi_read, test_stateapi_lint), Tools (test_tools_*, test_defect_escape, test_test_hygiene, test_cost_projection), AgentDriver/Codex (test_agent_driver, test_codex_driver_e2e — offline + gated live tests), Wave engine cross-repo (test_wave_cross_repo, test_wave_cross_repo_ship), Agents/Monitoring (test_alert_bridge, test_collectors, test_orchestration_core, test_stall_check, test_reconcile, test_healthcheck, test_halt, test_ci_merge_wait), Config/Launch (test_launch_tui, test_render, test_rotate_logs, test_metrics_gate, test_no_bare_test_functions, test_git_identity_check, test_self_stats).
 Run: `npm run test:py` or `python -m unittest discover -s tests`
 
@@ -71,8 +71,8 @@ Tests document **actual gaps** found in rounds of refactoring/audit:
 
 ## Dropped (reason)
 - Shell count corrected 7→11: test-run-watchdog{,-halt,-lockguard}.sh DO exist (a prior reconcile confused unwired with nonexistent) and all pass; halt/lockguard now wired into test:sh.
-- Node count revised 17→18→19 (added first-hour.test.mjs which was present but unlisted; added demo-e2e.test.mjs for init-prime-demo feature).
-- Python count revised 111→118 (wave-27 union adds test_accuracy_harness, test_cost_projection, test_sample_transcripts_judgment, test_stateapi_lint, test_stateapi_read, test_wave_cross_repo, test_wave_cross_repo_ship).
+- Node count revised 17→18→19→20 (wave-28 adds reproduce-classifier.test.mjs) (added first-hour.test.mjs which was present but unlisted; added demo-e2e.test.mjs for init-prime-demo feature).
+- Python count revised 111→118→119 (wave-28 adds test_wave_scheduler) (wave-27 union adds test_accuracy_harness, test_cost_projection, test_sample_transcripts_judgment, test_stateapi_lint, test_stateapi_read, test_wave_cross_repo, test_wave_cross_repo_ship).
 - Python count revised 67→95→98 (recounted: 94 existing + 1 new drift-test = 95 at branch #246; integration union adds test_backend_config_docs.py + test_wave_dispatch_agents_parity.py + test_fleet_ledger_injection.py = 98 total).
 - Prior revisions: Node 15→17 (recounted); Shell 9→10 (test_waveguard.sh was present but unlisted); Python 60→65 (recounted).
 

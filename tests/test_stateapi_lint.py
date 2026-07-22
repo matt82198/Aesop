@@ -149,6 +149,33 @@ new_violation = Path("state/tracker.json").read_text()
         # New violations should cause is_ok to be False
         # (This depends on implementation, but ratchet means tighter is OK, looser is BAD)
 
+    def test_ratchet_accepts_normalized_backslash_baseline(self):
+        """Ratchet accepts legacy backslash-keyed baseline entries when violations use forward slashes.
+
+        This test proves that the normalization handles Windows baseline entries (with backslashes)
+        matching against current violations (with forward slashes), ensuring cross-platform
+        compatibility after the Windows→POSIX separator fix.
+        """
+        from tools.stateapi_lint import check_ratchet
+
+        # Legacy baseline has backslash separators (from Windows)
+        baseline_violations = [
+            "ui\\config.py@tracker-json",
+            "tools\\health_score.py@watchdog-hb",
+        ]
+
+        # Current violations use forward slashes (as_posix())
+        current_violations = [
+            "ui/config.py@tracker-json",
+            "tools/health_score.py@watchdog-hb",
+        ]
+
+        # Ratchet should pass (both normalized to same set)
+        is_ok, stale, new = check_ratchet(baseline_violations, current_violations)
+        self.assertTrue(is_ok, f"Ratchet should accept normalized keys. Stale: {stale}, New: {new}")
+        self.assertEqual(len(stale), 0, "Should have no stale entries after normalization")
+        self.assertEqual(len(new), 0, "Should have no new violations after normalization")
+
 
 if __name__ == "__main__":
     unittest.main()

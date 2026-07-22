@@ -41,8 +41,20 @@ logger = logging.getLogger(__name__)
 
 
 # Patterns for aggressive redaction of PII/credentials
+# Design choice: prefer over-redaction to under-redaction for safety in benchmark fixtures
 REDACTION_PATTERNS = [
     (r'\b(?:[a-zA-Z0-9_-]{32,}|sk-[a-zA-Z0-9]{20,})\b', '<api_key>'),
+    # URL credentials: any scheme + greedy userinfo to LAST @ before host
+    # Matches: scheme://user:password@host, handles embedded @, IPv6 hosts like [2001:db8::1]
+    # Scheme-agnostic: postgres, mysql, mongodb, redis, https, ftp, file, etc.
+    (r'([a-z][a-z0-9+.-]*://)'  # scheme
+     r'(?:[^\s@]+@)+',            # greedy: consume all userinfo parts including embedded @
+     r'\1[REDACTED]@'),
+    # Bare credentials without scheme (user:password@host) but not scheme://
+    # Requires at least one letter in username to avoid matching numeric ratios like 3:4@scale
+    (r'\b(?=[a-zA-Z0-9_.-]*[a-zA-Z])[a-zA-Z0-9_.-]+:(?!//)'  # lookahead ensures letter exists
+     r'(?:[^\s@]+@)+',                                         # greedy userinfo run
+     r'<credentials>'),
     (r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b', '<email>'),
     (r'[A-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*', '<path>'),
     (r'(?:/(?:home|root|var|etc|tmp|usr|Users|opt)/[^\s"\'<>]+)', '<path>'),

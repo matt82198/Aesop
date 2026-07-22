@@ -25,19 +25,8 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-try:
-    from tools.common import check_heartbeat_staleness
-except ImportError:
-    # Fallback: direct import if tools is not on path
-    import common as common_module
-    check_heartbeat_staleness = common_module.check_heartbeat_staleness
-
-try:
-    from tools.fleet_ledger import parse_ledger_rows as parse_ledger_rows_impl
-except ImportError:
-    # Fallback: direct import if tools is not on path
-    import fleet_ledger as fleet_ledger_module
-    parse_ledger_rows_impl = fleet_ledger_module.parse_ledger_rows
+from tools.common import check_heartbeat_staleness
+from tools.fleet_ledger import parse_ledger_rows as parse_ledger_rows_impl
 
 
 class ReadAPI:

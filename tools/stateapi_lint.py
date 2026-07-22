@@ -126,7 +126,8 @@ def find_direct_opens(repo_root):
                             continue
 
                         # Key is file@pattern-id (stable across line edits)
-                        violation_key = f"{relative_path}@{pattern_id}"
+                        # Use posix separators for cross-platform consistency
+                        violation_key = f"{relative_path.as_posix()}@{pattern_id}"
                         if violation_key not in violations:
                             violations.append(violation_key)
                         break  # Only report once per line per file
@@ -162,6 +163,20 @@ def load_baseline(baseline_file):
         return {"violations": []}
 
 
+def normalize_key(key):
+    """Normalize violation keys to forward-slash separators for cross-platform consistency.
+
+    Converts backslash separators (legacy Windows baseline entries) to forward slashes.
+
+    Args:
+        key: Violation key string
+
+    Returns:
+        str: Key with forward-slash separators
+    """
+    return key.replace("\\", "/")
+
+
 def check_ratchet(baseline_violations, current_violations):
     """Check ratchet: baseline and current must match exactly.
 
@@ -170,6 +185,7 @@ def check_ratchet(baseline_violations, current_violations):
       2. Current violations missing from baseline (new violations)
 
     Only passes if current violations exactly match baseline (bidirectional check).
+    Normalizes both sets to forward-slash separators for cross-platform consistency.
 
     Args:
         baseline_violations: list of violation keys from baseline
@@ -181,8 +197,9 @@ def check_ratchet(baseline_violations, current_violations):
           stale_entries (list): Entries in baseline not in current
           new_violations (list): Entries in current not in baseline
     """
-    baseline_set = set(baseline_violations)
-    current_set = set(current_violations)
+    # Normalize both to forward slashes for comparison
+    baseline_set = set(normalize_key(v) for v in baseline_violations)
+    current_set = set(normalize_key(v) for v in current_violations)
 
     stale = list(baseline_set - current_set)
     new = list(current_set - baseline_set)

@@ -67,7 +67,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `cost_econ.py` — Cost economics metrics (cost-per-LOC, per-merged-PR, per-wave/backlog-item) from stats.json + fleet ledger; shares ui/cost.py pricing; honesty caveats documented in output
 - `dash.js` — Launch the web dashboard (spawns python ui/serve.py with configured port from PORT env var, aesop.config.json, or default 8770)
 - `wave_backlog_analyzer.py` — Pre-wave backlog risk analyzer (per-item risk_level/estimated_retries from git fix-forward history + tracker lanes); warn-level only, --json
-- `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `<preset> --project-name --base-dir`
+- `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
 - `verify_scorecards.py` — Browser proof for the wave quality scorecards panel (self-hosted test port + fixtures; AESOP_PROOF_FIXTURES gated)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
@@ -81,7 +81,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_dispatch_panel.py` — Browser proof for DispatchPanel component (ui/web/dist/ + /api/wave/dispatch; Playwright/Chromium; exit 0=proven, 1=failed, --allow-skip for CI)
 - `verify_ui_trio.py` — Browser proof for UI trio panels (Gantt Timeline, Audit Tail Stream, Live Reasoning Transparency; AESOP_PROOF_FIXTURES)
 - `wave_ledger_hook.py` — Orchestrator-tail CLI wrapper to append per-wave telemetry to OUTCOMES-LEDGER.md (idempotent phase appends; validates timestamp for markdown table safety)
-- `wave_preflight.py` — Wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1)
+- `wave_preflight.py` — Wave-open readiness validator: (1) repo-readiness checks (branch/clean-tree/HALT/heartbeats/tracker JSON parse); (2) backlog validation via --tracker (flags: missing ownsFiles, stale file refs, ownership overlaps, ledger aggregate retry rate); --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1; advisory tool exit 0 for --tracker mode
 - `wave_resume.py` — Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run
 - `watch.js` — Launch the watchdog daemon (spawns bash daemons/run-watchdog.sh with inherited stdio in foreground mode)
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)

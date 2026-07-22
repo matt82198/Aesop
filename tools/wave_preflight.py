@@ -276,6 +276,201 @@ def can_import_secret_scan():
         return False, str(e)
 
 
+def scan_backlog_items(tracker_path, work_dir, ledger_path=None):
+    """Scan backlog items for risky conditions.
+
+    Analyzes todo items in tracker.json for:
+      (a) missing/empty owns_files (file ownership info)
+      (b) stale items (references to non-existent files)
+      (c) overlaps (two items owning same file)
+      (d) history signal (retry rate from ledger)
+
+    Args:
+        tracker_path: Path to state/tracker.json
+        work_dir: Working directory for resolving relative file paths
+        ledger_path: Optional path to ledger for history stats
+
+    Returns:
+        dict with structure:
+        {
+            "success": bool,
+            "items": [
+                {
+                    "id": str,
+                    "title": str,
+                    "flags": [{"type": str, "detail": str}, ...]
+                },
+                ...
+            ],
+            "ledger_stats": dict or None,
+            "summary": str
+        }
+    """
+    tracker_path = Path(tracker_path)
+    work_dir = Path(work_dir)
+    result = {
+        "success": True,
+        "items": [],
+        "ledger_stats": None,
+        "summary": ""
+    }
+
+    # Load tracker.json
+    try:
+        if not tracker_path.exists():
+            result["success"] = False
+            result["summary"] = f"tracker file not found: {tracker_path}"
+            return result
+
+        tracker_data = json.loads(tracker_path.read_text(encoding="utf-8"))
+        if not isinstance(tracker_data, dict) or "items" not in tracker_data:
+            result["success"] = False
+            result["summary"] = "tracker.json invalid: missing 'items' key"
+            return result
+
+        items = tracker_data.get("items", [])
+    except (json.JSONDecodeError, IOError) as e:
+        result["success"] = False
+        result["summary"] = f"tracker.json unreadable: {e}"
+        return result
+
+    # Filter to todo items only
+    todo_items = [
+        item for item in items
+        if isinstance(item, dict) and item.get("status") == "todo"
+    ]
+
+    # Build ownership map for overlap detection
+    ownership_map = {}  # file_path -> set of item_ids
+
+    # Process each todo item
+    for item in todo_items:
+        item_id = item.get("id", "unknown")
+        title = item.get("title", "")
+        flags = []
+
+        # Flag (a): Check for missing/empty owns_files
+        owns_files = item.get("owns_files", [])
+        if not owns_files or (isinstance(owns_files, list) and len(owns_files) == 0):
+            flags.append({
+                "type": "missing_ownership",
+                "detail": "Item has no owns_files; cannot dispatch safely"
+            })
+
+        # Flag (b): Check for stale items (files not found)
+        if owns_files and isinstance(owns_files, list):
+            for file_ref in owns_files:
+                file_path = work_dir / file_ref if not Path(file_ref).is_absolute() else Path(file_ref)
+                if not file_path.exists():
+                    flags.append({
+                        "type": "stale_reference",
+                        "detail": f"Referenced file not found: {file_ref}"
+                    })
+
+                # Track for overlap detection
+                file_key = str(file_path.resolve())
+                if file_key not in ownership_map:
+                    ownership_map[file_key] = set()
+                ownership_map[file_key].add(item_id)
+
+        if flags or owns_files:  # Only include items with flags or ownership info
+            result["items"].append({
+                "id": item_id,
+                "title": title,
+                "flags": flags
+            })
+
+    # Flag (c): Detect overlaps
+    for file_path, item_ids in ownership_map.items():
+        if len(item_ids) > 1:
+            for item_id in item_ids:
+                # Find the item and add overlap flag
+                for item_result in result["items"]:
+                    if item_result["id"] == item_id:
+                        overlapping_ids = sorted(item_ids - {item_id})
+                        item_result["flags"].append({
+                            "type": "ownership_overlap",
+                            "detail": f"File shared with items: {', '.join(overlapping_ids)}"
+                        })
+                        break
+
+    # Flag (d): Load ledger stats if provided
+    if ledger_path:
+        ledger_path = Path(ledger_path)
+        if ledger_path.exists():
+            try:
+                ledger_stats = _analyze_ledger(ledger_path)
+                result["ledger_stats"] = ledger_stats
+            except Exception as e:
+                result["ledger_stats"] = {"error": str(e), "data": "DATA-UNAVAILABLE"}
+        else:
+            result["ledger_stats"] = {"data": "DATA-UNAVAILABLE", "note": "ledger not found"}
+    else:
+        result["ledger_stats"] = {"data": "DATA-UNAVAILABLE", "note": "no ledger provided"}
+
+    # Summary
+    flagged_count = sum(1 for item in result["items"] if item["flags"])
+    result["summary"] = f"Scanned {len(todo_items)} todo items; {flagged_count} have risk flags"
+
+    return result
+
+
+def _analyze_ledger(ledger_path):
+    """Extract repair/retry statistics from ledger.
+
+    Returns:
+        dict with overall repair rate and stats
+    """
+    ledger_path = Path(ledger_path)
+    try:
+        content = ledger_path.read_text(encoding="utf-8")
+    except IOError:
+        return {"data": "DATA-UNAVAILABLE", "error": "unreadable"}
+
+    lines = content.split("\n")
+    entries = []
+
+    for line in lines:
+        # Skip header and separator lines
+        if not line.strip() or "---|" in line or not line.startswith("|"):
+            continue
+
+        # Parse markdown table row
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        if len(cells) < 7:
+            continue
+
+        # Skip header row (first cell is "ISO ts" or similar header name)
+        if cells[0] in ("ISO ts", "iso_ts") or cells[0].startswith("ISO"):
+            continue
+
+        try:
+            # Columns: ISO ts, agent_type, model, duration_sec, tokens_in, tokens_out, verdict, phase, wave
+            verdict = cells[6] if len(cells) > 6 else "OK"
+            phase = cells[7].strip() if len(cells) > 7 else None
+            entries.append({"verdict": verdict, "phase": phase})
+        except (ValueError, IndexError):
+            continue
+
+    if not entries:
+        return {"data": "DATA-UNAVAILABLE", "reason": "no ledger entries"}
+
+    # Calculate retry rate: entries with FAILED verdict / total
+    failed_count = sum(1 for e in entries if e.get("verdict") == "FAILED")
+    total_count = len(entries)
+    repair_count = sum(1 for e in entries if e.get("phase") == "repair")
+
+    retry_rate = failed_count / total_count if total_count > 0 else 0
+
+    return {
+        "total_entries": total_count,
+        "failed_count": failed_count,
+        "repair_count": repair_count,
+        "retry_rate": round(retry_rate, 3),
+        "data": "AVAILABLE"
+    }
+
+
 def run_checks(root_dir=None, state_dir=None, config=None):
     """Run all preflight checks.
 
@@ -464,6 +659,8 @@ def main(argv=None):
 
     root_dir = None
     state_dir = None
+    tracker_path = None
+    ledger_path = None
     output_format = "text"
 
     # Parse arguments
@@ -486,6 +683,22 @@ def main(argv=None):
         elif arg.startswith("--state-root="):
             state_dir = arg[len("--state-root="):]
             i += 1
+        elif arg == "--tracker":
+            i += 1
+            if i < len(argv):
+                tracker_path = argv[i]
+            i += 1
+        elif arg.startswith("--tracker="):
+            tracker_path = arg[len("--tracker="):]
+            i += 1
+        elif arg == "--ledger":
+            i += 1
+            if i < len(argv):
+                ledger_path = argv[i]
+            i += 1
+        elif arg.startswith("--ledger="):
+            ledger_path = arg[len("--ledger="):]
+            i += 1
         elif arg == "--json":
             output_format = "json"
             i += 1
@@ -504,25 +717,62 @@ def main(argv=None):
     else:
         state_dir = Path(state_dir)
 
-    result = run_checks(root_dir, state_dir, config)
+    # If --tracker provided, run backlog analysis instead of repo readiness checks
+    if tracker_path:
+        work_dir = root_dir  # Use root_dir as the working directory for file resolution
+        result = scan_backlog_items(tracker_path, work_dir, ledger_path)
 
-    if output_format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        # Text format: numbered list
-        print("Wave preflight checks:")
-        for i, check in enumerate(result["checks"], 1):
-            status = "PASS" if check["ok"] else "FAIL"
-            print(f"{i}. {check['name']}: {status}")
-            if check["detail"]:
-                print(f"   {check['detail']}")
-
-        if result["ready"]:
-            print("\nPASS: Ready for wave")
+        if output_format == "json":
+            print(json.dumps(result, indent=2))
         else:
-            print("\nFAIL: Not ready for wave (see failures above)")
+            # Text format: summary + items with flags
+            print(f"Backlog Preflight: {result['summary']}")
+            print()
 
-    return 0 if result["ready"] else 1
+            if result["ledger_stats"]:
+                stats = result["ledger_stats"]
+                if stats.get("data") == "AVAILABLE":
+                    print(f"Ledger History: {stats['total_entries']} entries, "
+                          f"{stats['failed_count']} failed, "
+                          f"{stats['repair_count']} repairs, "
+                          f"retry rate: {stats['retry_rate']}")
+                else:
+                    print(f"Ledger History: DATA-UNAVAILABLE")
+                print()
+
+            if result["items"]:
+                print("Flagged Items:")
+                for item in result["items"]:
+                    if item["flags"]:
+                        print(f"  [{item['id']}] {item['title']}")
+                        for flag in item["flags"]:
+                            print(f"    - {flag['type']}: {flag['detail']}")
+            else:
+                print("No risky items detected.")
+
+        # Exit 0 always (advisory tool, never blocks)
+        return 0
+    else:
+        # Standard repo readiness checks
+        result = run_checks(root_dir, state_dir, config)
+
+        if output_format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            # Text format: numbered list
+            print("Wave preflight checks:")
+            for i, check in enumerate(result["checks"], 1):
+                status = "PASS" if check["ok"] else "FAIL"
+                print(f"{i}. {check['name']}: {status}")
+                if check["detail"]:
+                    print(f"   {check['detail']}")
+
+            if result["ready"]:
+                print("\nPASS: Ready for wave")
+            else:
+                print("\nFAIL: Not ready for wave (see failures above)")
+
+        return 0 if result["ready"] else 1
 
 
 if __name__ == "__main__":
