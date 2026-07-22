@@ -271,5 +271,14 @@ jobs:
       - name: Run wave telemetry browser proof (verify_wave_telemetry)
         run: python tools/verify_wave_telemetry.py
 
+      - name: Run dispatch panel browser proof (verify_dispatch_panel)
+        run: python tools/verify_dispatch_panel.py
+
+      - name: Run scorecards browser proof (verify_scorecards)
+        run: python tools/verify_scorecards.py
+
+      - name: Run UI trio browser proof (verify_ui_trio)
+        run: python tools/verify_ui_trio.py
+
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh

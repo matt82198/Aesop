@@ -155,3 +155,21 @@ jobs:
 
       - name: Run agent inspector browser proof (verify_agent_inspector)
         run: python tools/verify_agent_inspector.py
+
+      - name: Run activity filter browser proof (verify_activity_filter)
+        run: python tools/verify_activity_filter.py
+
+      - name: Run failure drilldown browser proof (verify_failure_drilldown)
+        run: python tools/verify_failure_drilldown.py
+
+      - name: Run wave telemetry browser proof (verify_wave_telemetry)
+        run: python tools/verify_wave_telemetry.py
+
+      - name: Run dispatch panel browser proof (verify_dispatch_panel)
+        run: python tools/verify_dispatch_panel.py
+
+      - name: Run scorecards browser proof (verify_scorecards)
+        run: python tools/verify_scorecards.py
+
+      - name: Run UI trio browser proof (verify_ui_trio)
+        run: python tools/verify_ui_trio.py
