@@ -294,16 +294,16 @@ class TestCodexDriver(_DriverContractMixin, unittest.TestCase):
     expected_name = "codex"
 
     def expected_model_for_driver(self):
-        """CodexDriver workers resolve to gpt-3.5-turbo."""
-        return "gpt-3.5-turbo"
+        """CodexDriver workers resolve to gpt-4o-mini (P1 fix: JSON schema capable)."""
+        return "gpt-4o-mini"
 
     def test_resolve_model_concrete_codex(self):
         """CONCRETE ASSERTION: verify CodexDriver model selection is not hardcoded.
         Mutant: hardcoding 'haiku' would be caught here when comparing vs expected OpenAI model.
         """
         d = self.make()
-        # CodexDriver should map: worker->gpt-3.5-turbo, setup->gpt-4-turbo
-        self.assertEqual(d.resolve_model(ROLE_WORKER), "gpt-3.5-turbo")
+        # CodexDriver should map: worker->gpt-4o-mini (P1 fix), setup->gpt-4-turbo
+        self.assertEqual(d.resolve_model(ROLE_WORKER), "gpt-4o-mini")
         self.assertEqual(d.resolve_model(ROLE_SETUP), "gpt-4-turbo")
         # Verify they're different (catches hardcoding)
         self.assertNotEqual(d.resolve_model(ROLE_WORKER), d.resolve_model(ROLE_SETUP))
@@ -327,7 +327,7 @@ class TestCodexDriver(_DriverContractMixin, unittest.TestCase):
 
     def test_model_map_is_openai(self):
         d = self.make()
-        self.assertEqual(d.resolve_model(ROLE_WORKER), "gpt-3.5-turbo")
+        self.assertEqual(d.resolve_model(ROLE_WORKER), "gpt-4o-mini")  # P1 fix: JSON schema capable
         self.assertEqual(d.resolve_model(ROLE_SETUP), "gpt-4-turbo")
 
     def test_phase2_dispatch_and_run_command_implemented(self):
