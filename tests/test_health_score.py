@@ -10,6 +10,7 @@ Test strategy (TDD):
 """
 import json
 import os
+import subprocess
 import shutil
 import sys
 import tempfile
@@ -49,15 +50,21 @@ class HealthScoreTestCase(unittest.TestCase):
         self.state_dir.mkdir(parents=True)
         (self.fixture_root / "transcripts").mkdir()
 
-        # Initialize a git repo in fixture
+        # Save original cwd BEFORE any chdir (restoration must return to the
+        # caller's cwd, never the fixture's — poisoned-cwd hygiene rule)
+        self._saved_cwd = os.getcwd()
+
+        # Initialize a git repo in fixture — all git identity mutation scoped
+        # to the temp repo via cwd=, never ambient (hygiene-scanner enforced)
+        subprocess.run(["git", "init", "-q"], cwd=str(self.fixture_root), check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"],
+                       cwd=str(self.fixture_root), check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"],
+                       cwd=str(self.fixture_root), check=True)
         os.chdir(self.fixture_root)
-        os.system("git init -q")
-        os.system("git config user.email test@example.com")
-        os.system("git config user.name 'Test User'")
 
         # Save original env
         self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
-        self._saved_cwd = os.getcwd()
 
         # Set isolated environment
         os.environ["AESOP_ROOT"] = str(self.fixture_root)
@@ -149,10 +156,7 @@ class TestHealthScorePerfect(HealthScoreTestCase):
         self._write_heartbeat("watchdog", age_seconds=10)
         self._write_heartbeat("monitor", age_seconds=20)
 
-        # Set git identity
-        os.system("git config user.name 'Test User'")
-        os.system("git config user.email 'test@example.com'")
-
+        # Git identity already scoped to the fixture repo in setUp()
         result = health_score.calculate_score(cwd=str(self.fixture_root))
 
         # Should be dict with score and checks

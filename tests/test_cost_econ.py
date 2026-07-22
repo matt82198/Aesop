@@ -184,9 +184,10 @@ class TestCostPerMergedPR(CostEconTestCase):
             check=True
         )
 
-        # Create merge commit
+        # Create merge commit (must name the ref being merged)
         result = subprocess.run(
-            ["git", "merge", "--no-ff", "-m", "Merge pull request #1 from test/feature"],
+            ["git", "merge", "--no-ff", "feature", "-m",
+             "Merge pull request #1 from test/feature"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True
