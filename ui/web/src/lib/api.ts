@@ -18,6 +18,7 @@ import type {
   WaveFailureData,
   WaveDispatchData,
   WaveGanttData,
+  WaveAuditTailData,
 } from './types';
 
 let _csrfTokenCache: string | null = null;
@@ -194,6 +195,13 @@ export async function fetchWaveDispatch(): Promise<WaveDispatchData> {
  */
 export async function fetchWaveGantt(): Promise<WaveGanttData> {
   return typedFetch('/api/wave/gantt', { method: 'GET', requireCSRF: false });
+}
+
+/**
+ * GET /api/wave/audit-tail — latest audit/verification outcomes
+ */
+export async function fetchWaveAuditTail(): Promise<WaveAuditTailData> {
+  return typedFetch('/api/wave/audit-tail', { method: 'GET', requireCSRF: false });
 }
 
 /**

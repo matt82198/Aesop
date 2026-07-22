@@ -35,6 +35,8 @@ import type {
   WaveDispatchAgent,
   WaveGanttData,
   WaveGanttAgent,
+  WaveAuditTailData,
+  WaveAuditTailEvent,
 } from '../lib/types';
 
 /* ------------------------------------------------------------------ */
@@ -104,6 +106,8 @@ export const TESTIDS = {
   ganttTimeline: 'gantt-timeline',
   ganttRow: 'gantt-row',
   ganttPhaseBar: 'gantt-phase-bar',
+  auditTail: 'audit-tail',
+  auditTailItem: 'audit-tail-item',
 
   // Cost view
   viewCost: 'view-cost',
@@ -838,4 +842,55 @@ export const fixtureWaveGanttUnavailable: WaveGanttData = {
   wave_phase: undefined,
   agents: [],
   at: '2026-07-17T20:24:50Z',
+};
+
+export const fixtureWaveAuditTailEvents: WaveAuditTailEvent[] = [
+  {
+    type: 'audit_backlog',
+    status: '✅',
+    tier: 'P0',
+    tag: '[sec]',
+    title: 'CSRF validation chain fixed',
+    timestamp: '2026-07-21T10:30:00Z',
+  },
+  {
+    type: 'verdict',
+    agent: 'fleet-fix-0',
+    verdict: 'OK',
+    timestamp: '2026-07-21T10:28:15Z',
+  },
+  {
+    type: 'audit_backlog',
+    status: '🔵',
+    tier: 'P1',
+    tag: '[perf]',
+    title: 'SSE keepalive tuning in progress',
+    timestamp: '2026-07-21T09:45:00Z',
+  },
+  {
+    type: 'verdict',
+    agent: 'fleet-fix-1',
+    verdict: 'FAILED',
+    timestamp: '2026-07-21T09:40:22Z',
+  },
+  {
+    type: 'audit_backlog',
+    status: '⬜',
+    tier: 'P2',
+    tag: '[ui]',
+    title: 'Timeline component edge case handling',
+    timestamp: '2026-07-21T08:15:00Z',
+  },
+];
+
+export const fixtureWaveAuditTail: WaveAuditTailData = {
+  available: true,
+  audit_items: fixtureWaveAuditTailEvents,
+  at: '2026-07-21T10:35:00Z',
+};
+
+export const fixtureWaveAuditTailUnavailable: WaveAuditTailData = {
+  available: false,
+  audit_items: [],
+  at: '2026-07-21T10:35:00Z',
 };

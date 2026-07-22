@@ -385,6 +385,32 @@ export interface WaveGanttData {
 }
 
 /**
+ * One audit tail event from GET /api/wave/audit-tail.
+ * Union of audit backlog item or ledger verdict.
+ */
+export interface WaveAuditTailEvent {
+  type: 'audit_backlog' | 'verdict';
+  status?: string; // audit: '✅' | '🔵' | '⬜' | '⏸'
+  tier?: string; // audit: 'P0' | 'P1' | 'P2'
+  tag?: string; // audit: '[sec]' | '[ui]' | ...
+  title?: string; // audit title
+  timestamp?: string; // ISO 8601 or null
+  verdict?: string; // ledger: 'OK' | 'FAILED' | 'EMPTY' | 'HUNG'
+  agent?: string; // ledger: agent ID (short)
+}
+
+/**
+ * GET /api/wave/audit-tail — latest audit/verification outcomes.
+ * Shows recent audit backlog items and ledger verdicts.
+ */
+export interface WaveAuditTailData {
+  available: boolean;
+  audit_items: WaveAuditTailEvent[];
+  at: string; // ISO 8601 UTC
+  error?: string; // optional error message
+}
+
+/**
  * One agent specialty quality metric from GET /api/wave/quality-scorecards.
  * Shows per-specialty success rate and retry/repair frequency.
  */
