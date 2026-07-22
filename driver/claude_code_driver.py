@@ -177,5 +177,59 @@ class ClaudeCodeDriver(AgentDriver):
 
     # -- Optional: cost tracking -------------------------------------------
     def get_tokens_spent(self) -> Optional[int]:
-        """Live waves read budget.spent(); out of harness spend is unobservable."""
-        return None
+        """Read fleet ledger (OUTCOMES-LEDGER.md) and return sum of tokens_in+tokens_out.
+
+        Returns None only when the ledger file is truly absent (first run, no sessions yet).
+        Returns 0 when the ledger exists but has no data rows (edge case, but consistent).
+        Returns the summed token spend when ledger data exists.
+
+        This implementation reuses fleet_ledger.py's shared parser for consistency
+        with cost_ceiling.py and other spend-tracking tools.
+        """
+        try:
+            # Import fleet_ledger from tools/ to reuse its parser (single source of truth)
+            try:
+                import sys
+                from pathlib import Path
+                REPO = Path(__file__).resolve().parent.parent
+                TOOLS_DIR = REPO / "tools"
+                if str(TOOLS_DIR) not in sys.path:
+                    sys.path.insert(0, str(TOOLS_DIR))
+                import fleet_ledger
+            except ImportError:
+                # fleet_ledger not available; return None
+                return None
+
+            # Check if ledger exists BEFORE calling parse_ledger_rows()
+            # (because parse_ledger_rows calls ensure_ledger_header which creates it)
+            try:
+                ledger_file, _, _ = fleet_ledger.get_ledger_paths()
+                if not ledger_file.exists():
+                    # Ledger file doesn't exist: truly no session data yet
+                    return None
+            except Exception:
+                # If even checking existence fails, return None (safe default)
+                return None
+
+            # Parse the ledger rows
+            rows = fleet_ledger.parse_ledger_rows()
+
+            # If rows list is empty, ledger exists but has no data yet
+            if not rows:
+                return 0
+
+            # Sum tokens_in + tokens_out across all rows
+            total = 0
+            for row in rows:
+                try:
+                    total += row.get("tokens_in", 0) + row.get("tokens_out", 0)
+                except (TypeError, ValueError):
+                    # Skip malformed rows; continue with others
+                    continue
+
+            return total
+
+        except Exception:
+            # On any exception (permission, parse, etc.), return None (fail-open)
+            # This preserves fleet availability; cost_ceiling has its own fallback
+            return None

@@ -600,6 +600,179 @@ class TestCostCeilingAbort(unittest.TestCase):
                 self.skipTest("cost_ceiling module not available")
 
 
+class NoneTokensDriver(AgentDriver):
+    """FakeDriver that returns None from get_tokens_spent() (no ledger yet)."""
+
+    def __init__(self):
+        self.dispatch_count = 0
+        self._workers = {}
+
+    def probe_capabilities(self) -> DriverCapabilities:
+        return DriverCapabilities(
+            name="none-tokens-driver",
+            parallel_dispatch=False,
+            worker_filesystem_access=False,
+            worker_shell_access=False,
+            structured_output=False,
+            worktree_isolation=False,
+            native_cost_tracking=False,
+            native_stall_detection=False,
+            tool_use_accuracy=0.92,
+            recommended_verification_tier=2,
+            available_models=("fake-model",),
+            notes="Driver that returns None for tokens",
+        )
+
+    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
+        self.dispatch_count += 1
+        worker_id = f"worker-{self.dispatch_count}"
+        self._workers[worker_id] = {"status": WORKER_DONE}
+        return WorkerResult(
+            worker_id=worker_id,
+            status=WORKER_DONE,
+            ok=True,
+            files_written=tuple(request.owned_files),
+            tokens_spent=100,
+        )
+
+    def worker_status(self, worker_id: str) -> ad.WorkerStatus:
+        if worker_id in self._workers:
+            return ad.WorkerStatus(
+                worker_id=worker_id,
+                state=self._workers[worker_id]["status"],
+            )
+        return ad.WorkerStatus(worker_id=worker_id, state=ad.WORKER_UNKNOWN)
+
+    def run_command(self, command: str, cwd=None, shell=None) -> CommandResult:
+        if command.startswith("git"):
+            return CommandResult(exit_code=0, stdout="OK")
+        return CommandResult(exit_code=0, stdout="OK")
+
+    def resolve_model(self, role: str) -> str:
+        return "fake-model"
+
+    def get_tokens_spent(self):
+        """Return None to simulate ledger not yet existing."""
+        return None
+
+
+class TestCostCeilingWithNoneTokens(unittest.TestCase):
+    """Test that cost_ceiling.check() handles None properly.
+
+    When driver.get_tokens_spent() returns None, wave_loop should pass None
+    through to cost_ceiling.check(), which will then read the ledger itself
+    (its designed fallback behavior).
+    """
+
+    def test_driver_returns_none_cost_ceiling_called_with_none(self):
+        """When driver returns None, cost_ceiling.check() is called with spent=None."""
+        driver = NoneTokensDriver()
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "ownsFiles": ["file1.py"],
+                    "prompt": "Fix 1",
+                    "testCmd": "true",
+                    "workDir": ".",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            (tmpdir_path / "file1.py").write_text("# test\n")
+            manifest["items"][0]["workDir"] = str(tmpdir_path)
+
+            # Mock cost_ceiling.check to capture the spent argument.
+            try:
+                import sys
+                TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
+                if str(TOOLS_DIR) not in sys.path:
+                    sys.path.insert(0, str(TOOLS_DIR))
+                import cost_ceiling  # noqa: F401
+
+                with tempfile.TemporaryDirectory() as state_dir:
+                    # Capture what spent= argument is passed to cost_ceiling.check()
+                    captured_args = {}
+
+                    def mock_check(*args, **kwargs):
+                        captured_args.update(kwargs)
+                        # Simulate ceiling unconfigured (no breach)
+                        return {
+                            "exceeded": False,
+                            "spent": kwargs.get("spent"),
+                            "ceiling": None,
+                            "tripped": False,
+                        }
+
+                    import wave_loop  # noqa: F401
+
+                    with mock.patch("wave_loop.cost_ceiling.check", side_effect=mock_check):
+                        result = run_wave(driver, manifest, state_dir=state_dir)
+
+                    # Assert that cost_ceiling.check was called with spent=None
+                    # (NOT spent=0, which would bypass the ledger read)
+                    self.assertIn("spent", captured_args)
+                    self.assertIsNone(captured_args["spent"])
+
+                    # Assert wave continued (no abort)
+                    self.assertFalse(result["aborted"])
+
+            except ImportError:
+                self.skipTest("cost_ceiling module not available")
+
+    def test_driver_returns_big_spend_low_ceiling_causes_abort(self):
+        """When driver returns actual high spend and ceiling is low, wave aborts."""
+        driver = CeilingCheckDriver(tokens_to_report=10000)
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "ownsFiles": ["file1.py"],
+                    "prompt": "Fix 1",
+                    "testCmd": "true",
+                    "workDir": ".",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            (tmpdir_path / "file1.py").write_text("# test\n")
+            manifest["items"][0]["workDir"] = str(tmpdir_path)
+
+            try:
+                import sys
+                TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
+                if str(TOOLS_DIR) not in sys.path:
+                    sys.path.insert(0, str(TOOLS_DIR))
+                import cost_ceiling  # noqa: F401
+
+                with tempfile.TemporaryDirectory() as state_dir:
+                    # Simulate ceiling check that detects excess
+                    def mock_check(*args, **kwargs):
+                        # When driver returns 10000 tokens and ceiling is 1000
+                        return {"exceeded": True, "spent": 10000, "ceiling": 1000, "tripped": True}
+
+                    import wave_loop  # noqa: F401
+
+                    with mock.patch("wave_loop.cost_ceiling.check", side_effect=mock_check):
+                        result = run_wave(driver, manifest, state_dir=state_dir)
+
+                    # Assert aborted with ceiling reason
+                    self.assertTrue(result["aborted"])
+                    self.assertEqual(result["abort_reason"], "cost_ceiling_exceeded")
+
+                    # Assert no items dispatched
+                    self.assertEqual(driver.dispatch_count, 0)
+
+            except ImportError:
+                self.skipTest("cost_ceiling module not available")
+
+
 class SpotCheckDriver(AgentDriver):
     """FakeDriver for spot-check testing: records re-run checks."""
 
