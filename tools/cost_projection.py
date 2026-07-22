@@ -6,42 +6,46 @@ Calculates burn rate (tokens/min) from recent ledger entries, projects end-of-wa
 spend, and fires threshold alerts at 70% and 90% of the configured cost ceiling.
 
 API:
-  project(window_minutes, ceiling, config) -> dict
+  project(window_minutes, ceiling, config, horizon_minutes=60) -> dict
     Calculate current spend, burn rate, and projected end-of-wave total.
     Returns:
       {
         "current": int,                # tokens spent in window
         "burn_rate_per_min": float,    # avg tokens/min in window
-        "projected": int,              # projected end-of-wave spend
+        "projected": int,              # projected spend at horizon
         "ceiling": int or None,        # configured ceiling (or None if unconfigured)
         "pct_of_ceiling": float or None,  # % of ceiling (or None if no ceiling)
+        "minutes_to_ceiling": float or None,  # minutes until ceiling hit at current burn rate (None-safe)
         "is_thin_window": bool,        # warn if window has < 3 entries
         "by_role": {role: {...}, ...}, # breakdown by model/role (haiku/sonnet/opus)
         "reason": str or None          # degradation reason if applicable
       }
 
-  check_and_alert(window_minutes, ceiling, wave, config) -> dict
+  check_and_alert(window_minutes, ceiling, wave, config, horizon_minutes=60) -> dict
     Run projection + fire threshold alerts at 70% and 90% of ceiling.
     Writes to SECURITY-ALERTS.log and creates flag files for idempotency.
+    Single-writer-per-wave assumption: only one process calls this per wave.
     Returns:
       {
         "alert_level": str or None,    # "70", "90", or None if below threshold
         "current": int,
         "ceiling": int,
         "pct_of_ceiling": float,
+        "minutes_to_ceiling": float or None,  # minutes to ceiling breach at current burn rate
         "fired_alert": bool            # True if new alert was written (not already fired)
       }
 
 CLI:
-  python tools/cost_projection.py --projection [--window 30] [--ceiling N] [--json] [--config <path>]
+  python tools/cost_projection.py --projection [--window 30] [--horizon 60] [--ceiling N] [--json] [--config <path>]
     Print projection result (human or JSON).
-  python tools/cost_projection.py --check-alerts --wave <id> [--ceiling N] [--json] [--config <path>]
-    Check thresholds and fire alerts; print result.
+  python tools/cost_projection.py --check-alerts --wave <id> [--horizon 60] [--ceiling N] [--json] [--config <path>]
+    Check thresholds and fire alerts; print result. Requires --wave or AESOP_WAVE env var.
 
 Configuration (aesop.config.json):
   "limits": {
     "max_wave_tokens": 50000,     # Ceiling for projection/alerts
-    "max_daily_tokens": null
+    "max_daily_tokens": null,
+    "wave_duration_minutes": 60   # Horizon for projection (optional; default 60)
   }
 
 Ledger Source:
@@ -52,6 +56,12 @@ Ledger Source:
 Alert Idempotency:
   Flag files: state/.cost-alert-{70,90}-w{wave}
   Once fired for a (threshold, wave) pair, no duplicate log entries until next wave.
+  Single-writer guarantee: only the monitor/orchestrator calls this at the same cadence.
+
+Write Integrity:
+  append_alert_log uses open('a')+write+flush+os.fsync for crash-safe appends.
+  mark_alert_fired called only after successful append (checked via return value).
+  Failures print CRITICAL to stderr; flag file not created on append failure.
 
 Stdlib-only (json, sys, os, pathlib, datetime, collections).
 """
@@ -91,6 +101,16 @@ def get_ceiling(config):
     return limits.get("max_wave_tokens")
 
 
+def get_horizon_minutes(config):
+    """Extract wave_duration_minutes from config, or 60 if unconfigured."""
+    if not config:
+        return 60
+    limits = config.get("limits", {})
+    if not isinstance(limits, dict):
+        return 60
+    return limits.get("wave_duration_minutes", 60)
+
+
 def filter_ledger_by_window(rows, window_minutes):
     """Filter ledger rows to those within the last window_minutes (UTC).
 
@@ -128,17 +148,18 @@ def filter_ledger_by_window(rows, window_minutes):
     return filtered
 
 
-def project(window_minutes=30, ceiling=None, config=None):
+def project(window_minutes=30, ceiling=None, config=None, horizon_minutes=None):
     """Calculate current spend, burn rate, and end-of-wave projection.
 
     Args:
         window_minutes: Time window for burn rate calculation (default 30)
         ceiling: Optional cost ceiling (for percentage calculation)
         config: aesop.config.json dict or None (will use env var / defaults)
+        horizon_minutes: Minutes to project spend to (default from config or 60)
 
     Returns:
         dict with keys: current, burn_rate_per_min, projected, ceiling,
-        pct_of_ceiling, is_thin_window, by_role, reason
+        pct_of_ceiling, minutes_to_ceiling, is_thin_window, by_role, reason
     """
     if config is None:
         config = {}
@@ -146,6 +167,8 @@ def project(window_minutes=30, ceiling=None, config=None):
     state_dir = get_state_dir(config)
     if ceiling is None:
         ceiling = get_ceiling(config)
+    if horizon_minutes is None:
+        horizon_minutes = get_horizon_minutes(config)
 
     # Parse ledger
     try:
@@ -215,13 +238,22 @@ def project(window_minutes=30, ceiling=None, config=None):
         burn_rate_per_min = current_total / window_minutes if window_minutes > 0 else 0.0
         is_thin_window = False
 
-    # Project to end-of-wave (assume 60-minute wave by default)
-    projected = int(burn_rate_per_min * 60)
+    # Project to end-of-horizon (using horizon_minutes parameter)
+    projected = int(burn_rate_per_min * horizon_minutes)
 
     # Calculate percentage of ceiling
     pct_of_ceiling = None
     if ceiling is not None and ceiling > 0:
         pct_of_ceiling = (current_total / ceiling) * 100.0
+
+    # Calculate minutes until ceiling is hit at current burn rate (None-safe)
+    minutes_to_ceiling = None
+    if ceiling is not None and ceiling > 0 and burn_rate_per_min > 0:
+        remaining_tokens = ceiling - current_total
+        if remaining_tokens > 0:
+            minutes_to_ceiling = remaining_tokens / burn_rate_per_min
+        else:
+            minutes_to_ceiling = 0.0  # Already at or past ceiling
 
     return {
         "current": current_total,
@@ -229,6 +261,7 @@ def project(window_minutes=30, ceiling=None, config=None):
         "projected": projected,
         "ceiling": ceiling,
         "pct_of_ceiling": pct_of_ceiling,
+        "minutes_to_ceiling": round(minutes_to_ceiling, 2) if minutes_to_ceiling is not None else None,
         "is_thin_window": is_thin_window,
         "by_role": by_role_dict,
         "reason": None
@@ -261,7 +294,13 @@ def mark_alert_fired(state_dir, threshold, wave):
 
 
 def append_alert_log(state_dir, alert_line):
-    """Append one line to SECURITY-ALERTS.log (idempotent per flag)."""
+    """Append one line to SECURITY-ALERTS.log (idempotent per flag).
+
+    Uses open('a')+write+flush+os.fsync for crash-safe appends (Windows-portable).
+
+    Returns:
+        bool: True if append succeeded, False on IOError
+    """
     alert_file = Path(state_dir) / "SECURITY-ALERTS.log"
     state_dir_path = Path(state_dir)
     state_dir_path.mkdir(parents=True, exist_ok=True)
@@ -269,18 +308,26 @@ def append_alert_log(state_dir, alert_line):
     try:
         with open(alert_file, 'a', encoding='utf-8') as f:
             f.write(alert_line + '\n')
+            f.flush()
+            os.fsync(f.fileno())
+        return True
     except IOError as e:
-        print(f"[cost_projection] Failed to write alert: {e}", file=sys.stderr)
+        print(f"[cost_projection] CRITICAL: Failed to write alert: {e}", file=sys.stderr)
+        return False
 
 
-def check_and_alert(window_minutes=30, ceiling=None, wave=1, config=None):
+def check_and_alert(window_minutes=30, ceiling=None, wave=None, config=None, horizon_minutes=None):
     """Run projection + fire threshold alerts at 70% and 90% of ceiling.
+
+    Fires BOTH 70% and 90% alerts independently if a spike breaches 90%.
+    Only calls mark_alert_fired AFTER append succeeds.
 
     Args:
         window_minutes: Time window for burn rate (default 30)
         ceiling: Cost ceiling (or None to use config)
-        wave: Wave number for alert flag files (default 1)
+        wave: Wave number for alert flag files (required or from AESOP_WAVE env)
         config: aesop.config.json dict
+        horizon_minutes: Minutes to project spend to (default from config or 60)
 
     Returns:
         dict with alert info:
@@ -289,25 +336,45 @@ def check_and_alert(window_minutes=30, ceiling=None, wave=1, config=None):
           "current": int,
           "ceiling": int,
           "pct_of_ceiling": float,
+          "minutes_to_ceiling": float or None,
           "fired_alert": bool
         }
+
+    Raises:
+        ValueError: If wave is not provided and AESOP_WAVE env var is not set
     """
+    # Resolve wave from argument or environment
+    if wave is None:
+        wave = os.environ.get("AESOP_WAVE")
+        if wave is None:
+            raise ValueError(
+                "wave parameter required: pass --wave <id> or set AESOP_WAVE env var"
+            )
+        try:
+            wave = int(wave)
+        except ValueError:
+            raise ValueError(f"AESOP_WAVE must be an integer, got: {wave}")
+
     if config is None:
         config = {}
 
     state_dir = get_state_dir(config)
     if ceiling is None:
         ceiling = get_ceiling(config)
+    if horizon_minutes is None:
+        horizon_minutes = get_horizon_minutes(config)
 
-    proj = project(window_minutes, ceiling, config)
+    proj = project(window_minutes, ceiling, config, horizon_minutes)
     current = proj["current"]
     pct = proj["pct_of_ceiling"]
+    minutes_to_ceiling = proj.get("minutes_to_ceiling")
 
     alert_level = None
     fired = False
 
     if pct is not None and ceiling is not None:
-        # Check 90% first (higher priority)
+        # Check both thresholds independently (spike past 90% fires BOTH)
+        # 90% alert (highest priority, always checked)
         if pct >= 90.0:
             alert_level = "90"
             if not check_alert_already_fired(state_dir, "90", wave):
@@ -316,10 +383,19 @@ def check_and_alert(window_minutes=30, ceiling=None, wave=1, config=None):
                     f"[{timestamp}] CRITICAL: Cost projection at 90% of ceiling "
                     f"({current}/{ceiling} tokens, {pct:.1f}%); wave {wave}"
                 )
-                append_alert_log(state_dir, alert_line)
-                mark_alert_fired(state_dir, "90", wave)
-                fired = True
-        # Check 70% (if not already at 90%)
+                if append_alert_log(state_dir, alert_line):
+                    mark_alert_fired(state_dir, "90", wave)
+                    fired = True
+            # Also check 70% when at 90% (fire BOTH independently)
+            if not check_alert_already_fired(state_dir, "70", wave):
+                timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                alert_line_70 = (
+                    f"[{timestamp}] HIGH: Cost projection at 70% of ceiling "
+                    f"({current}/{ceiling} tokens, {pct:.1f}%); wave {wave}"
+                )
+                if append_alert_log(state_dir, alert_line_70):
+                    mark_alert_fired(state_dir, "70", wave)
+        # 70% alert (if not at 90%)
         elif pct >= 70.0:
             alert_level = "70"
             if not check_alert_already_fired(state_dir, "70", wave):
@@ -328,15 +404,16 @@ def check_and_alert(window_minutes=30, ceiling=None, wave=1, config=None):
                     f"[{timestamp}] HIGH: Cost projection at 70% of ceiling "
                     f"({current}/{ceiling} tokens, {pct:.1f}%); wave {wave}"
                 )
-                append_alert_log(state_dir, alert_line)
-                mark_alert_fired(state_dir, "70", wave)
-                fired = True
+                if append_alert_log(state_dir, alert_line):
+                    mark_alert_fired(state_dir, "70", wave)
+                    fired = True
 
     return {
         "alert_level": alert_level,
         "current": current,
         "ceiling": ceiling,
         "pct_of_ceiling": pct,
+        "minutes_to_ceiling": minutes_to_ceiling,
         "fired_alert": fired
     }
 
@@ -381,6 +458,12 @@ def main(argv=None):
         help="Time window in minutes for burn rate (default 30)"
     )
     parser.add_argument(
+        "--horizon",
+        type=int,
+        default=None,
+        help="Minutes to project spend to (default from config or 60)"
+    )
+    parser.add_argument(
         "--ceiling",
         type=int,
         default=None,
@@ -389,8 +472,8 @@ def main(argv=None):
     parser.add_argument(
         "--wave",
         type=int,
-        default=1,
-        help="Wave number (for alert idempotency, default 1)"
+        default=None,
+        help="Wave number (for alert idempotency; required for --check-alerts or from AESOP_WAVE env)"
     )
     parser.add_argument(
         "--json",
@@ -409,35 +492,46 @@ def main(argv=None):
     config = load_config_file(args.config)
 
     if args.check_alerts:
-        result = check_and_alert(
-            window_minutes=args.window,
-            ceiling=args.ceiling,
-            wave=args.wave,
-            config=config
-        )
-        if args.json:
-            print(json.dumps(result, indent=2))
-        else:
-            print(f"[cost_projection] alert_level={result['alert_level']}, "
-                  f"current={result['current']}/{result['ceiling']}, "
-                  f"pct={result['pct_of_ceiling']:.1f}%, "
-                  f"fired={result['fired_alert']}")
-        return 0
+        try:
+            result = check_and_alert(
+                window_minutes=args.window,
+                ceiling=args.ceiling,
+                wave=args.wave,
+                config=config,
+                horizon_minutes=args.horizon
+            )
+            if args.json:
+                print(json.dumps(result, indent=2))
+            else:
+                pct_str = f"{result['pct_of_ceiling']:.1f}%" if result['pct_of_ceiling'] is not None else "N/A"
+                mtc_str = f"{result['minutes_to_ceiling']:.1f}min" if result['minutes_to_ceiling'] is not None else "N/A"
+                print(f"[cost_projection] alert_level={result['alert_level']}, "
+                      f"current={result['current']}/{result['ceiling']}, "
+                      f"pct={pct_str}, "
+                      f"mtc={mtc_str}, "
+                      f"fired={result['fired_alert']}")
+            return 0
+        except ValueError as e:
+            print(f"[cost_projection] ERROR: {e}", file=sys.stderr)
+            return 1
     else:
         # Default: --projection
         result = project(
             window_minutes=args.window,
             ceiling=args.ceiling,
-            config=config
+            config=config,
+            horizon_minutes=args.horizon
         )
         if args.json:
             print(json.dumps(result, indent=2))
         else:
+            mtc_str = f"{result['minutes_to_ceiling']:.1f}min" if result['minutes_to_ceiling'] is not None else "N/A"
             print(f"[cost_projection] current={result['current']}, "
                   f"burn_rate={result['burn_rate_per_min']}/min, "
                   f"projected={result['projected']}, "
                   f"ceiling={result['ceiling']}, "
                   f"pct={result['pct_of_ceiling']}, "
+                  f"mtc={mtc_str}, "
                   f"thin_window={result['is_thin_window']}")
         return 0
 

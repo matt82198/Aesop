@@ -378,6 +378,182 @@ class TestCostProjection(unittest.TestCase):
         json_output = json.dumps(result)
         self.assertIsNotNone(json.loads(json_output))
 
+    def test_minutes_to_ceiling_metric(self):
+        """minutes_to_ceiling should estimate time until ceiling hit at current burn rate."""
+        now_utc = datetime.now(timezone.utc)
+        # Add 3 entries over ~10 min to establish burn rate
+        for i in range(3):
+            ts = (now_utc - timedelta(minutes=5 * (2 - i))).isoformat().split('.')[0] + 'Z'
+            self._append_ledger_line(ts, 50, 50, wave=1)  # 100 tokens per entry
+
+        result = cost_projection.project(
+            window_minutes=15,
+            ceiling=1000,
+            config={"limits": {"max_wave_tokens": 1000}}
+        )
+
+        # Current = 300 (3 entries * 100)
+        # Burn rate = 300 / 15 = 20 tokens/min
+        # Remaining = 1000 - 300 = 700 tokens
+        # minutes_to_ceiling = 700 / 20 = 35 minutes
+        self.assertIsNotNone(result["minutes_to_ceiling"])
+        self.assertGreater(result["minutes_to_ceiling"], 0)
+        # Rough check (accounting for rounding and timing variability)
+        self.assertLess(result["minutes_to_ceiling"], 100)
+
+    def test_minutes_to_ceiling_none_when_at_ceiling(self):
+        """minutes_to_ceiling should be 0.0 when already at or past ceiling."""
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        # 1200 tokens exceeds 1000 ceiling
+        self._append_ledger_line(ts, 600, 600, wave=1)
+
+        result = cost_projection.project(
+            window_minutes=30,
+            ceiling=1000,
+            config={"limits": {"max_wave_tokens": 1000}}
+        )
+
+        # Should be 0.0 (already past ceiling)
+        self.assertEqual(result["minutes_to_ceiling"], 0.0)
+
+    def test_minutes_to_ceiling_none_without_ceiling(self):
+        """minutes_to_ceiling should be None when ceiling is not set."""
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        self._append_ledger_line(ts, 100, 200, wave=1)
+
+        result = cost_projection.project(
+            window_minutes=30,
+            ceiling=None,
+            config={"limits": {"max_wave_tokens": None}}
+        )
+
+        self.assertIsNone(result["minutes_to_ceiling"])
+
+    def test_horizon_parameter(self):
+        """horizon_minutes parameter should affect projected spend."""
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        self._append_ledger_line(ts, 0, 100, wave=1)  # 100 tokens
+
+        # Project with 30-minute horizon
+        result_30 = cost_projection.project(
+            window_minutes=15,
+            ceiling=10000,
+            config={"limits": {"max_wave_tokens": 10000}},
+            horizon_minutes=30
+        )
+
+        # Project with 120-minute horizon
+        result_120 = cost_projection.project(
+            window_minutes=15,
+            ceiling=10000,
+            config={"limits": {"max_wave_tokens": 10000}},
+            horizon_minutes=120
+        )
+
+        # 120-minute projection should be 4x higher than 30-minute
+        self.assertGreater(result_120["projected"], result_30["projected"])
+        # Rough ratio check
+        self.assertAlmostEqual(result_120["projected"] / result_30["projected"], 4.0, delta=0.5)
+
+    def test_spike_both_alerts_at_90_percent(self):
+        """Spike past 90% should fire BOTH 70% and 90% alerts independently."""
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        # 9500 tokens = 95% of 10000 ceiling
+        self._append_ledger_line(ts, 0, 9500, wave=1)
+
+        alert_file = self.state_dir / "SECURITY-ALERTS.log"
+
+        result = cost_projection.check_and_alert(
+            window_minutes=30,
+            ceiling=10000,
+            wave=1,
+            config={"limits": {"max_wave_tokens": 10000}}
+        )
+
+        # Should return 90% as alert_level
+        self.assertEqual(result["alert_level"], "90")
+
+        # Both alerts should be in the log
+        if alert_file.exists():
+            content = alert_file.read_text(encoding='utf-8')
+            lines = content.strip().split('\n')
+            # Should have at least 2 lines: one for 90%, one for 70%
+            self.assertGreaterEqual(len([l for l in lines if l.strip()]), 2)
+            self.assertIn("90%", content)
+            self.assertIn("70%", content)
+
+    def test_wave_required_or_from_env(self):
+        """check_and_alert should require wave parameter or AESOP_WAVE env var."""
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        self._append_ledger_line(ts, 0, 7000, wave=1)
+
+        # Save current AESOP_WAVE env var
+        old_wave_env = os.environ.get("AESOP_WAVE")
+
+        try:
+            # Clear env var
+            if "AESOP_WAVE" in os.environ:
+                del os.environ["AESOP_WAVE"]
+
+            # Should raise ValueError when wave is None and env var is not set
+            with self.assertRaises(ValueError) as ctx:
+                cost_projection.check_and_alert(
+                    window_minutes=30,
+                    ceiling=10000,
+                    wave=None,
+                    config={"limits": {"max_wave_tokens": 10000}}
+                )
+            self.assertIn("wave parameter required", str(ctx.exception))
+
+            # Now set env var
+            os.environ["AESOP_WAVE"] = "2"
+            result = cost_projection.check_and_alert(
+                window_minutes=30,
+                ceiling=10000,
+                wave=None,
+                config={"limits": {"max_wave_tokens": 10000}}
+            )
+            # Should succeed using env var
+            self.assertIsNotNone(result)
+
+        finally:
+            # Restore env var
+            if old_wave_env is not None:
+                os.environ["AESOP_WAVE"] = old_wave_env
+            else:
+                os.environ.pop("AESOP_WAVE", None)
+
+    def test_flag_after_successful_append(self):
+        """mark_alert_fired should only be called after append succeeds."""
+        now_utc = datetime.now(timezone.utc)
+        ts = now_utc.isoformat().split('.')[0] + 'Z'
+        self._append_ledger_line(ts, 0, 7000, wave=1)
+
+        # Make state_dir read-only to force append to fail (Unix-like)
+        # On Windows, this is trickier; we'll use a different approach:
+        # Create the alert file as a directory to force write to fail
+        alert_file_path = self.state_dir / "SECURITY-ALERTS.log"
+        alert_file_path.mkdir(parents=True, exist_ok=True)
+
+        result = cost_projection.check_and_alert(
+            window_minutes=30,
+            ceiling=10000,
+            wave=1,
+            config={"limits": {"max_wave_tokens": 10000}}
+        )
+
+        # Alert should be detected but flag should NOT be created because append failed
+        flag_file = self.state_dir / ".cost-alert-70-w1"
+        self.assertFalse(flag_file.exists())
+
+        # Clean up the directory
+        alert_file_path.rmdir()
+
 
 if __name__ == '__main__':
     unittest.main()
