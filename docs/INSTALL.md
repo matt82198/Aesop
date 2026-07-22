@@ -196,6 +196,79 @@ export DEBUG=1
 
 ---
 
+## Using Non-Claude Backends
+
+By default, Aesop uses Claude Code (the orchestration harness) as its backend. You can configure it to use other models via the **AgentDriver abstraction**—enabling Ollama, OpenAI-compatible endpoints, OpenRouter, and more.
+
+### Configure a backend in aesop.config.json
+
+Add or modify the `backend` section:
+
+```json
+{
+  "backend": {
+    "type": "openai-compatible",
+    "model": "ollama-mistral",
+    "base_url": "http://localhost:11434/v1",
+    "api_key_env": "OLLAMA_API_KEY"
+  }
+}
+```
+
+Supported backends:
+- `"claude-code"` (default) — Claude Code CLI harness
+- `"openai-compatible"` — OpenAI Chat Completions API (Ollama, OpenRouter, etc.)
+- `"codex"` — CodeX OpenAI backend (legacy)
+
+### Example: Local Ollama
+
+To run Aesop against Mistral locally via Ollama:
+
+```bash
+# 1. Install Ollama (https://ollama.ai) and start the daemon
+ollama serve
+
+# 2. In another terminal, pull a model
+ollama pull mistral
+
+# 3. Configure Aesop to use it
+cat > aesop.config.json <<EOF
+{
+  "backend": {
+    "type": "openai-compatible",
+    "model": "mistral",
+    "base_url": "http://localhost:11434/v1",
+    "api_key_env": "OLLAMA_API_KEY"
+  }
+}
+EOF
+
+# 4. Start Aesop (it will use Mistral for subagent dispatch)
+npx @matt82198/aesop my-fleet --name "my-api"
+```
+
+### Verification tiers: weaker backends get more checking
+
+The AgentDriver framework applies **honest verification tiers** — weaker backends (lower accuracy, no structured output) trigger stronger verification in the orchestrator:
+
+| Backend | Accuracy | Verification Tier | What it means |
+|---------|----------|-------------------|---------------|
+| Claude Code | ~0.99 | 1 (minimal) | Orchestrator trusts output; spot-check tests |
+| OpenAI (GPT-4) | ~0.95 | 2 | Validate all JSON, run full test suite |
+| Ollama (Mistral) | ~0.70 | 4 (maximum) | Validate all JSON, adversarial review, expensive repair cap |
+
+Lower tiers cost less but require more orchestrator work. See [driver/README.md](../driver/README.md) for full verification-policy details.
+
+### Troubleshooting
+
+**Backend won't connect**: Check `OLLAMA_API_KEY` (or your backend's API key env var) is set and the `base_url` is reachable.
+
+**Verification tier too strict**: If your backend is over-verified (tier 4 when it should be tier 2), update `probe_capabilities()` in the driver to report higher accuracy scores honestly.
+
+For more details, see [driver/README.md](../driver/README.md).
+
+---
+
 ## Pre-push Hook Installation
 
 The `npx` scaffold installs the pre-push hook automatically. If you cloned the repo manually, install it:

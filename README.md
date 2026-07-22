@@ -108,9 +108,9 @@ audit + fleet-ops monitoring
 - **Live web dashboard** — Real-time fleet health, security alerts, work-item kanban at `http://localhost:8770`.
 - **Secret-scan gates** — Pre-push hook blocks leaks; audit trail logged. Pair with GitHub branch protection for enforcement.
 - **Read-only MCP Fleet Server** — Expose fleet status, active agents, work items, and cost metrics to Claude Code (fleet_status, fleet_agents, fleet_tracker, fleet_cost tools). See [mcp/CLAUDE.md](./mcp/CLAUDE.md) for setup.
-- **Multi-model portability (Phase 1)** — AgentDriver abstraction decouples the wave loop from Claude Code; ships with reference drivers for Claude Code and Codex stub. See [driver/README.md](./driver/README.md).
+- **Multi-model portability** — AgentDriver abstraction decouples the wave loop from Claude Code; drivers for Claude Code, OpenAI-compatible backends (Ollama, OpenRouter), and Codex. Honest verification tiers: weaker backends get more checking. See [driver/README.md](./driver/README.md).
 - **Self-diagnosing npm publish** — OIDC token generation and publish reliability verified on each release; workflow surfaces diagnostics inline.
-- **Verification & quality tooling** — mutation_test.py for test-quality assessment, defect_escape.py for first-try-green telemetry, hidden-case coding benchmark for robustness, and adversarial review to break and harden the orchestration loop.
+- **Verification & quality tooling** — mutation_test.py for test-quality assessment, defect_escape.py for first-try-green telemetry, held-out benchmark for robustness, and adversarial review to break and harden the orchestration loop.
 
 ## Get Started (3 steps, 5 min)
 

@@ -38,6 +38,8 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 - **api.py** — `StateAPI(db_path)`: the swap seam. Callers use this only; backend implementation hidden. Passes through OCC support transparently.
 - **export.py** — `export_tracker(api, out_path)`: render the projection back to a git-tracked JSON snapshot (indent=2, ascii-escaped to match the live file).
 - **ingest.py** — `ingest_tracker_json(api, path)`: backfill one `item_created` per existing item; validates event structure at boundary.
+- **identity.py** — Multi-instance identity: `InstanceID(hostname, pid, nonce)` uniquely tags each Aesop process. Enables distributed leasing and fault detection.
+- **coordination.py** — Lease-by-append claims for multi-writer coordination: `claim_lease(stream, actor)` / `release_lease(stream, actor)` via fail-closed event appends. Prevents concurrent orchestrators from colliding.
 
 ## Invariants
 - **Append-only**: never mutate/delete events; state changes are new events.
