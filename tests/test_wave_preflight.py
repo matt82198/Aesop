@@ -343,7 +343,7 @@ class TestPhaseConsistency(PrefightTestBase):
         self.assertIn("PASS", result.stdout.split("STATE.md phase")[1].split("\n")[0])
 
     def test_inconsistent_phases_warn(self):
-        """Should warn and fail when phases differ (P2 fix: check is no longer vacuous)."""
+        """Should warn but not block when phases differ (warning-level)."""
         self._setup_state_md("wave-rc.2")
         self._setup_orchestrator_status("wave-rc.3")
         self._setup_tracker_json(valid=True)
@@ -355,8 +355,8 @@ class TestPhaseConsistency(PrefightTestBase):
         # Should show both values in the detail
         self.assertIn("STATE.md=wave-rc.2", result.stdout)
         self.assertIn("status.json=wave-rc.3", result.stdout)
-        # P2 fix: phase drift now blocks the wave (phase_ok reflects drift state)
-        self.assertNotEqual(result.returncode, 0)
+        # Phase drift is warning-level: doesn't block the wave (exit 0)
+        self.assertEqual(result.returncode, 0)
 
     def test_missing_files_ok(self):
         """Should pass if files don't exist yet."""
@@ -376,8 +376,8 @@ class TestPhaseConsistency(PrefightTestBase):
         result = self._run_preflight("--json")
         data = json.loads(result.stdout)
         phase_check = [c for c in data["checks"] if "phase consistent" in c["name"]][0]
-        # P2 fix: phase drift now fails the check (not vacuous)
-        self.assertFalse(phase_check["ok"])
+        # Phase drift is warning-level: check passes but warning is visible
+        self.assertTrue(phase_check["ok"])
         self.assertIn("STATE.md=wave-001", phase_check["detail"])
         self.assertIn("status.json=wave-002", phase_check["detail"])
         self.assertIn("WARN: drift detected", phase_check["detail"])
@@ -697,7 +697,7 @@ class TestPhaseDriftWarning(PrefightTestBase):
     """Test that STATE.md phase drift is warning-level, not a blocker (wave-rc4 fix b)."""
 
     def test_phase_drift_is_warning_not_blocker(self):
-        """Phase drift should warn and block the wave (P2 fix: check is no longer vacuous)."""
+        """Phase drift is warning-level: visible in output but exit 0."""
         self._setup_state_md("wave-rc.2")
         self._setup_orchestrator_status("wave-rc.3")  # Drifted
         self._setup_tracker_json(valid=True)
@@ -705,11 +705,11 @@ class TestPhaseDriftWarning(PrefightTestBase):
 
         result = self._run_preflight()
 
-        # Should show the drift
+        # Should show the drift warning (loud, visible)
         self.assertIn("[WARN: drift detected]", result.stdout)
 
-        # P2 fix: phase drift now blocks the wave (phase_ok reflects drift state)
-        self.assertNotEqual(result.returncode, 0)
+        # But phase drift is warning-level, so exit 0 (doesn't block the wave)
+        self.assertEqual(result.returncode, 0)
 
     def test_phase_consistent_passes_cleanly(self):
         """Consistent phases should pass cleanly."""

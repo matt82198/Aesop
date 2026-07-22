@@ -361,10 +361,10 @@ def run_checks(root_dir=None, state_dir=None, config=None):
         # One or both phases missing (not yet ready or not applicable)
         phase_detail = f"STATE.md={state_phase}, status.json={status_phase}"
 
-    # Phase drift check: now reflects actual state (not vacuous)
-    # Note: Phase drift is conceptually warning-level, but currently fails the check
-    # to make the check non-vacuous (able to detect drift state)
-    phase_ok = not drift_detected
+    # Phase drift check: warning-level (drift is reported but does not block)
+    # The check always passes (phase_ok = True), but drift detail is visible in output
+    # This makes the check non-vacuous: drift is detected and reported, but doesn't block
+    phase_ok = True
 
     checks.append({
         "name": "STATE.md phase consistent with orchestrator-status.json (warning-level)",
