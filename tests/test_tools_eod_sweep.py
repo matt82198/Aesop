@@ -33,19 +33,10 @@ class TestEodSweep(unittest.TestCase):
             shutil.rmtree(self.temp_dir, onerror=handle_remove_readonly)
 
     def _init_git_repo(self, repo_path):
-        """Initialize a git repository for testing.
-
-        LOUD fixture (runner incident): every step is returncode-checked so a
-        half-built fixture fails the test at SETUP with the real error instead
-        of surfacing later as a vacuous tool verdict.
-        """
+        """Init a git fixture; LOUD (runner incident): every step rc-checked."""
         repo_path.mkdir(parents=True, exist_ok=True)
-
-        r = subprocess.run(
-            ["git", "init"],
-            cwd=str(repo_path),
-            capture_output=True, text=True
-        )
+        r = subprocess.run(["git", "init"], cwd=str(repo_path),
+                           capture_output=True, text=True)
         assert r.returncode == 0, f"fixture git init failed: {r.stderr or r.stdout}"
         subprocess.run(
             ["git", "config", "user.name", "Test User"],
