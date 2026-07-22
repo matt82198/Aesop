@@ -421,30 +421,24 @@ class WriteAPIIntegrationTest(unittest.TestCase):
         """Clean up temp directory."""
         self.temp_dir.cleanup()
 
-    def test_append_to_existing_tracker(self):
-        """WriteAPI can append to tracker.json that already exists."""
-        # Create a baseline tracker.json
+    def test_append_to_existing_tracker_with_conflict(self):
+        """WriteAPI detects conflict when tracker.json has unexplained items (not in event store)."""
+        # Create a baseline tracker.json with an item not in the event store
         tracker_file = self.state_dir / "tracker.json"
         baseline_tracker = {
             "version": 1,
             "items": [
-                {"id": "baseline-1", "title": "Existing item", "status": "todo"},
+                {"id": "baseline-1", "title": "Existing item", "status": "todo", "priority": "P1", "lane": "proposed", "source": "external", "tags": [], "notes": None, "pr_link": None, "created_at": "2026-07-22T00:00:00Z", "completed_at": None},
             ],
         }
         tracker_file.write_text(json.dumps(baseline_tracker), encoding="utf-8")
 
-        # Append via WriteAPI
-        new_item = self.api.tracker_append_item({"title": "New item"})
+        # Try to append via WriteAPI: should detect conflict
+        # because baseline-1 is on disk but not in event store
+        with self.assertRaises(WriteConflict) as ctx:
+            self.api.tracker_append_item({"title": "New item"})
 
-        # Verify both items are in the projection
-        tracker_data = json.loads(tracker_file.read_text(encoding="utf-8"))
-        items = tracker_data["items"]
-        ids = [i["id"] for i in items]
-
-        # Should have baseline item and new item
-        # Note: baseline item may not be in event store, only new item will be
-        # So we just check that the new item exists
-        self.assertTrue(any(i["id"] == new_item["id"] for i in items))
+        self.assertIn("unexplained", str(ctx.exception).lower())
 
     def test_load_empty_state_dir(self):
         """WriteAPI handles empty/nonexistent state directory."""
@@ -457,6 +451,247 @@ class WriteAPIIntegrationTest(unittest.TestCase):
 
         # Now tracker.json should exist
         self.assertTrue((self.state_dir / "tracker.json").exists())
+
+
+class WriteAPIConflictDetectionTest(unittest.TestCase):
+    """Test OCC (Optimistic Concurrency Control) conflict detection.
+
+    P1 DEFECT FIX: Verify that WriteAPI detects concurrent modification
+    and raises WriteConflict instead of silently overwriting.
+    """
+
+    def setUp(self):
+        """Create a temp state directory for each test."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.state_dir = Path(self.temp_dir.name)
+        self.api = WriteAPI(self.state_dir)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        self.temp_dir.cleanup()
+
+    def test_concurrent_writer_detected_raises_writeconflict(self):
+        """WriteAPI detects external write to tracker.json and raises WriteConflict."""
+        # Use two WriteAPI instances to simulate concurrent modification
+        api1 = WriteAPI(self.state_dir)
+        api2 = WriteAPI(self.state_dir)
+
+        # Create initial item via api1
+        item1 = api1.tracker_append_item({"title": "Item 1"})
+
+        # Create item via api2 (will capture different start_disk_hash)
+        item2 = api2.tracker_append_item({"title": "Item 2"})
+
+        # Now tracker.json has both items
+        tracker_file = self.state_dir / "tracker.json"
+        tracker_data = json.loads(tracker_file.read_text(encoding="utf-8"))
+        self.assertEqual(len(tracker_data["items"]), 2)
+
+        # Manually modify tracker.json to simulate external concurrent write
+        # Add an item that's NOT in the event store
+        external_item = {
+            "id": "external-123",
+            "title": "External item",
+            "status": "todo",
+            "priority": "P1",
+            "lane": "proposed",
+            "source": "external",
+            "tags": [],
+            "notes": None,
+            "pr_link": None,
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "completed_at": None,
+        }
+        tracker_data["items"].append(external_item)
+        tracker_file.write_text(json.dumps(tracker_data, indent=2), encoding="utf-8")
+
+        # Now api1 tries to append item3. Since tracker.json was modified externally
+        # AFTER item2 was appended, api1's projection will differ from disk
+        # api1's start_disk_hash = hash of [item1, item2]
+        # disk_hash after external mod = hash of [item1, item2, external]
+        # new_hash from projection = hash of [item1, item2, item3]
+        # Since disk_hash != start_disk_hash AND disk_hash != new_hash, conflict!
+        with self.assertRaises(WriteConflict):
+            api1.tracker_append_item({"title": "Item 3"})
+
+    def test_writeconflict_preserves_disk_state(self):
+        """When WriteConflict is raised, disk state is not overwritten."""
+        # Create initial state via two instances
+        api1 = WriteAPI(self.state_dir)
+        api2 = WriteAPI(self.state_dir)
+
+        item1 = api1.tracker_append_item({"title": "Item 1"})
+        item2 = api2.tracker_append_item({"title": "Item 2"})
+        tracker_file = self.state_dir / "tracker.json"
+
+        # Verify both are on disk
+        disk_state_before = json.loads(tracker_file.read_text(encoding="utf-8"))
+        self.assertEqual(len(disk_state_before["items"]), 2)
+
+        # Now externally modify disk to add an item not in event store
+        external_item = {
+            "id": "external-123",
+            "title": "External item",
+            "status": "todo",
+            "priority": "P1",
+            "lane": "proposed",
+            "source": "external",
+            "tags": [],
+            "notes": None,
+            "pr_link": None,
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "completed_at": None,
+        }
+        disk_state_before["items"].append(external_item)
+        tracker_file.write_text(json.dumps(disk_state_before, indent=2), encoding="utf-8")
+
+        # Try to append via api1 (should fail with conflict)
+        # api1's start_disk_hash = hash of [item1, item2]
+        # disk is modified to [item1, item2, external]
+        # api1's new_hash = hash of [item1, item2, item3]
+        # Conflict detected!
+        with self.assertRaises(WriteConflict):
+            api1.tracker_append_item({"title": "Item 3"})
+
+        # Verify disk still has external item (not overwritten)
+        disk_tracker = json.loads(tracker_file.read_text(encoding="utf-8"))
+        disk_ids = {i["id"] for i in disk_tracker["items"]}
+
+        # External item should still be there
+        self.assertIn("external-123", disk_ids)
+        # Should have 3 items: item1, item2, external
+        self.assertEqual(len(disk_tracker["items"]), 3)
+
+    def test_corrupt_disk_json_raises_writeconflict(self):
+        """Corrupt JSON on disk raises WriteConflict (fail-closed, not fail-open)."""
+        # Create initial item
+        self.api.tracker_append_item({"title": "Item 1"})
+        tracker_file = self.state_dir / "tracker.json"
+
+        # Corrupt the JSON on disk
+        tracker_file.write_text("{invalid json}", encoding="utf-8")
+
+        # Try to append: should raise WriteConflict (fail-closed)
+        # not silently pass and overwrite corrupt data
+        with self.assertRaises(WriteConflict):
+            self.api.tracker_append_item({"title": "Item 2"})
+
+
+class WriteAPIIdCollisionTest(unittest.TestCase):
+    """Test ID collision detection.
+
+    P2 DEFECT FIX: tracker_append_item must reject duplicate explicit IDs.
+    """
+
+    def setUp(self):
+        """Create a temp state directory for each test."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.state_dir = Path(self.temp_dir.name)
+        self.api = WriteAPI(self.state_dir)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        self.temp_dir.cleanup()
+
+    def test_duplicate_explicit_id_raises_valueerror(self):
+        """tracker_append_item rejects duplicate explicit ID."""
+        # Create an item with explicit ID
+        self.api.tracker_append_item({"title": "Item 1", "id": "dup-123"})
+
+        # Try to create another item with same ID
+        with self.assertRaises(ValueError) as ctx:
+            self.api.tracker_append_item({"title": "Item 2", "id": "dup-123"})
+        error_msg = str(ctx.exception).lower()
+        self.assertTrue("already exists" in error_msg or "duplicate" in error_msg,
+                       f"Expected 'already exists' or 'duplicate' in error: {error_msg}")
+
+    def test_auto_generated_ids_never_collide(self):
+        """Auto-generated IDs never collide (high probability with secrets.token_hex)."""
+        # Create many items with auto-generated IDs
+        created_ids = []
+        for i in range(20):
+            item = self.api.tracker_append_item({"title": f"Item {i}"})
+            created_ids.append(item["id"])
+
+        # All IDs should be unique
+        self.assertEqual(len(created_ids), len(set(created_ids)))
+
+
+class WriteAPIProjectionRecoveryTest(unittest.TestCase):
+    """Test self-healing projection via rebuild_projection().
+
+    P2 DEFECT FIX: orphaned events are recovered when rebuild_projection() is called.
+    """
+
+    def setUp(self):
+        """Create a temp state directory for each test."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.state_dir = Path(self.temp_dir.name)
+        self.api = WriteAPI(self.state_dir)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        self.temp_dir.cleanup()
+
+    def test_rebuild_projection_recovers_orphaned_event(self):
+        """rebuild_projection() forces re-render from event store, recovering orphans."""
+        # Create an item
+        item1 = self.api.tracker_append_item({"title": "Item 1"})
+        tracker_file = self.state_dir / "tracker.json"
+
+        # Simulate orphaned event: manually delete the item from tracker.json
+        # but leave it in the event store
+        tracker_data = json.loads(tracker_file.read_text(encoding="utf-8"))
+        tracker_data["items"] = []  # Remove all items
+        tracker_file.write_text(json.dumps(tracker_data, indent=2), encoding="utf-8")
+
+        # Verify item is gone from projection
+        stale_tracker = json.loads(tracker_file.read_text(encoding="utf-8"))
+        self.assertEqual(len(stale_tracker["items"]), 0)
+
+        # Now rebuild projection (should recover the orphaned event)
+        self.api.rebuild_projection()
+
+        # Item should be back in projection
+        recovered_tracker = json.loads(tracker_file.read_text(encoding="utf-8"))
+        recovered_ids = {i["id"] for i in recovered_tracker["items"]}
+        self.assertIn(item1["id"], recovered_ids)
+
+    def test_rebuild_projection_bypasses_conflict_check(self):
+        """rebuild_projection(force=True) bypasses OCC check for recovery."""
+        # Create initial state
+        item1 = self.api.tracker_append_item({"title": "Item 1"})
+        tracker_file = self.state_dir / "tracker.json"
+
+        # Corrupt projection: remove item but leave event
+        tracker_data = json.loads(tracker_file.read_text(encoding="utf-8"))
+        tracker_data["items"] = []
+        tracker_file.write_text(json.dumps(tracker_data, indent=2), encoding="utf-8")
+
+        # Simulate concurrent modification (so OCC would normally fail)
+        external_item = {
+            "id": "external-456",
+            "title": "External",
+            "status": "todo",
+            "priority": "P1",
+            "lane": "proposed",
+            "source": "external",
+            "tags": [],
+            "notes": None,
+            "pr_link": None,
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "completed_at": None,
+        }
+        tracker_data["items"] = [external_item]
+        tracker_file.write_text(json.dumps(tracker_data, indent=2), encoding="utf-8")
+
+        # rebuild_projection(force=True) should still work (bypass conflict check)
+        self.api.rebuild_projection(force=True)
+
+        # Both items should be in projection now
+        recovered_tracker = json.loads(tracker_file.read_text(encoding="utf-8"))
+        recovered_ids = {i["id"] for i in recovered_tracker["items"]}
+        self.assertIn(item1["id"], recovered_ids)
 
 
 if __name__ == "__main__":
