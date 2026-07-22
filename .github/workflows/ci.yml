@@ -58,10 +58,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup Node.js LTS
+      - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -219,10 +219,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup Node.js LTS
+      - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
 
       - name: Setup Python
         uses: actions/setup-python@v6
