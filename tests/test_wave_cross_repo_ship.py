@@ -14,6 +14,7 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 
 import os
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,7 @@ _MODULE_TMP = None
 _MODULE_SAVED_CWD = None
 _FIXTURE_REPO_A = None
 _FIXTURE_REPO_B = None
+_INITIAL_SHAS = {}
 
 
 def _init_repo(repo_path: Path, repo_name: str) -> None:
@@ -60,12 +62,16 @@ def _init_repo(repo_path: Path, repo_name: str) -> None:
         repo_name: human-readable repo name for content
     """
     repo_path.mkdir(parents=True, exist_ok=True)
-    subprocess.run("git init", cwd=str(repo_path), shell=True, capture_output=True)
-    subprocess.run("git config user.email 'test@example.com'", cwd=str(repo_path), shell=True, capture_output=True)
-    subprocess.run("git config user.name 'Test User'", cwd=str(repo_path), shell=True, capture_output=True)
+    # List-form (no shell): cmd.exe does NOT treat single quotes as quoting,
+    # so the shell=True forms silently broke the initial commit on Windows
+    # (unborn HEAD -> later fixture resets ran against garbage).
+    # check=True: a fixture that fails to build must fail LOUD at setup.
+    subprocess.run(["git", "init"], cwd=str(repo_path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo_path), capture_output=True, check=True)
     (repo_path / "README.md").write_text(f"Fixture {repo_name}\n")
-    subprocess.run("git add README.md", cwd=str(repo_path), shell=True, capture_output=True)
-    subprocess.run("git commit -m 'Initial commit'", cwd=str(repo_path), shell=True, capture_output=True)
+    subprocess.run(["git", "add", "README.md"], cwd=str(repo_path), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(repo_path), capture_output=True, check=True)
 
 
 def setUpModule():
@@ -81,6 +87,23 @@ def setUpModule():
     # Create fixture repo B
     _FIXTURE_REPO_B = Path(_MODULE_TMP) / "repo-b"
     _init_repo(_FIXTURE_REPO_B, "repo B")
+
+    # Pin each repo's INITIAL commit sha. setUp must reset to THIS, not HEAD:
+    # tests legitimately commit into the fixtures (that's what ship does), so
+    # HEAD drifts — resetting to a drifted HEAD keeps prior tests' files
+    # committed, and a later identical write then fails `git commit` with
+    # "nothing to commit" (the intermittent shipped=1 CI failure).
+    for repo in (_FIXTURE_REPO_A, _FIXTURE_REPO_B):
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo),
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        # Fail LOUD if the pin is not a real sha: `git rev-parse HEAD` on an
+        # unborn HEAD echoes the literal string "HEAD", which silently turned
+        # the setUp reset back into drifting-HEAD behavior.
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise RuntimeError(f"fixture {repo} has no valid initial commit: {sha!r}")
+        _INITIAL_SHAS[str(repo)] = sha
 
 
 def tearDownModule():
@@ -239,9 +262,10 @@ class TestPerRepoShip(unittest.TestCase):
         Removes uncommitted changes and extra files to prevent test cross-contamination.
         """
         for repo_path in [_FIXTURE_REPO_A, _FIXTURE_REPO_B]:
-            # Reset to initial commit, discarding any test changes
+            # Reset to the PINNED initial commit (not HEAD — HEAD drifts as
+            # tests commit; see setUpModule).
             subprocess.run(
-                "git reset --hard HEAD",
+                f"git reset --hard {_INITIAL_SHAS[str(repo_path)]}",
                 cwd=str(repo_path),
                 shell=True,
                 capture_output=True,
@@ -292,6 +316,20 @@ class TestPerRepoShip(unittest.TestCase):
 
         # Verify shipped items recorded.
         self.assertIsNotNone(result["shipped"])
+        if len(result["shipped"]) != 2:
+            def _probe(repo):
+                out = {}
+                for label, cmd in [("status", "git status --porcelain"), ("log", "git log --oneline"), ("lsfiles", "git ls-files")]:
+                    r = subprocess.run(cmd, cwd=str(repo), shell=True, capture_output=True, text=True)
+                    out[label] = r.stdout.strip()
+                fa = Path(repo) / "file-a.py"
+                out["file-a.exists"] = fa.exists()
+                if fa.exists():
+                    out["file-a.content"] = fa.read_text()[:60]
+                out["initial_sha"] = _INITIAL_SHAS.get(str(repo))
+                return out
+            forensics = {"repo-a": _probe(_FIXTURE_REPO_A), "repo-b": _probe(_FIXTURE_REPO_B)}
+            self.fail(json.dumps({"result": result, "run_commands": driver.run_commands, "forensics": forensics}, default=str))
         self.assertEqual(len(result["shipped"]), 2)
 
         # Verify per-repo results recorded.

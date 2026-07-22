@@ -1127,6 +1127,10 @@ def run_wave(
                             "repo": repo_path,
                             "committed": False,
                             "error": "git_commit_failed",
+                            # Truncated stderr/stdout: a bare label is undiagnosable
+                            # from the Report (identity, hooks, lock contention all
+                            # land here with different remedies).
+                            "error_detail": ((commit_result.stderr or "") + " | " + (commit_result.stdout or ""))[:300],
                             "files_count": len(repo_items),
                             "files_unstaged": unstage_ok,
                             "unstage_error": None if unstage_ok else reset_result.stderr,

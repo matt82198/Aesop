@@ -64,12 +64,16 @@ def _init_repo(repo_path: Path, repo_name: str) -> None:
         repo_name: human-readable repo name for content
     """
     repo_path.mkdir(parents=True, exist_ok=True)
-    subprocess.run("git init", cwd=str(repo_path), shell=True, capture_output=True)
-    subprocess.run("git config user.email 'test@example.com'", cwd=str(repo_path), shell=True, capture_output=True)
-    subprocess.run("git config user.name 'Test User'", cwd=str(repo_path), shell=True, capture_output=True)
+    # List-form (no shell): cmd.exe does NOT treat single quotes as quoting,
+    # so the shell=True forms silently broke the initial commit on Windows
+    # (unborn HEAD -> later fixture resets ran against garbage).
+    # check=True: a fixture that fails to build must fail LOUD at setup.
+    subprocess.run(["git", "init"], cwd=str(repo_path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo_path), capture_output=True, check=True)
     (repo_path / "README.md").write_text(f"Fixture {repo_name}\n")
-    subprocess.run("git add README.md", cwd=str(repo_path), shell=True, capture_output=True)
-    subprocess.run("git commit -m 'Initial commit'", cwd=str(repo_path), shell=True, capture_output=True)
+    subprocess.run(["git", "add", "README.md"], cwd=str(repo_path), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(repo_path), capture_output=True, check=True)
 
 
 def setUpModule():
