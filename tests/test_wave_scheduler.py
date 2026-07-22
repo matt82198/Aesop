@@ -745,5 +745,61 @@ class TestGate1CeilingMidWaveSemantics(unittest.TestCase):
         self.assertTrue(True, "Ceiling semantics: abort-before-dispatch only")
 
 
+
+class TestReportRealWaveShape(unittest.TestCase):
+    """Live-pilot regression: run_wave's REAL return shape has shipped=[slug
+    strings], per-item data in built, sha only in shipped_repos, and NO
+    top-level success key. The first live codex wave crashed on .get() over a
+    string and would have reported success=False on a perfect wave."""
+
+    class _MinimalDriver:
+        def probe_capabilities(self):
+            class C:
+                name = "fake-backend"
+                recommended_verification_tier = 2
+            return C()
+
+        def resolve_model(self, role):
+            return "fake-model"
+
+    def test_items_shipped_built_from_real_shape(self):
+        import wave_scheduler as ws
+        real_shape = {
+            "preflight_ok": True,
+            "aborted": False,
+            "abort_reason": None,
+            "built": [{"slug": "item-a", "dispatched": True, "verified": True,
+                       "testExit": 0, "verificationTier": 2, "filesWritten": ["f.py"]}],
+            "shipped": ["item-a"],
+            "shipped_repos": [{"repo": "X", "committed": True, "sha": "abc123"}],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            tracker = Path(td) / "tracker.json"
+            tracker.write_text(json.dumps({"items": [{
+                "id": "id-a", "slug": "item-a", "status": "todo", "priority": "P2",
+                "ownsFiles": ["f.py"], "prompt": "p", "testCmd": "t", "workDir": ".",
+                "title": "x", "created_at": "2026-01-01",
+            }]}), encoding="utf-8")
+            orig = ws.run_wave
+            ws.run_wave = lambda **k: real_shape
+            try:
+                report = ws.run_wave_scheduler(
+                    tracker_path=str(tracker), max_items=1, dry_run=False,
+                    driver=self._MinimalDriver(), state_dir=Path(td))
+            finally:
+                ws.run_wave = orig
+            self.assertTrue(tracker.exists(), "tracker must survive the update")
+            data = json.loads(tracker.read_text(encoding="utf-8"))
+        self.assertTrue(report["success"], msg=json.dumps(report, default=str))
+        self.assertEqual(len(report["items_shipped"]), 1)
+        rec = report["items_shipped"][0]
+        self.assertEqual(rec["slug"], "item-a")
+        self.assertTrue(rec["verified"])
+        self.assertEqual(rec["testExit"], 0)
+        self.assertEqual(rec["backend"], "fake-backend")
+        self.assertEqual(report["sha"], "abc123")
+        self.assertEqual(data["items"][0]["status"], "in_progress")
+
+
 if __name__ == "__main__":
     unittest.main()

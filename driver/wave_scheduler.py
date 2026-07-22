@@ -694,27 +694,41 @@ def run_wave_scheduler(
         )
 
         # P2c: verify no merged=True, record merged=false
-        # GATE-1: per-item observability {slug, backend, tier, verified, testExit}
+        # GATE-1: per-item observability {slug, backend, tier, verified, testExit}.
+        # REAL run_wave shape (live-pilot fix): "shipped" is a list of SLUG
+        # STRINGS; the per-item records live in "built". Join them.
+        backend_name = driver.probe_capabilities().name
+        built_by_slug = {
+            b.get("slug"): b for b in (wave_result.get("built") or []) if isinstance(b, dict)
+        }
         items_shipped = []
-        for item in wave_result.get("shipped", []) or []:
-            shipped_item = {
-                "slug": item.get("slug", "unknown"),
-                "backend": driver.probe_capabilities().name,
-                "tier": item.get("verificationTier", 1),
-                "verified": item.get("verified", False),
-                "testExit": item.get("testExit"),
-            }
-            items_shipped.append(shipped_item)
+        shipped_slugs = []
+        for slug in wave_result.get("shipped", []) or []:
+            if isinstance(slug, dict):  # tolerate dict-shaped fakes
+                slug = slug.get("slug", "unknown")
+            shipped_slugs.append(slug)
+            b = built_by_slug.get(slug, {})
+            items_shipped.append({
+                "slug": slug,
+                "backend": backend_name,
+                "tier": b.get("verificationTier", 1),
+                "verified": b.get("verified", False),
+                "testExit": b.get("testExit"),
+            })
 
-        branch = wave_result.get("branch")
-        sha = wave_result.get("sha")
+        # Ship sha comes from the per-repo ship results (no top-level sha key).
+        repo_results = wave_result.get("shipped_repos") or []
+        sha = next((r.get("sha") for r in repo_results if isinstance(r, dict) and r.get("sha")), None)
+        branch = None  # run_wave ships on the current branch; scheduler does not switch branches
 
-        # P1-5 (WIRED): After successful ship, mark items "in_progress" (P1 DEAD CODE fix)
+        # P1-5 (WIRED): After successful ship, mark items "in_progress" by ITEM ID.
         tracker_update_error = None
         if items_shipped:
+            slug_to_id = {it.get("slug"): it.get("id") for it in selected_items}
+            shipped_item_ids = [slug_to_id[s] for s in shipped_slugs if slug_to_id.get(s)]
             success_update, update_error = _write_tracker_status_atomic(
                 tracker_path,
-                items_shipped,
+                shipped_item_ids,
                 "in_progress",
                 wave_id,
                 expected_hash=intake_hash,  # P6: conflict detection
@@ -722,6 +736,8 @@ def run_wave_scheduler(
             if not success_update:
                 tracker_update_error = update_error
 
+        # run_wave has NO top-level "success" key: derive honestly.
+        wave_ok = bool(wave_result.get("preflight_ok")) and not wave_result.get("aborted")
         return emit_report(
             phase="dispatch",
             wave_id=wave_id,
@@ -731,7 +747,7 @@ def run_wave_scheduler(
             branch=branch,
             sha=sha,
             tracker_update_error=tracker_update_error,
-            success=wave_result.get("success", False) and tracker_update_error is None,
+            success=wave_ok and tracker_update_error is None,
             merged=False,  # P2c: pilot stops before merge
         )
 
