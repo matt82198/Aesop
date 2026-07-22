@@ -314,9 +314,20 @@ def main():
         print(f"Error: repo root {repo_root} does not exist", file=sys.stderr)
         sys.exit(1)
 
-    # Find all CLAUDE.md files
-    claudemd_files = sorted(repo_root.glob("*/CLAUDE.md"))
-    claudemd_files.extend(repo_root.glob("CLAUDE.md"))
+    # Find all CLAUDE.md files (recursive, with exclusions for common junk dirs)
+    # Exclude: node_modules, .git, dist, worktrees (sibling dirs), .pytest_cache, __pycache__
+    claudemd_files = []
+
+    # Use rglob to find all CLAUDE.md files at any depth
+    for claudemd_path in repo_root.rglob("CLAUDE.md"):
+        # Exclude paths in problematic directories
+        parts = claudemd_path.parts
+        if any(part in {"node_modules", ".git", "dist", ".pytest_cache", "__pycache__"} for part in parts):
+            continue
+        # Exclude worktree paths (parent directory sibling paths like ../aesop-wt-*)
+        # This is already handled by only searching within repo_root
+        claudemd_files.append(claudemd_path)
+
     claudemd_files = sorted(set(claudemd_files))
 
     all_findings = []
