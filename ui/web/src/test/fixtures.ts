@@ -121,6 +121,7 @@ export const TESTIDS = {
   weeklyCostSummary: 'weekly-cost-summary',
   verdictCostMetrics: 'verdict-cost-metrics',
   modelMixChart: 'model-mix-chart',
+  costAnalyticsPanel: 'cost-analytics-panel',
 
   // PR Board view
   viewPRBoard: 'view-prboard',

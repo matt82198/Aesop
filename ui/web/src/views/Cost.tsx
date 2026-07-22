@@ -13,6 +13,7 @@ import { Scorecard } from '../components/Scorecard';
 import { WeeklyCostSummary } from '../components/WeeklyCostSummary';
 import { VerdictCostMetrics } from '../components/VerdictCostMetrics';
 import { ModelMixTrendChart } from '../components/ModelMixTrendChart';
+import { CostAnalyticsPanel } from '../components/CostAnalyticsPanel';
 import { TESTIDS } from '../test/fixtures';
 import './Cost.css';
 
@@ -38,6 +39,10 @@ export function Cost({ cost }: CostProps) {
       )}
 
       <div className="cost-layout">
+        <div className="cost-section cost-section--full">
+          <CostAnalyticsPanel cost={cost} ceilingTokens={1_000_000_000} />
+        </div>
+
         <div className="cost-section">
           <h3>By Model</h3>
           <CostTable cost={cost} />

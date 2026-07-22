@@ -74,6 +74,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_activity_filter.py` — Browser proof for Activity view agent status filter
 - `verify_agent_inspector.py` — Browser proof for Agent Inspector drawer (/api/agent?id=)
 - `verify_dash.py` — Browser proof for realtime SSE dashboard
+- `verify_cost_panel.py` — Browser proof for Cost Analytics Panel (spend per wave, model efficiency, burn rate; self-hosted test port + fixture ledger + pricing; exit 0=proven, 1=failed, --allow-skip for CI)
 - `verify_failure_drilldown.py` — Browser proof for wave failure drill-down feature
 - `verify_prboard.py` — Browser proof for Wave PR Board (/api/wave/prs)
 - `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
