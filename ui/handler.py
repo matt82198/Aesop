@@ -82,6 +82,23 @@ _ASSET_MIME = {
 }
 
 
+def _is_client_disconnect_error(exc):
+    """True if exception indicates a normal client disconnect (not an error).
+
+    When clients close connections mid-stream (tab closed, network drop, etc.),
+    we get BrokenPipeError, ConnectionAbortedError, or ConnectionResetError.
+    These are normal lifecycle events, not bugs, and should not be logged as errors.
+
+    Args:
+        exc: The exception to check
+
+    Returns:
+        bool: True if this is a normal disconnect, False if it's an unexpected error
+    """
+    return isinstance(exc, (BrokenPipeError, ConnectionAbortedError,
+                           ConnectionResetError))
+
+
 def _is_local_origin(origin):
     """True if an Origin header value is on the local allowlist.
 
@@ -338,7 +355,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             pass  # client went away mid-response — normal, not an error
         except Exception as e:
-            print(f"[serve_asset] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_asset] Uncaught exception: {e}", file=sys.stderr)
             self.send_error(500)
 
     def serve_api_state(self):
@@ -376,7 +394,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(state, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_state] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_state] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -421,7 +440,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(summary, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_cost] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_cost] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -442,7 +462,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_wave_prs] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_wave_prs] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -462,7 +483,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_wave_telemetry] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_wave_telemetry] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -483,7 +505,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_wave_dispatch] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_wave_dispatch] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -504,7 +527,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_wave_gantt] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_wave_gantt] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -525,7 +549,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_wave_audit_tail] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_wave_audit_tail] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -546,7 +571,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_wave_reasoning_tail] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_wave_reasoning_tail] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -567,7 +593,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_wave_quality_scorecards] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_wave_quality_scorecards] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -604,7 +631,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_api_wave_failure] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_wave_failure] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -643,7 +671,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(body, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_tracker] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_tracker] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -668,8 +697,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
             self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass  # Client disconnected — normal lifecycle, not an error.
         except Exception as e:
-            print(f"[handle_tracker_create] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[handle_tracker_create] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -717,8 +749,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps(result, default=str).encode('utf-8'))
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass  # Client disconnected — normal lifecycle, not an error.
         except Exception as e:
-            print(f"[handle_tracker_mutate] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[handle_tracker_mutate] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -735,7 +770,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_backlog] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_backlog] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -751,7 +787,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(agents, default=str).encode('utf-8'))
         except Exception as e:
-            print(f"[serve_agents] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_agents] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -795,7 +832,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            print(f"[serve_agent] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_agent] Uncaught exception: {e}", file=sys.stderr)
             self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def serve_api_agent(self):
@@ -838,7 +876,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            print(f"[serve_api_agent] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[serve_api_agent] Uncaught exception: {e}", file=sys.stderr)
             self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
 
     def _write_sse_event(self, event_name, payload):
@@ -982,7 +1021,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True}).encode('utf-8'))
         except Exception as e:
-            print(f"[handle_submit] Uncaught exception: {e}", file=sys.stderr)
+            if not _is_client_disconnect_error(e):
+                print(f"[handle_submit] Uncaught exception: {e}", file=sys.stderr)
             self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
