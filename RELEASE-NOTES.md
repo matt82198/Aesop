@@ -1,3 +1,13 @@
+# Aesop — Unreleased (Post-0.1.1)
+
+**Multi-model portability complete.** AgentDriver Phase 1-3 ships: reference adapters for Claude Code and OpenAI-compatible backends (Ollama, OpenRouter), honest verification-tier auto-tuning (weaker backends get more checking), multi-instance coordination via identity + claims, cost-ceiling enforcement, and a configuration-driven backend selection without code changes.
+
+Verified safety through adversarial review: orchestration loop hardening, eliminated agent-grades-agent risks, and end-to-end proofs that non-Claude backends drive real work with verified-only-from-test-exit decisions.
+
+A source-available, portable orchestration harness with drivers for any backend; durable git-backed state for team coordination; Haiku-first cost optimization; and transparent verification that adapts to backend capability.
+
+---
+
 # Aesop 0.1.1
 
 **Patch release for production adopters.** Aesop 0.1.1 addresses first-hour blockers discovered

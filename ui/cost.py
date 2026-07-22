@@ -376,6 +376,9 @@ def _calculate_weekly_costs(result, pricing_map, ledger_entries):
     each week's cost by applying global model mix that may not be accurate
     for that particular week.
 
+    PERF FIX: datetime.strptime is hoisted outside the inner loops. Each timestamp
+    is parsed ONCE during the initial pass, avoiding O(weeks*models*entries) re-parsing.
+
     Modifies result["per_week_costs"] in-place with structure:
     {
         "YYYY-Www": {
@@ -391,36 +394,44 @@ def _calculate_weekly_costs(result, pricing_map, ledger_entries):
     if not ledger_entries:
         return
 
-    # Group ledger entries by ISO week and aggregate per-model within each week
-    weeks = {}
-    for entry in ledger_entries:
+    # OPTIMIZATION: Pre-parse all timestamps once (avoid O(weeks*models*entries) re-parsing)
+    # Map each entry index to its ISO week key, computed upfront
+    entry_weeks = {}
+    for idx, entry in enumerate(ledger_entries):
         try:
             # Parse YYYY-MM-DD to ISO week
             dt = datetime.strptime(entry["date_str"], "%Y-%m-%d")
             iso_year, iso_week, _ = dt.isocalendar()
             week_key = f"{iso_year}-W{iso_week:02d}"
-
-            if week_key not in weeks:
-                weeks[week_key] = {
-                    "tokens_in": 0,
-                    "tokens_out": 0,
-                    "model_tokens": {},
-                    "cost": 0.0
-                }
-
-            # Aggregate this entry's tokens into the week
-            weeks[week_key]["tokens_in"] += entry["tokens_in"]
-            weeks[week_key]["tokens_out"] += entry["tokens_out"]
-
-            # Track per-model tokens within this week
-            model = entry["model"]
-            if model not in weeks[week_key]["model_tokens"]:
-                weeks[week_key]["model_tokens"][model] = 0
-            weeks[week_key]["model_tokens"][model] += entry["tokens_in"] + entry["tokens_out"]
-
+            entry_weeks[idx] = week_key
         except (ValueError, KeyError):
-            # Ignore entries with invalid dates or missing fields
+            entry_weeks[idx] = None
+
+    # Group ledger entries by ISO week and aggregate per-model within each week
+    weeks = {}
+    for idx, entry in enumerate(ledger_entries):
+        week_key = entry_weeks[idx]
+        if week_key is None:
+            # Skip entries with invalid dates or missing fields
             continue
+
+        if week_key not in weeks:
+            weeks[week_key] = {
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "model_tokens": {},
+                "cost": 0.0
+            }
+
+        # Aggregate this entry's tokens into the week
+        weeks[week_key]["tokens_in"] += entry["tokens_in"]
+        weeks[week_key]["tokens_out"] += entry["tokens_out"]
+
+        # Track per-model tokens within this week
+        model = entry["model"]
+        if model not in weeks[week_key]["model_tokens"]:
+            weeks[week_key]["model_tokens"][model] = 0
+        weeks[week_key]["model_tokens"][model] += entry["tokens_in"] + entry["tokens_out"]
 
     # If pricing available, calculate cost per week based on THAT WEEK'S model mix
     if pricing_map:
@@ -431,12 +442,12 @@ def _calculate_weekly_costs(result, pricing_map, ledger_entries):
                     pricing = pricing_map[model]
                     input_price = pricing.get("input_per_mtok", 0.0)
                     output_price = pricing.get("output_per_mtok", 0.0)
-                    # Use the week's actual input/output split
-                    # Find entries for this model in this week and calculate actual ratio
-                    model_entries_in_week = [e for e in ledger_entries
-                                             if e["model"] == model and
-                                             (datetime.strptime(e["date_str"], "%Y-%m-%d").isocalendar()[:2] ==
-                                              (int(week_key.split('-')[0]), int(week_key.split('-W')[1])))]
+                    # Use the pre-parsed week info to find entries for this model in this week
+                    model_entries_in_week = [
+                        ledger_entries[idx]
+                        for idx, w_key in entry_weeks.items()
+                        if w_key == week_key and ledger_entries[idx]["model"] == model
+                    ]
                     if model_entries_in_week:
                         week_model_tokens_in = sum(e["tokens_in"] for e in model_entries_in_week)
                         week_model_tokens_out = sum(e["tokens_out"] for e in model_entries_in_week)

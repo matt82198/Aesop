@@ -17,6 +17,7 @@ Deterministic on Linux, macOS, and Windows:
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -121,6 +122,55 @@ DEFAULT_ENTRYPOINTS = {
 }
 
 TIMEOUT_SECONDS = 5
+
+# Regex for valid Python identifiers (function/variable names)
+VALID_ENTRYPOINT_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _extract_code_from_prose(text: str) -> str:
+    """
+    Extract Python code from text that may contain markdown fences or prose.
+
+    Handles:
+    - Triple-backtick Python fences (```python ... ```)
+    - Prose lines outside of fences
+    - Preserves the core function definition
+
+    If no fences are found, returns text as-is (assumes it's all code).
+
+    Args:
+        text: Raw text potentially containing prose, markdown, or both
+
+    Returns:
+        Cleaned Python code ready for execution
+    """
+    lines = text.split('\n')
+
+    # First pass: check if there are any markdown fences
+    has_fences = any(line.rstrip().startswith('```') for line in lines)
+
+    # If no fences found, assume it's all code (common case for test solutions)
+    if not has_fences:
+        return text
+
+    # Second pass: extract code from between fences
+    cleaned = []
+    in_code_fence = False
+
+    for line in lines:
+        stripped = line.rstrip()
+
+        # Detect markdown fence (``` or ```python, etc)
+        if stripped.startswith('```'):
+            in_code_fence = not in_code_fence
+            # Don't include the fence markers themselves
+            continue
+
+        # If we're inside a code fence, include the line
+        if in_code_fence:
+            cleaned.append(line)
+
+    return '\n'.join(cleaned)
 
 
 def _resolve_entrypoint(task_id: str) -> Optional[str]:
@@ -231,7 +281,7 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
     # Read the solution file
     try:
         with open(solution_file, "r", encoding="utf-8") as f:
-            solution_code = f.read()
+            raw_solution = f.read()
     except Exception as e:
         return {
             "task_id": task_id,
@@ -241,6 +291,10 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
             "success": False,
             "error": f"Failed to read solution file: {e}",
         }
+
+    # FAIRNESS: Extract code from markdown/prose-wrapped solutions.
+    # This handles models that emit ```python ... ``` fences or explanatory prose.
+    solution_code = _extract_code_from_prose(raw_solution)
 
     # Resolve the entrypoint function name (embedded default; optional file override).
     entrypoint = _resolve_entrypoint(task_id)
@@ -252,6 +306,18 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
             "results": [],
             "success": False,
             "error": f"No entrypoint defined for task: {task_id}",
+        }
+
+    # SECURITY: Validate entrypoint against code-injection attacks.
+    # Only allow valid Python identifiers.
+    if not VALID_ENTRYPOINT_PATTERN.match(entrypoint):
+        return {
+            "task_id": task_id,
+            "passed": 0,
+            "total": 0,
+            "results": [],
+            "success": False,
+            "error": f"Invalid entrypoint name: {entrypoint}. Must be a valid Python identifier (^[a-zA-Z_][a-zA-Z0-9_]*$)",
         }
 
     # Create a temporary file to execute
@@ -269,12 +335,12 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
         for i, test_case in enumerate(test_cases):
             # Extract input and expected output
             if len(test_case) == 2:
-                if isinstance(test_case[0], (list, tuple)) and not isinstance(test_case[0], str):
-                    # Multiple arguments
+                if isinstance(test_case[0], tuple):
+                    # Multiple arguments (only tuples indicate multiple args)
                     args = test_case[0]
                     expected = test_case[1]
                 else:
-                    # Single argument
+                    # Single argument (lists are single args, not multiple)
                     args = (test_case[0],)
                     expected = test_case[1]
             else:
@@ -366,7 +432,7 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python coding_grader.py <task_id> <solution_file>")
+        print("Usage: python -m bench.coding_grader <task_id> <solution_file>")
         sys.exit(1)
 
     task_id = sys.argv[1]

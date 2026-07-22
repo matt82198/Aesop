@@ -181,6 +181,25 @@ class TestCeilingCLI(CostCeilingTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(self.halt.is_halted())
 
+    def test_cli_missing_required_check_flag_exit_2(self):
+        """LOAD-BEARING: CLI without --check flag must exit 2 (fail-closed, required flag).
+        Mutant: changing return 2 to return 0 would cause this assertion to fail.
+        """
+        self._write_config({"limits": {"max_wave_tokens": 1000}})
+        env = os.environ.copy()
+        # Invoke cost_ceiling.py WITHOUT --check flag (it's required)
+        result = subprocess.run(
+            [sys.executable, str(COST_CEILING_PY), "--spent", "100"],
+            capture_output=True, text=True, env=env, cwd=str(self.fixture_root),
+        )
+        # Must exit with 2 (argparse error/missing required flag behavior)
+        self.assertEqual(result.returncode, 2,
+                        msg="Missing required --check flag must exit 2 (fail-closed); "
+                        "mutant changing this to 0 would be caught here")
+        # Verify halt was NOT tripped (we didn't even attempt a check)
+        self.assertFalse(self.halt.is_halted(),
+                        msg="Missing --check should not trip halt")
+
 
 class TestDailySemanticsMultipleDays(CostCeilingTestCase):
     """Test that daily period filters to TODAY only, not entire ledger."""

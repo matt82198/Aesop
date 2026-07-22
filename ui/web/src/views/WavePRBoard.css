@@ -83,6 +83,35 @@
   background: var(--color-status-error-bg);
 }
 
+/* Filter control */
+.prboard-filter {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-bottom: none;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--color-surface);
+}
+
+.prboard-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.prboard-toggle-input {
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.prboard-toggle-input:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
 /* Table */
 .prboard-table-wrapper {
   overflow-x: auto;

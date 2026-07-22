@@ -202,71 +202,90 @@ accuracy tables side by side.
 - **Not a security/safety benchmark.** This says nothing about adversarial
   robustness, prompt injection resistance, or anything outside plain task
   accuracy.
-- **Known repo-hygiene gap this PR leaves open (out of scope for this
-  worktree):** adding `bench/` and `tools/bench_runner.py` trips
-  `tests/domain-map-drift.test.mjs` (root `CLAUDE.md` domain map is missing a
-  `bench/` entry; `tools/CLAUDE.md` FILES section is missing `bench_runner.py`).
-  This worktree's write scope is limited to `bench/` and the two files it
-  owns under `tools/`/`tests/`, so those two one-line doc additions are left
-  for the integrating wave rather than made here.
 
-## Sampling from real transcripts (wave-32+)
+## Transcript-sampled benchmark (Phase 1)
 
-Beyond the curated 12-task benchmark, you can sample additional tasks from real
+Beyond the curated 12-task benchmark, you can extract CODING TASKS from real
 Claude Code session transcripts. This allows the benchmark to grow beyond
-hand-written examples and measure real-world task distributions.
+hand-written examples and measure real-world developer-agent task distributions.
+
+**Phase 1 (this wave):** The sampler infrastructure and tests; no actual grading run.
 
 ### The sampler
 
-`bench/sample_transcripts.py` extracts decision-making moments from Claude Code
-session JSONL files (transcripts of user interactions + agent tool calls + results).
-It focuses on moments where decisions are made:
-  - Classifying files, commits, or review findings
-  - Extracting information from logs, diffs, or outputs
-  - Judging whether a finding or fix is correct
-  - Any reasoning about code or task outcomes
+`bench/sample_transcripts.py` extracts completed CODING TASKS from Claude Code
+session JSONL files (transcripts of user interactions + agent tool calls).
+It identifies:
+  - User prompts asking the agent to write/implement code
+  - Agent responses containing code (Python, JavaScript, bash, etc.)
+  - The produced code and the original task prompt
+
+Each extracted task is emitted in bench format:
+```json
+{
+  "id": "sampled_abc12345",
+  "category": "transcript_sampled_coding_python",
+  "match": "exact",
+  "prompt": "<redacted user prompt>",
+  "produced_code": "<redacted code the agent wrote>",
+  "needs_grader_authoring": true
+}
+```
+
+The `needs_grader_authoring` field signals whether the task has a **checkable
+specification** (test cases, assertions, examples in the prompt). If true, a
+human must write the hidden test cases before this task is gradeable. If false,
+the task has a clear spec and is ready for grading (pending external reference
+model runs).
+
+**Honest limitation:** Sampled tasks are not automatically verified to be
+correct, and most will need grader authoring. This phase establishes the
+infrastructure and proves it works; the actual verdict ("Haiku scores X% on
+real production tasks") comes in a later wave that includes running reference
+models and writing the missing test cases.
 
 **Sanitization is critical.** The sampler aggressively removes PII and credentials
 before outputting tasks, because the sampled task set lives in a public repository:
-  - Absolute paths (→ `/path/to/<redacted>`)
+  - Absolute paths (→ `<path>`)
   - Usernames, email addresses (→ `<email>`, `<username>`)
   - API tokens, secrets (→ `<api_key>`)
-  - Repository names (→ `<name>`)
-  - Any private context that could leak customer data
+  - Any context that could leak customer data
 
 Usage (on your private transcript collection; results go to private outputs):
 
 ```bash
-# Sample up to 100 tasks from your private transcripts directory
+# Sample up to 100 coding tasks from your private transcripts directory
 python bench/sample_transcripts.py \
   --transcripts-dir /path/to/your/transcripts \
   --output bench/tasks_sampled.jsonl \
   --max-tasks 100
 
-# Create matching ground truth (this is the hard part — you provide the
-# expected answers for the sampled tasks, based on a real model's output
-# or your own judgment)
-# See bench/fixtures/ground_truth_sampled.jsonl for the format.
+# Output shows how many sampled tasks need grader authoring:
+# "  N/M need grader authoring"
 
-# Score your sampled benchmark against a real model
+# To grade sampled tasks, you must provide ground truth (the hard part):
+# Edit bench/tasks_sampled.jsonl to add expected outputs, then create
+# a matching bench/ground_truth_sampled.jsonl with id + expected/expected_regex.
+
+# Score the sampled benchmark against a model:
 python tools/bench_runner.py \
   --runner haiku \
   --tasks bench/tasks_sampled.jsonl \
   --ground-truth bench/ground_truth_sampled.jsonl
 ```
 
-### Ground truth for sampled tasks
+### Limitations of transcript sampling
 
-Sampled tasks are **not** automatically graded. You must provide ground truth:
-
-- For `"match": "exact"` tasks: a single `"expected"` value (string)
-- For `"match": "regex"` tasks: an `"expected_regex"` pattern
-
-This ground truth can come from:
-  1. Running a reference model (e.g., Opus) on each task and manually verifying
-     the answer is correct
-  2. Extracting the known-correct answer directly from the transcript context
-  3. A domain expert reviewing the task and assigning the right answer
+- **Sampling bias:** Tasks are sampled from whatever agents actually did, which
+  may not be representative of the full distribution of possible work.
+- **Needs authoring:** Most sampled tasks lack a checkable spec. Before they can
+  be graded, a human (or reference model) must supply the expected output / hidden
+  test cases. Silent truncation of ungradeable tasks would recreate the exact
+  "trust me" gap this benchmark exists to avoid, so we mark them explicitly.
+- **Ground truth is the bottleneck:** Extracting tasks is fast; defining correct
+  answers for each is slow. Plan accordingly.
+- **No automatic verification:** Unlike the curated 12-task set, sampled tasks
+  are not pre-vetted for correctness or representativeness.
 
 ### Latency tracking (wave-32+)
 

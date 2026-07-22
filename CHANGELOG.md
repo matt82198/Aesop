@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **AgentDriver Phase 1-3 shipping** (wave-32+): Complete multi-model driver abstraction with three production drivers — Claude Code reference adapter, OpenAI-compatible backend (Ollama, OpenRouter, etc.), and Phase 3 wave bridge enabling any backend to drive coding tasks end-to-end with verified-honest verification tiers.
+- **Multi-instance identity & coordination** (wave-32): Instance ID tagging (hostname:pid:nonce) and lease-by-append claims enable multi-writer coordination without collisions (fail-closed). Foundation for team-scale Aesop.
+- **Honest verification-tier wiring** (wave-32): Weaker backends automatically trigger higher verification (tier 2→tier 4) — no code changes required; orchestrator transparently adapts rigor based on driver capabilities.
+- **OpenAI-compatible backend configuration** (wave-32): `aesop.config.json` backend section configures model, base_url, and API key for local Ollama or OpenRouter inference.
+- **Cost-ceiling enforcement** (wave-32): Per-wave spend ceiling enforced at dispatch time; blocks work if budget exceeded.
+- **Transcript-sampled benchmark Phase 1** (wave-32): Infrastructure to extract coding tasks from real Claude Code session transcripts, enabling dynamic benchmark growth beyond hand-written examples.
+- **Backend config & role resolution** (wave-32): `backend_config.py` for per-deployment model mappings (worker/setup/verify roles) without orchestrator changes.
+
+### Changed
+- **Verification policy transparent** (wave-32): Verification tiers now driven by `AgentDriver.probe_capabilities()` — config-free, capability-driven safety.
+
+### Fixed
+- **Adversarial-review safety fixes** (wave-32): Multiple orchestration loop hardening fixes identified and validated by external review (agent-grading-agent risks eliminated).
+
+### Documentation
+- **Multi-model configuration guide** (wave-32): docs/INSTALL.md now includes "Using Non-Claude Backends" section with Ollama example, verification-tier table, and troubleshooting.
+- **Driver domain map complete** (wave-32): driver/CLAUDE.md now lists all Files (openai_compatible_driver.py, backend_config.py) with descriptions for one-file-per-domain rule.
+- **State_store coordination modules** (wave-32): state_store/CLAUDE.md Module Layout now includes coordination.py and identity.py.
+
 ## [0.1.1] - 2026-07-17
 
 Patch release with first-hour adopter fixes, orchestration performance improvements, and observability enhancements. Targets users deploying 0.1.0 to production and the fleet during active wave execution.

@@ -6,13 +6,16 @@
  * - Phase (e.g., "rc-1-published-source-available")
  * - Top blocker from AUDIT-BACKLOG.md
  *
- * Reads from GET /api/wave/telemetry at call time (no caching).
+ * Polls GET /api/wave/telemetry every ~5s to stay current during a live wave.
+ * Accepts optional fetcher prop for dependency injection in tests.
  */
 
-import { useEffect, useState } from 'react';
-import { fetchApi } from '../lib/api';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { fetchApi as defaultFetcher } from '../lib/api';
 import { TESTIDS } from '../test/fixtures';
 import './WaveTelemetryProgress.css';
+
+const POLL_INTERVAL_MS = 5000; // 5 seconds
 
 interface WaveTelemetry {
   wave: string;
@@ -23,28 +26,46 @@ interface WaveTelemetry {
   ok_rate: number;
 }
 
-export function WaveTelemetryProgress() {
+interface WaveTelemetryProgressProps {
+  fetcher?: (path: string) => Promise<WaveTelemetry>;
+}
+
+export function WaveTelemetryProgress({ fetcher = defaultFetcher }: WaveTelemetryProgressProps) {
   const [telemetry, setTelemetry] = useState<WaveTelemetry | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    const loadTelemetry = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await fetchApi<WaveTelemetry>('/api/wave/telemetry');
-        setTelemetry(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load wave telemetry');
-        console.error('[WaveTelemetryProgress] Load failed:', err);
-      } finally {
+  const loadTelemetry = useCallback(async () => {
+    try {
+      setError(null);
+      const data = await fetcher('/api/wave/telemetry');
+      setTelemetry(data);
+      if (loading) {
         setLoading(false);
       }
-    };
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load wave telemetry');
+      console.error('[WaveTelemetryProgress] Load failed:', err);
+      if (loading) {
+        setLoading(false);
+      }
+    }
+  }, [fetcher, loading]);
 
+  useEffect(() => {
+    // Fetch immediately on mount
     loadTelemetry();
-  }, []);
+    // Set up polling interval
+    pollTimerRef.current = setInterval(loadTelemetry, POLL_INTERVAL_MS);
+
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [loadTelemetry]);
 
   if (loading) {
     return (

@@ -11,6 +11,8 @@ Data sources:
   - Workflow journal: state/workflow.journal.jsonl (per-agent state transitions, optional)
 
 Degrades to {available:false} when no active workflow.
+
+Performance: includes ~5s in-process cache to avoid re-reading transcripts on rapid polls.
 """
 import json
 import sys
@@ -23,6 +25,12 @@ import config
 
 # Conservative token estimate: 4.5 bytes per token (empirical average)
 BYTES_PER_TOKEN = 4.5
+
+# Module-level cache: (expires_at_epoch, payload_dict). Avoids re-scanning transcripts
+# on rapid polls (typical dashboard: 2-3s interval). TTL matches wave_prs.py pattern.
+# Cache is invalidated if config paths change (important for test isolation).
+_CACHE_TTL_SECONDS = 5.0
+_cache = {"expires": 0.0, "payload": None, "transcripts_root": None}
 
 
 def _infer_agent_phase_from_transcript(transcript_path):
@@ -139,11 +147,14 @@ def _get_last_activity_age_sec(file_path):
         return -1
 
 
-def get_wave_dispatch():
+def get_wave_dispatch(force=False):
     """Get consolidated wave dispatch snapshot.
 
     Reads agent transcripts and orchestrator status at call time (not import time)
     to ensure test isolation. Returns per-agent phase, activity age, and token burn.
+
+    Caches result for ~5s to avoid re-reading transcripts on rapid dashboard polls.
+    Pass force=True to bypass cache (mainly for testing).
 
     Returns:
         dict: {
@@ -161,6 +172,18 @@ def get_wave_dispatch():
             "at": str (ISO 8601)
         }
     """
+    # Cache check: if valid cached payload exists and config hasn't changed, return it
+    # (Invalidate cache if transcripts_root changed, important for test isolation)
+    now_epoch = time.time()
+    current_transcripts_root = str(config.TRANSCRIPTS_ROOT)
+    cached_transcripts_root = _cache.get("transcripts_root")
+
+    if (not force and
+        _cache["payload"] is not None and
+        now_epoch < _cache["expires"] and
+        current_transcripts_root == cached_transcripts_root):
+        return _cache["payload"]
+
     try:
         now = datetime.now(timezone.utc)
         timestamp = now.isoformat(timespec='seconds').replace('+00:00', 'Z')
@@ -226,18 +249,32 @@ def get_wave_dispatch():
         # Determine availability: if no agents found, mark as unavailable
         available = len(agents) > 0
 
-        return {
+        payload = {
             "available": available,
             "wave_phase": wave_phase,
             "agents": agents,
             "at": timestamp
         }
+
+        # Cache this payload for ~5s to avoid re-reading transcripts on rapid polls
+        _cache["payload"] = payload
+        _cache["expires"] = now_epoch + _CACHE_TTL_SECONDS
+        _cache["transcripts_root"] = str(config.TRANSCRIPTS_ROOT)
+
+        return payload
     except Exception as e:
         print(f"[wave_dispatch] Uncaught error: {e}", file=sys.stderr)
-        return {
+        payload = {
             "available": False,
             "wave_phase": None,
             "agents": [],
             "error": "Internal error",
             "at": datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
         }
+
+        # Cache error response too (so we don't retry immediately)
+        _cache["payload"] = payload
+        _cache["expires"] = now_epoch + _CACHE_TTL_SECONDS
+        _cache["transcripts_root"] = str(config.TRANSCRIPTS_ROOT)
+
+        return payload
