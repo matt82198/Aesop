@@ -10,12 +10,35 @@ Tests that endpoints return valid data and components are renderable.
 """
 
 import json
+import os
+import socket
 import subprocess
+import sys
+import tempfile
 import time
 import urllib.request
 import urllib.error
 from pathlib import Path
 from typing import Dict, Any
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def wait_for_server(port: int, timeout_s: float = 30.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=2):
+                return True
+        except (urllib.error.URLError, OSError):
+            time.sleep(0.5)
+    return False
 
 # Test fixtures path
 FIXTURES_PATH = Path(__file__).parent / 'verify_ui_trio_fixtures.json'
