@@ -29,6 +29,7 @@
 ## Environment variables
 
 - `AESOP_ROOT` (default: `.`): Project root; prepends to all state/ and tools/ paths.
+- `CONDUCTOR_ROOT` (default: sibling of AESOP_ROOT): Conductor3 root; if unset or missing, monitor-related operations skip gracefully (portability).
 - `AESOP_WATCHDOG_CYCLE_CMD`: Override backup-fleet.sh invocation (test override); if set, runs as `bash -c "$AESOP_WATCHDOG_CYCLE_CMD"`.
 - `AESOP_SELFHEAL_SKIP_RESTART`: If set, selfheal.sh detects stale heartbeats and logs dry-run actions instead of actually restarting daemons (test-only flag).
 

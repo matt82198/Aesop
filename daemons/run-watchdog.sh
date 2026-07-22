@@ -25,8 +25,8 @@ elif command -v python >/dev/null 2>&1; then
   PYTHON_EXE="python"
 fi
 
-# Resolve conductor3 directory (sibling of AESOP_ROOT)
-CONDUCTOR_ROOT="$(dirname "$AESOP_ROOT")/conductor3"
+# Resolve conductor3 directory (sibling of AESOP_ROOT); env var override for portability
+CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
 MONITOR_HB_FILE="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
 MONITOR_HB_STALE_THRESHOLD=600
 
@@ -133,11 +133,15 @@ release_lock() {
 }
 
 # Check monitor heartbeat staleness; log to fleet-backup.log if missing or >600s old
+# Gracefully skips if CONDUCTOR_ROOT doesn't exist (portability for non-conductor deployments)
 check_monitor_staleness() {
   local hb_file="$1"
   local stale_threshold="$2"
   local log_file="$3"
   if [ -z "$hb_file" ] || [ -z "$log_file" ]; then
+    return
+  fi
+  if [ ! -d "$(dirname "$hb_file")" ]; then
     return
   fi
   if [ ! -f "$hb_file" ]; then
