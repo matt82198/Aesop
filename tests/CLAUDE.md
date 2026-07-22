@@ -16,7 +16,7 @@ Run: `bash tests/test_pre_push_policy.sh && bash tests/backup-fleet.test.sh && b
 buildsystem-template.test.mjs, cli-config.test.mjs, collect-signals.test.mjs, config-doc-drift.test.mjs, dash-agents-panel.test.mjs, dash-extra.test.mjs, domain-map-drift.test.mjs, first-hour.test.mjs, fleet-cli.test.mjs, force-model-policy.test.mjs, lock.test.mjs, mcp-fleet.test.mjs, packaging-portability.test.mjs, proposals.test.mjs, scaffold-hook-install.test.mjs, scaffold-onboarding.test.mjs, test_orchestration_core.test.mjs, wizard.test.mjs.
 Run: `npm run test:node` or `node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
 
-**Python (95 suites)**:
+**Python (98 suites)**:
 Organized by category: API state/tracker (test_api_state, test_api_tracker, test_tracker_*), UI/SSE (test_serve*, test_sse_*, test_ui_*, test_wave13_ui_correctness, test_wave_*), Bench (test_bench_*), Security (test_csrf_https_origins, test_secret_scan, test_secret_scan_gaps, test_symlink_guard), State store (test_state_store*), Tools (test_tools_*, test_defect_escape, test_test_hygiene), AgentDriver/Codex (test_agent_driver, test_codex_driver_e2e — offline + gated live tests), Agents/Monitoring (test_alert_bridge, test_collectors, test_orchestration_core, test_stall_check, test_reconcile, test_healthcheck, test_halt, test_ci_merge_wait), Config/Launch (test_launch_tui, test_render, test_rotate_logs, test_metrics_gate, test_no_bare_test_functions, test_git_identity_check, test_self_stats).
 Run: `npm run test:py` or `python -m unittest discover -s tests`
 
@@ -72,7 +72,7 @@ Tests document **actual gaps** found in rounds of refactoring/audit:
 ## Dropped (reason)
 - Shell count revised 10→7 (removed stale entries: test-run-watchdog-halt.sh, test-run-watchdog-lockguard.sh, test-run-watchdog.sh do not exist in repo).
 - Node count revised 17→18 (added first-hour.test.mjs which was present but unlisted).
-- Python count revised 67→95 (recounted: 94 existing + 1 new drift-test = 95 total).
+- Python count revised 67→95→98 (recounted: 94 existing + 1 new drift-test = 95 at branch #246; integration union adds test_backend_config_docs.py + test_wave_dispatch_agents_parity.py + test_fleet_ledger_injection.py = 98 total).
 - Prior revisions: Node 15→17 (recounted); Shell 9→10 (test_waveguard.sh was present but unlisted); Python 60→65 (recounted).
 
 ---
