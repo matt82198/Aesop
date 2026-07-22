@@ -50,8 +50,10 @@ class Finding:
 def get_git_status(repo_path):
     """Return (is_clean, dirty_files_list) for a repo."""
     try:
+        # Resolve path to normalize 8.3 short names on Windows
+        resolved_path = Path(repo_path).resolve()
         output = subprocess.run(
-            ['git', '-C', str(repo_path), 'status', '--porcelain'],
+            ['git', '-C', str(resolved_path), 'status', '--porcelain'],
             capture_output=True, text=True, timeout=5
         ).stdout.strip()
 
@@ -67,16 +69,18 @@ def get_git_status(repo_path):
 def get_ahead_count(repo_path):
     """Return count of commits ahead of origin/HEAD (or None on error)."""
     try:
+        # Resolve path to normalize 8.3 short names on Windows
+        resolved_path = Path(repo_path).resolve()
         # First check if there's a tracking branch
         try:
             output = subprocess.run(
-                ['git', '-C', str(repo_path), 'rev-list', '--left-only', '--count', 'HEAD...@{u}'],
+                ['git', '-C', str(resolved_path), 'rev-list', '--left-only', '--count', 'HEAD...@{u}'],
                 capture_output=True, text=True, timeout=5
             ).stdout.strip()
         except:
             # Fallback to origin/HEAD if no upstream
             output = subprocess.run(
-                ['git', '-C', str(repo_path), 'rev-list', '--left-only', '--count', 'HEAD...origin/HEAD'],
+                ['git', '-C', str(resolved_path), 'rev-list', '--left-only', '--count', 'HEAD...origin/HEAD'],
                 capture_output=True, text=True, timeout=5
             ).stdout.strip()
 
@@ -91,8 +95,10 @@ def get_ahead_count(repo_path):
 def check_untracked_files(repo_path):
     """Return list of untracked files not in .gitignore."""
     try:
+        # Resolve path to normalize 8.3 short names on Windows
+        resolved_path = Path(repo_path).resolve()
         output = subprocess.run(
-            ['git', '-C', str(repo_path), 'ls-files', '--others', '--exclude-standard'],
+            ['git', '-C', str(resolved_path), 'ls-files', '--others', '--exclude-standard'],
             capture_output=True, text=True, timeout=5
         ).stdout.strip()
 
@@ -140,8 +146,10 @@ def check_repo(repo_path):
 def push_repo(repo_path):
     """Push commits for a repo (return True if successful)."""
     try:
+        # Resolve path to normalize 8.3 short names on Windows
+        resolved_path = Path(repo_path).resolve()
         result = subprocess.run(
-            ['git', '-C', str(repo_path), 'push'],
+            ['git', '-C', str(resolved_path), 'push'],
             capture_output=True, text=True, timeout=30
         )
         return result.returncode == 0
