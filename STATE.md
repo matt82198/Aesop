@@ -29,13 +29,16 @@ catalog-expert lenses, all findings adversarially verified), 4 fix rounds, 4 tra
 artifacts current and honest (ceiling semantics, security section). Review layer measurably load-bearing:
 caught a ceiling-windowing showstopper, refuted 3 false review claims, forced 8 fix-forwards.
 
-## NEXT STEPS
-- USER-GATED: cut 0.2.0 — `gh release create v0.2.0 --notes-file RELEASE-NOTES.md` (publish.yml OIDC -> npm).
-- USER DECISION: PR #293 hook TTY semantics — A (allow-on-tty, as implemented) vs B (keep fail-closed, recommended).
-- Next investments (ranked, from loop's forward-look — pick direction): state consolidation (SQLite-source +
-  git-audit); cross-repo AgentDriver phase-1 spike (plans/aesop-cross-repo-orchestration.md); mutation sandbox
-  validation; live cost observability; adopter porting guide. Continuous-loop pilot plan at
-  plans/aesop-continuous-wave-loop.md.
+## NEXT STEPS (wave-27, 2026-07-22 in flight)
+- Wave-27 built: 10 PRs open (#306-#315) per ~/conductor3/plans/aesop-wave27-master-plan.md (9 lanes A-I +
+  windows-parity fix lane). Fix-forwards landed for #308 (7072b42 per-repo ship), #309 (cdbfc20), #310 (cb088ec),
+  #311 (7d24663 StateAPI delegation), #312 (8ecf536); #314 fix + windows-parity finishing; #308 break-it review out.
+- #293 merged under user decision B (fail-closed TTY); follow-up #316 merged (HEAD-independent empty-stdin test) —
+  restores main green (verify run in flight).
+- Then: assemble wave-27 integration train → union gates (counts/domain-map/lint/packaging/self_stats) → one CI →
+  merge → verify main → delta hardening pass over the day's surface (cadence) → checkpoint.
+- USER-GATED: cut 0.2.0 — `gh release create v0.2.0 --notes-file RELEASE-NOTES.md` (publish.yml OIDC -> npm);
+  WS1c outreach; live accuracy run (`python bench/accuracy_harness.py --mode live`, ~$5-10).
 - Tracked defers: state fragmentation, StateAPI boundary, proof-harness consolidation, MAX_PATH deep-state note,
   bench validation of tool_use_accuracy (wave-27 release gate candidate), tripwire root-stray widening,
   codex max_tokens bound, falsifiability script pytest-discovery footnote.

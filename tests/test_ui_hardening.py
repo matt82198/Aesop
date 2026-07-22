@@ -116,17 +116,21 @@ class TestPathContainmentHelper(unittest.TestCase):
             ]
 
             for candidate, expected in test_cases:
+                # Resolve both paths to normalize Windows 8.3 short names and handle symlinks
+                resolved_candidate = candidate.resolve() if not candidate.is_absolute() else candidate.resolve()
+                resolved_root = allowed_root.resolve()
+
                 try:
-                    is_contained = candidate.is_relative_to(allowed_root.resolve())
+                    is_contained = resolved_candidate.is_relative_to(resolved_root)
                 except AttributeError:
                     try:
-                        candidate.relative_to(allowed_root.resolve())
+                        resolved_candidate.relative_to(resolved_root)
                         is_contained = True
                     except ValueError:
                         is_contained = False
 
                 self.assertEqual(is_contained, expected,
-                               f"Path {candidate.name if candidate.name else '.'} "
+                               f"Path {resolved_candidate.name if resolved_candidate.name else '.'} "
                                f"containment={is_contained}, expected {expected}")
         finally:
             shutil.rmtree(test_root, ignore_errors=True)

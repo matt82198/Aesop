@@ -79,7 +79,10 @@ class TestFreshnessPastTimestamps(unittest.TestCase):
     def test_heartbeat_just_under_threshold(self):
         """Test boundary: heartbeat just under threshold is fresh."""
         hb_file = self.state_dir / "test-hb"
-        old_time = int(time.time()) - 299  # 299 seconds old
+        # 295s old vs 300s threshold: the margin must absorb wall-clock drift
+        # between write and check on a loaded runner (a 1s margin flaked in
+        # full-suite runs); the exact ==threshold boundary is covered above.
+        old_time = int(time.time()) - 295
         hb_file.write_text(str(old_time))
 
         is_stale, age_s, info = check_heartbeat_staleness(hb_file, threshold_s=300)

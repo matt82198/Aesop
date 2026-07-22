@@ -19,6 +19,47 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { acquireLock, releaseLock } from './lock.mjs';
 
+// === Windows-portable atomic rename with EPERM/EBUSY retry ===
+// On Windows, renaming over a file that another process has open throws EPERM.
+// This wrapper provides bounded retry with exponential backoff and cleanup.
+function atomicRename(tmpPath, targetPath) {
+  const maxRetries = 20;
+  const baseDelayMs = 50;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      fs.renameSync(tmpPath, targetPath);
+      return true; // Success
+    } catch (e) {
+      if ((e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'EBUSY') && i < maxRetries - 1) {
+        // Retry on Windows EPERM/EACCES/EBUSY (file held by reader)
+        // Exponential backoff: 50ms, 100ms, 150ms, ..., 950ms (max ~9.5s total)
+        const delayMs = baseDelayMs * (i + 1);
+        const start = Date.now();
+        while (Date.now() - start < delayMs) {
+          // Busy-wait to avoid scheduling overhead
+        }
+      } else {
+        // Final failure or non-retryable error; clean up .tmp file and return false
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch {
+          // Cleanup failed; best effort
+        }
+        return false;
+      }
+    }
+  }
+
+  // Final failure after all retries; clean up and return false
+  try {
+    fs.unlinkSync(tmpPath);
+  } catch {
+    // Cleanup failed; best effort
+  }
+  return false;
+}
+
 // === Arg parsing ===
 const args = process.argv.slice(2);
 let command = '';
@@ -193,11 +234,15 @@ function moveProposal(status) {
       return b.trim();
     }).filter(b => b).join('\n\n---\n\n');
 
-    // ATOMIC WRITE: write to temp file, then rename (atomic on all platforms)
+    // ATOMIC WRITE: write to temp file, then rename with retry (Windows-safe)
     const tmpFile = proposalsFile + '.tmp';
     try {
       fs.writeFileSync(tmpFile, updatedContent.trim() ? updatedContent + '\n' : '', 'utf8');
-      fs.renameSync(tmpFile, proposalsFile);
+      // Use atomicRename for Windows-safe atomic replace (handles EPERM/EBUSY retries)
+      if (!atomicRename(tmpFile, proposalsFile)) {
+        console.error(`Error: Could not write ${proposalsFile} after retry`);
+        process.exit(1);
+      }
     } catch (e) {
       // Clean up temp file if it exists
       try { fs.unlinkSync(tmpFile); } catch { }

@@ -1,6 +1,21 @@
 # Reproducing Aesop
 
-This document explains how to reproduce the project's claims from a clean checkout.
+This document explains how to reproduce the project's claims from a clean checkout or installed package.
+
+## Quick Start: One-Command Verification
+
+Run the verification suite with automatic context detection:
+
+```bash
+aesop reproduce
+```
+
+This command automatically detects your context (repository checkout or installed package) and runs the appropriate test suite:
+
+- **Repository checkout**: Runs the full test suite (Node syntax, shell syntax, Node tests, Python tests, benchmark, browser proofs)
+- **Installed package**: Runs shipped self-checks (preflight checks, health score, secret-scan selftest, packaging assertions)
+
+Output includes per-step timing and a clear pass/fail summary. Exit code 0 = all checks passed.
 
 ## Overview
 
@@ -55,19 +70,34 @@ Both can be reproduced entirely offline, without API keys or external dependenci
    python tools/bench_runner.py --runner mock
    ```
 
-## What the `.github/workflows/reproduce.yml` Job Does
+## CI Equivalence: aesop reproduce vs. GitHub Actions
 
-The `reproduce` workflow in GitHub Actions automates the above steps:
+The `aesop reproduce` command mirrors `.github/workflows/reproduce.yml` for local execution.
+
+### GitHub Actions Workflow (`reproduce.yml`)
+
+The `reproduce` workflow in GitHub Actions automates testing:
 
 1. **Fresh checkout**: Uses a clean clone (no state reuse from other CI jobs)
 2. **Syntax checks**: Validates all Node.js (.mjs) and shell scripts (.sh)
 3. **Node.js tests**: Runs the full test suite with `npm run test:node`
 4. **Python tests**: Runs the full test suite with `python -m unittest discover`
 5. **Benchmark scorer**: Proves the offline mock benchmark reproduces (no external API calls)
+6. **Browser proofs**: Validates UI components with Playwright
 
 The workflow is triggered:
 - **Manually**: Via GitHub Actions "Run workflow" button (workflow_dispatch)
 - **Weekly**: Every Sunday at 2:00 AM UTC (schedule)
+
+### Local Reproduction
+
+To run the same tests locally from a clean clone:
+
+```bash
+aesop reproduce
+```
+
+This produces the same verification steps and provides immediate feedback before pushing.
 
 ## What Is and Isn't Reproduced
 

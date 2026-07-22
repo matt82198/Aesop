@@ -208,11 +208,29 @@ def run_tests(test_module_path: str, work_dir: str, timeout: int = 30) -> Tuple[
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = work_dir + (os.pathsep + existing if existing else "")
 
+    # Convert absolute path to relative path from work_dir.
+    # The test file might be in a subdirectory (e.g., work_dir/ui/test.py)
+    test_path = Path(test_module_path).resolve()
+    work_path = Path(work_dir).resolve()
+    try:
+        rel_test_path = test_path.relative_to(work_path)
+    except ValueError:
+        # If relative_to fails, just use the filename
+        rel_test_path = Path(test_path.name)
+
     if _pytest_available():
-        cmd = [sys.executable, "-m", "pytest", "-xvs", test_module_path]
+        # pytest can take a relative path to the test file
+        cmd = [sys.executable, "-m", "pytest", "-xvs", str(rel_test_path)]
     else:
-        # unittest needs a module name (importable via cwd/PYTHONPATH), not a path.
-        cmd = [sys.executable, "-m", "unittest", "-v", Path(test_module_path).stem]
+        # unittest needs a module name. If test is in a package dir,
+        # construct the module path (e.g., ui.test_fixture_sibling)
+        if rel_test_path.parent != Path("."):
+            # Test is in a subdirectory, construct module path
+            module_parts = list(rel_test_path.parent.parts) + [rel_test_path.stem]
+            module_name = ".".join(module_parts)
+        else:
+            module_name = rel_test_path.stem
+        cmd = [sys.executable, "-m", "unittest", "-v", module_name]
 
     try:
         result = subprocess.run(
@@ -283,12 +301,66 @@ def run(target_module_path: str, test_module_path: str) -> Dict[str, Any]:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
 
-        # Copy target to temp dir
-        temp_target = tmpdir / target_path.name
+        # Detect target package structure and recreate it in tmpdir.
+        # If target is in driver/wave_loop.py, we create driver/ in tmpdir.
+        # This is critical for "from driver import X" imports to work.
+        target_dir = target_path.parent
+
+        # Determine if target's directory is a package (has __init__.py or is a known package dir).
+        # Known package directories: driver, ui, tools, mcp, daemons, skills, etc.
+        # NOT packages: tests, fixtures, bench (these contain test/fixture files)
+        target_package_name = None
+        repo_root = None
+
+        if (target_dir / "__init__.py").exists():
+            # Target is in a real package directory (e.g., driver/, ui/)
+            target_package_name = target_dir.name
+            repo_root = target_dir.parent
+        else:
+            # Check if target_dir name suggests it's a package directory
+            package_dir_names = {"driver", "ui", "tools", "mcp", "daemons", "skills"}
+            non_package_dir_names = {"tests", "fixtures", "bench"}
+
+            if target_dir.name in non_package_dir_names:
+                # Not a package directory, treat as flat layout
+                repo_root = target_path.resolve()
+                while repo_root.parent != repo_root and not (repo_root / ".git").exists():
+                    repo_root = repo_root.parent
+                if not (repo_root / ".git").exists():
+                    repo_root = target_dir
+            elif target_dir.name in package_dir_names:
+                # Treat as package directory
+                target_package_name = target_dir.name
+                repo_root = target_dir.parent
+            else:
+                # Unknown directory, assume flat layout
+                repo_root = target_path.resolve()
+                while repo_root.parent != repo_root and not (repo_root / ".git").exists():
+                    repo_root = repo_root.parent
+                if not (repo_root / ".git").exists():
+                    repo_root = target_dir
+
+        # Create package structure in tmpdir
+        if target_package_name:
+            pkg_dir = tmpdir / target_package_name
+            pkg_dir.mkdir(parents=True, exist_ok=True)
+            # Create __init__.py to make it a proper package
+            (pkg_dir / "__init__.py").touch()
+            temp_target = pkg_dir / target_path.name
+        else:
+            temp_target = tmpdir / target_path.name
+
         temp_target.write_text(source, encoding="utf-8")
 
-        # Copy test to temp dir
-        temp_test = tmpdir / test_path.name
+        # Copy test to temp dir.
+        # If target is in a package dir (e.g., ui/), put test in same dir in tmpdir
+        # so the test can find the target (assumes test uses sys.path.insert(0, __file__.parent))
+        if target_package_name:
+            pkg_dir = tmpdir / target_package_name
+            temp_test = pkg_dir / test_path.name
+        else:
+            temp_test = tmpdir / test_path.name
+
         try:
             test_source = test_path.read_text(encoding="utf-8")
             temp_test.write_text(test_source, encoding="utf-8")
@@ -300,7 +372,30 @@ def run(target_module_path: str, test_module_path: str) -> Dict[str, Any]:
                 "error": f"failed to copy test: {e}",
             }
 
-        # Copy any other Python files from test directory (dependencies)
+        # Copy sibling modules from target's package directory.
+        # This is critical for modules that import siblings (e.g., ui/wave_audit_tail
+        # imports ui/config). Copy them into the same package dir as target.
+        target_dir = target_path.parent
+        if target_package_name:
+            pkg_dir = tmpdir / target_package_name
+            for py_file in target_dir.glob("*.py"):
+                if py_file.name not in (test_path.name, target_path.name):
+                    try:
+                        dest = pkg_dir / py_file.name
+                        dest.write_text(py_file.read_text(encoding="utf-8"), encoding="utf-8")
+                    except Exception:
+                        pass  # Best effort (skip files we can't read)
+        else:
+            # Flat layout (target at repo root)
+            for py_file in target_dir.glob("*.py"):
+                if py_file.name not in (test_path.name, target_path.name):
+                    try:
+                        dest = tmpdir / py_file.name
+                        dest.write_text(py_file.read_text(encoding="utf-8"), encoding="utf-8")
+                    except Exception:
+                        pass  # Best effort (skip files we can't read)
+
+        # Copy any other Python files from test directory (additional dependencies)
         test_dir = test_path.parent
         for py_file in test_dir.glob("*.py"):
             if py_file.name not in (test_path.name, target_path.name):
@@ -309,6 +404,33 @@ def run(target_module_path: str, test_module_path: str) -> Dict[str, Any]:
                     dest.write_text(py_file.read_text(encoding="utf-8"), encoding="utf-8")
                 except Exception:
                     pass  # Best effort
+
+        # Also create __init__.py files for any sibling packages that tests might import.
+        # This enables "from driver import X" when driver/ contains the target.
+        if target_package_name and repo_root:
+            # Known package directories in this repo
+            package_dir_names = {"driver", "ui", "tools", "mcp", "daemons", "skills", "bench"}
+
+            # Collect all package names from repo root
+            for pkg in repo_root.glob("*/"):
+                if pkg.is_dir():
+                    pkg_name = pkg.name
+                    # Only copy known package directories or those with __init__.py
+                    if pkg_name not in package_dir_names and not (pkg / "__init__.py").exists():
+                        continue
+
+                    # Only recreate if not already created
+                    sandbox_pkg = tmpdir / pkg_name
+                    if not sandbox_pkg.exists():
+                        sandbox_pkg.mkdir(parents=True, exist_ok=True)
+                        (sandbox_pkg / "__init__.py").touch()
+                        # Copy Python files from this package
+                        for py_file in pkg.glob("*.py"):
+                            try:
+                                dest = sandbox_pkg / py_file.name
+                                dest.write_text(py_file.read_text(encoding="utf-8"), encoding="utf-8")
+                            except Exception:
+                                pass  # Best effort
 
         # Run tests against unmutated code (baseline)
         baseline_exit, _ = run_tests(str(temp_test), str(tmpdir))

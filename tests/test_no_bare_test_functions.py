@@ -44,6 +44,41 @@ class TestNoBareTestFunctions(unittest.TestCase):
             msg += "\n".join(f"  {fn}" for fn in bare_functions)
             self.fail(msg)
 
+    def test_no_baseless_test_classes(self):
+        """Fail on Test* classes with no base class: unittest discover silently
+        collects ZERO tests from them (pytest-style classes), so their tests
+        never run in CI. Every Test* class must subclass unittest.TestCase
+        (directly or via any explicit base)."""
+        tests_dir = Path(__file__).parent
+        baseless = []
+
+        for test_file in tests_dir.glob("test_*.py"):
+            if test_file.name == "test_no_bare_test_functions.py":
+                continue
+
+            try:
+                with open(test_file, "r", encoding="utf-8") as f:
+                    tree = ast.parse(f.read(), filename=str(test_file))
+            except SyntaxError as e:
+                self.fail(f"Syntax error in {test_file}: {e}")
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                    has_test_methods = any(
+                        isinstance(item, ast.FunctionDef) and item.name.startswith("test_")
+                        for item in node.body
+                    )
+                    if has_test_methods and not node.bases:
+                        baseless.append(f"{test_file.name}:{node.lineno} class {node.name}")
+
+        if baseless:
+            msg = (
+                "Found baseless Test* classes (invisible to unittest discover — "
+                "their tests NEVER run; subclass unittest.TestCase):\n"
+            )
+            msg += "\n".join(f"  {c}" for c in baseless)
+            self.fail(msg)
+
 
 if __name__ == "__main__":
     unittest.main()

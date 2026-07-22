@@ -128,7 +128,8 @@ class TestAesopRootResolution(unittest.TestCase):
         config = self._load_config_module(fixture_root=self.fixture_root)
 
         # Should derive to fixture_root (parent of ui/config.py)
-        self.assertEqual(config.AESOP_ROOT, Path(self.fixture_root))
+        # Resolve both paths to handle Windows 8.3 short name differences
+        self.assertEqual(config.AESOP_ROOT.resolve(), Path(self.fixture_root).resolve())
 
     def test_config_aesop_root_overrides_derived(self):
         """Test that aesop_root in config file overrides derived location (priority 3)."""

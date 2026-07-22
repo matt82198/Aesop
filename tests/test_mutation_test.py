@@ -432,5 +432,143 @@ class TestMutationTestBrokenBaseline(unittest.TestCase):
                               "Expected nonzero exit code when baseline fails")
 
 
+class TestMutationTestWithSiblingImports(unittest.TestCase):
+    """Test mutation_test handles modules with sibling imports (package dependencies)."""
+
+    # A module that imports a REAL sibling module (not inline)
+    SIBLING_TARGET_SOURCE = '''
+import fixture_sibling_config as config_module
+
+def validate_config(config_value):
+    """Validate config using helper from config module."""
+    result = config_module.is_valid_config(config_value)
+    return result
+
+def count_items(items):
+    """Count items with a threshold."""
+    count = len(items)
+    return count >= 1
+
+def process_item(item):
+    """Process an item using config module."""
+    if validate_config(item):
+        return "valid: " + str(item)
+    return "invalid"
+'''
+
+    # A sibling module that target imports
+    SIBLING_CONFIG_SOURCE = '''
+def is_valid_config(val):
+    """Check if a config value is valid."""
+    return val is not None and len(str(val)) > 0
+'''
+
+    # Test for the sibling target
+    SIBLING_TARGET_TEST_SOURCE = '''
+import unittest
+import sys
+from pathlib import Path
+
+# Add current directory to path
+sys.path.insert(0, str(Path(__file__).parent))
+
+import fixture_sibling_target as target
+
+class TestSiblingTarget(unittest.TestCase):
+    """Tests for module with sibling imports."""
+
+    def test_validate_config_with_valid_value(self):
+        """validate_config returns True for valid values."""
+        self.assertTrue(target.validate_config("test"))
+        self.assertTrue(target.validate_config(42))
+
+    def test_validate_config_with_invalid_value(self):
+        """validate_config returns False for None."""
+        self.assertFalse(target.validate_config(None))
+        self.assertFalse(target.validate_config(""))
+
+    def test_process_item_valid(self):
+        """process_item returns valid: prefix for valid items."""
+        result = target.process_item("hello")
+        self.assertTrue(result.startswith("valid:"))
+
+    def test_process_item_invalid(self):
+        """process_item returns invalid for None."""
+        result = target.process_item(None)
+        self.assertEqual(result, "invalid")
+
+if __name__ == "__main__":
+    unittest.main()
+'''
+
+    def test_sibling_imports_baseline_valid(self):
+        """Baseline test should pass for module with sibling imports (real package layout)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            # Create separate directories to simulate real layout: ui/ and tests/
+            ui_dir = tmpdir / "ui"
+            tests_dir = tmpdir / "tests"
+            ui_dir.mkdir()
+            tests_dir.mkdir()
+
+            # Write fixture files in separate directories
+            target_file = ui_dir / "fixture_sibling_target.py"
+            sibling_file = ui_dir / "fixture_sibling_config.py"
+            test_file = tests_dir / "test_fixture_sibling.py"
+
+            target_file.write_text(self.SIBLING_TARGET_SOURCE, encoding="utf-8")
+            sibling_file.write_text(self.SIBLING_CONFIG_SOURCE, encoding="utf-8")
+            test_file.write_text(self.SIBLING_TARGET_TEST_SOURCE, encoding="utf-8")
+
+            # Run mutation test — sandbox must provide sibling imports from ui/
+            result = mutation_test.run(str(target_file), str(test_file))
+
+            # Should NOT have an error (baseline should pass with siblings available)
+            if "error" in result:
+                # Debug output on failure
+                self.fail(f"Sandbox failed: {result['error']}\n"
+                         f"Target file: {target_file}\n"
+                         f"Test file: {test_file}\n"
+                         f"Sibling file exists: {sibling_file.exists()}")
+
+            # Should have some mutations tested (at least baseline didn't fail)
+            # Note: count_items() is not tested, so mutations in it survive
+            total = result["killed"] + result["survived"]
+            self.assertGreater(
+                total,
+                0,
+                "Expected mutations to be tested with sibling imports available"
+            )
+
+    def test_sibling_imports_survives_uncovered_mutations(self):
+        """With sibling imports available, uncovered mutations should survive."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            # Create separate directories to simulate real layout: ui/ and tests/
+            ui_dir = tmpdir / "ui"
+            tests_dir = tmpdir / "tests"
+            ui_dir.mkdir()
+            tests_dir.mkdir()
+
+            target_file = ui_dir / "fixture_sibling_target.py"
+            sibling_file = ui_dir / "fixture_sibling_config.py"
+            test_file = tests_dir / "test_fixture_sibling.py"
+
+            target_file.write_text(self.SIBLING_TARGET_SOURCE, encoding="utf-8")
+            sibling_file.write_text(self.SIBLING_CONFIG_SOURCE, encoding="utf-8")
+            test_file.write_text(self.SIBLING_TARGET_TEST_SOURCE, encoding="utf-8")
+
+            result = mutation_test.run(str(target_file), str(test_file))
+
+            # The count_items function has mutations but isn't tested, so they survive
+            self.assertGreater(
+                result["survived"],
+                0,
+                "Expected uncovered mutations to survive with sibling imports working"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
