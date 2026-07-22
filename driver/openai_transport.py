@@ -19,11 +19,68 @@ so the source code string does NOT trigger secret_scan rules.
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
 # Type alias documenting the transport callable contract.
 Transport = callable  # (payload: dict) -> dict
+
+
+class _AuthStripRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Custom redirect handler that strips Authorization on cross-origin redirects.
+
+    This prevents credentials from leaking to a different host if the base_url
+    or a network MITM redirects the request (e.g., 301/302 to evil.com).
+    Same-origin redirects preserve the Authorization header.
+    """
+
+    # Sensitive headers that must not leak on cross-origin redirects.
+    _SENSITIVE_HEADERS = {"authorization", "api-key", "x-api-key"}
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Handle redirect: strip sensitive headers if the origin changed.
+
+        Args:
+            req: original Request object
+            fp: file pointer (unused here)
+            code: HTTP redirect status code (301, 302, 307, etc.)
+            msg: HTTP reason message (unused here)
+            headers: response headers (unused here)
+            newurl: the redirect target URL
+
+        Returns:
+            A new urllib.request.Request with Authorization stripped if
+            newurl is a different origin; otherwise a Request preserving headers.
+        """
+        # Parse both URLs to extract origin (scheme + host + port).
+        orig_parsed = urllib.parse.urlparse(req.full_url)
+        new_parsed = urllib.parse.urlparse(newurl)
+
+        # Build comparable origins (normalize port if not specified).
+        orig_origin = (
+            orig_parsed.scheme,
+            orig_parsed.hostname or "",
+            orig_parsed.port or (443 if orig_parsed.scheme == "https" else 80),
+        )
+        new_origin = (
+            new_parsed.scheme,
+            new_parsed.hostname or "",
+            new_parsed.port or (443 if new_parsed.scheme == "https" else 80),
+        )
+
+        # Let the parent class build the redirected request normally.
+        redirected = super().redirect_request(
+            req, fp, code, msg, headers, newurl
+        )
+
+        # If origins differ, strip sensitive headers from the new request.
+        if orig_origin != new_origin and redirected:
+            for header_name in list(redirected.headers.keys()):
+                if header_name.lower() in self._SENSITIVE_HEADERS:
+                    del redirected.headers[header_name]
+
+        return redirected
 
 
 def default_openai_transport(
@@ -68,8 +125,10 @@ def default_openai_transport(
     )
 
     try:
-        # POST with hard timeout.
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+        # Create a custom opener with auth-stripping redirect handler.
+        # This prevents Authorization header leakage on cross-origin redirects.
+        opener = urllib.request.build_opener(_AuthStripRedirectHandler())
+        with opener.open(request, timeout=timeout_s) as response:
             status = response.status
             body = response.read().decode("utf-8")
 
