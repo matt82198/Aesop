@@ -4,7 +4,7 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
+import unittest
 
 # Import the judgment sampler functions
 from bench.sample_transcripts_judgment import (
@@ -15,7 +15,7 @@ from bench.sample_transcripts_judgment import (
 )
 
 
-class TestRedaction:
+class TestRedaction(unittest.TestCase):
     """Verify redaction works on judgment task patterns."""
 
     def test_redact_api_key_in_verdict_text(self):
@@ -44,7 +44,7 @@ class TestRedaction:
         assert all(ord(c) < 128 for c in redacted)
 
 
-class TestTextExtraction:
+class TestTextExtraction(unittest.TestCase):
     """Test recursive extraction from nested message structures."""
 
     def test_extract_string_directly(self):
@@ -71,7 +71,7 @@ class TestTextExtraction:
         assert "content value" in result
 
 
-class TestTaskShapeClassification:
+class TestTaskShapeClassification(unittest.TestCase):
     """Test heuristics for classifying judgment task shapes."""
 
     def test_classify_extraction(self):
@@ -100,7 +100,7 @@ class TestTaskShapeClassification:
         assert shape is None
 
 
-class TestTaskIDGeneration:
+class TestTaskIDGeneration(unittest.TestCase):
     """Verify task ID generation is deterministic."""
 
     def test_task_id_is_deterministic(self):
@@ -127,7 +127,7 @@ class TestTaskIDGeneration:
         assert len(task_id) == 16  # sampled_ + 8 hex chars
 
 
-class TestSamplerDeterminism:
+class TestSamplerDeterminism(unittest.TestCase):
     """Verify sampler produces consistent results across runs."""
 
     def test_sampler_determinism_on_fixed_input(self):
@@ -173,3 +173,7 @@ class TestSamplerDeterminism:
             assert strata1 == strata2
         finally:
             temp_path.unlink()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -17,7 +17,13 @@ from pathlib import Path
 
 import config
 import cost
-from state_store.read_api import ReadAPI
+
+# serve.py runs with ui/ as the import root; state_store is a repo-root
+# package, so the repo root must be on sys.path before this import.
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from state_store.read_api import ReadAPI  # noqa: E402
 
 
 def _read_orchestrator_status():
