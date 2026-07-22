@@ -40,7 +40,7 @@ setup_fixture() {
   rm -rf "$TEST_DIR"
   mkdir -p "$REPO_DIR" "$STATE_DIR" "$TOOLS_DIR"
 
-  cd "$REPO_DIR"
+  cd "$REPO_DIR" || exit 1
   git init
   git config user.email "test@example.com"
   git config user.name "Test User"
@@ -490,7 +490,7 @@ test_audit_fix_1_config_repos_honored() {
   # Create another test repo
   REPO_DIR_2="$TEST_DIR/repo2"
   mkdir -p "$REPO_DIR_2"
-  cd "$REPO_DIR_2"
+  cd "$REPO_DIR_2" || exit 1
   git init
   git config user.email "test@example.com"
   git config user.name "Test User"
@@ -701,7 +701,7 @@ test_defect_c_dedup_integration() {
   local repo2="$TEST_DIR/my-repo-backup"
   mkdir -p "$repo1" "$repo2"
 
-  cd "$repo1"
+  cd "$repo1" || exit 1
   git init
   git config user.email "test@example.com"
   git config user.name "Test User"
@@ -709,7 +709,7 @@ test_defect_c_dedup_integration() {
   git add README.md
   git commit -m "initial"
 
-  cd "$repo2"
+  cd "$repo2" || exit 1
   git init
   git config user.email "test@example.com"
   git config user.name "Test User"

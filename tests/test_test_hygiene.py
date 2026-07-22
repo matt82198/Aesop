@@ -331,10 +331,22 @@ class TestShellIdentityHygiene(unittest.TestCase):
                     continue
                 if "git config user." in stripped and "--file" not in stripped and " -C " not in stripped:
                     window = lines[max(0, i - 12):i]
-                    scoped = any(
-                        ("cd " in w and ("$TEST_ROOT" in w or "$TMPDIR" in w or "mktemp" in w
-                                          or "_REPO" in w or "$AESOP_ROOT" in w))
-                        for w in window
+                    file_has_set_e = any(
+                        w.strip().startswith("set -e") or w.strip().startswith("set -euo")
+                        or w.strip().startswith("set -eu") for w in lines[:10]
+                    )
+                    cd_lines = [w for w in window if w.strip().startswith("cd ")]
+                    # Scoped = a cd occurred in-window AND that cd cannot fall
+                    # through silently (set -e at file top, or || exit/return on
+                    # the cd itself) — cd-failure fallthrough into the live repo
+                    # is the incident 52d7be7 mechanism.
+                    # A self-guard (refusing to run inside an existing repo
+                    # via rev-parse --show-toplevel + exit) is also sufficient.
+                    self_guarded = any("--show-toplevel" in w for w in window) and any(
+                        "exit 1" in w for w in window)
+                    scoped = self_guarded or bool(cd_lines) and (
+                        file_has_set_e
+                        or all(("|| exit" in w or "|| return" in w) for w in cd_lines)
                     )
                     if not scoped:
                         violations.append(f"{sh.name}:{i+1} {stripped[:60]}")
