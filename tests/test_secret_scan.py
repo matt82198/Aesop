@@ -1114,5 +1114,58 @@ class TestRangeModeFailsClosedOnGitError(unittest.TestCase):
             self.assertEqual(result, [])
 
 
+
+class TestRedactionSourceExemption(unittest.TestCase):
+    """USER-APPROVED (2026-07-22) narrow exemption: connection_string findings
+    in REDACTION_SOURCE_FILES are non-fatal (redaction-regex source necessarily
+    contains connection-string-shaped text). Everything else stays fatal."""
+
+    def _conn_string_line(self):
+        # Runtime-assembled so this test file itself never contains the shape
+        return "pattern = " + chr(39) + "http" + "s" + chr(58) + chr(47) + chr(47) + "usr" + chr(58) + "p" + "wd123@prod.internal" + chr(47) + "db" + chr(39)
+
+    def test_exempted_file_connection_string_nonfatal(self):
+        import secret_scan
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "bench"
+            d.mkdir()
+            f = d / "sample_transcripts_judgment.py"
+            f.write_text(self._conn_string_line(), encoding="utf-8")
+            findings = secret_scan.scan_file(f)
+            conn = [x for x in findings if x[1] == "connection_string"]
+            self.assertTrue(conn, "finding must still be REPORTED")
+            self.assertFalse(any(x[3] for x in conn), "must be non-fatal in exempted file")
+
+    def test_other_file_connection_string_still_fatal(self):
+        import secret_scan
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "config_notes.py"
+            f.write_text(self._conn_string_line(), encoding="utf-8")
+            findings = secret_scan.scan_file(f)
+            conn = [x for x in findings if x[1] == "connection_string"]
+            self.assertTrue(conn)
+            self.assertTrue(all(x[3] for x in conn), "fatal everywhere else")
+
+    def test_exempted_file_other_rules_still_fatal(self):
+        import secret_scan
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "bench"
+            d.mkdir()
+            f = d / "sample_transcripts_judgment.py"
+            fake_key = "sk-" + "a1b2c3d4e5f6g7h8i9j0" + "k1l2m3n4"
+            f.write_text("key = " + chr(39) + fake_key + chr(39), encoding="utf-8")
+            findings = secret_scan.scan_file(f)
+            keys = [x for x in findings if x[1] == "openai_anthropic_key"]
+            self.assertTrue(keys)
+            self.assertTrue(all(x[3] for x in keys), "non-connection_string rules stay fatal in exempted file")
+
+    def test_is_redaction_source_matching(self):
+        import secret_scan
+        self.assertTrue(secret_scan._is_redaction_source("bench/sample_transcripts_judgment.py"))
+        self.assertTrue(secret_scan._is_redaction_source("C:" + chr(92) + "x" + chr(92) + "bench" + chr(92) + "sample_transcripts_judgment.py"))
+        self.assertFalse(secret_scan._is_redaction_source("bench/other.py"))
+        self.assertFalse(secret_scan._is_redaction_source("sample_transcripts_judgment.py"))
+        self.assertFalse(secret_scan._is_redaction_source(None))
+
 if __name__ == "__main__":
     unittest.main()

@@ -123,12 +123,41 @@ FATAL_RULES = {
     "connection_string",
 }
 
+# USER-APPROVED EXEMPTION (2026-07-22): redaction-pattern source files.
+# A regex whose PURPOSE is redacting connection strings necessarily contains a
+# connection-string-SHAPED pattern in its source text. connection_string
+# findings in these exact repo-relative paths are downgraded to non-fatal
+# ALLOWED-REDACTION-SOURCE (still reported, never silent). Every other rule
+# stays fully fatal in these files; connection_string stays fatal everywhere
+# else, including pragma'd files. Additions to this set are a security-gate
+# change and require explicit user approval.
+# Residual risk (accepted): matching is by trailing path components, so a
+# nested copy at */bench/sample_transcripts_judgment.py inherits the
+# exemption for this ONE rule; all other rules still apply there.
+REDACTION_SOURCE_FILES = {"bench/sample_transcripts_judgment.py"}
 
-def _classify_finding(rule_name, has_file_pragma):
+
+def _is_redaction_source(scan_path):
+    """True when scan_path's trailing components match an exempted file."""
+    if not scan_path:
+        return False
+    parts = str(scan_path).replace("\\", "/").split("/")
+    for entry in REDACTION_SOURCE_FILES:
+        entry_parts = entry.split("/")
+        if parts[-len(entry_parts):] == entry_parts:
+            return True
+    return False
+
+
+def _classify_finding(rule_name, has_file_pragma, scan_path=None):
     """Shared fatal/softened decision, used by every scan_* variant (disk-file,
     blob, large-file-chunked) so the pragma contract can't drift between them.
-    FATAL_RULES are always fatal. SOFTENED_BY_PRAGMA rules are fatal unless the
-    pragma is present. Everything else (e.g. env_assignment) is always fatal."""
+    FATAL_RULES are always fatal — except the single user-approved
+    connection_string downgrade for REDACTION_SOURCE_FILES (see above).
+    SOFTENED_BY_PRAGMA rules are fatal unless the pragma is present.
+    Everything else (e.g. env_assignment) is always fatal."""
+    if rule_name == "connection_string" and _is_redaction_source(scan_path):
+        return False
     if rule_name in FATAL_RULES:
         return True
     if rule_name in SOFTENED_BY_PRAGMA:
@@ -325,7 +354,7 @@ def scan_file(filepath):
                                 if is_placeholder(match_str):
                                     continue
 
-                                is_fatal = _classify_finding(rule_name, has_file_pragma)
+                                is_fatal = _classify_finding(rule_name, has_file_pragma, filepath)
                                 findings.append((line_num, rule_name, match_str, is_fatal))
 
         else:
@@ -345,7 +374,7 @@ def scan_file(filepath):
                             if is_placeholder(match_str):
                                 continue
 
-                            is_fatal = _classify_finding(rule_name, has_file_pragma)
+                            is_fatal = _classify_finding(rule_name, has_file_pragma, filepath)
                             findings.append((line_num, rule_name, match_str, is_fatal))
 
     except (OSError, PermissionError, FileNotFoundError, IOError) as e:
@@ -438,7 +467,7 @@ def scan_blob(label, content_bytes):
                 match_str = match.group(0)
                 if is_placeholder(match_str):
                     continue
-                is_fatal = _classify_finding(rule_name, has_file_pragma)
+                is_fatal = _classify_finding(rule_name, has_file_pragma, label)
                 findings.append((line_num, rule_name, match_str, is_fatal))
 
     return findings
@@ -654,8 +683,11 @@ def scan_paths(paths):
     return [p for p in files_to_scan if p.is_file()]
 
 
-def scan_content(content):
-    """Scan raw content for secrets (used by history scanning)."""
+def scan_content(content, scan_path=None):
+    """Scan raw content for secrets (used by history scanning). scan_path
+    (the blob's repo-relative path, when known) feeds the REDACTION_SOURCE_FILES
+    exemption so committed redaction-regex source does not turn every future
+    --history / prepublish scan permanently red."""
     findings = []
     for line_num, line in enumerate(content.split("\n"), start=1):
         for rule_name, (pattern, flags) in PATTERNS.items():
@@ -664,7 +696,8 @@ def scan_content(content):
                 match_str = match.group(0)
                 if is_placeholder(match_str):
                     continue
-                findings.append((line_num, rule_name, match_str, True))
+                is_fatal = _classify_finding(rule_name, False, scan_path)
+                findings.append((line_num, rule_name, match_str, is_fatal))
     return findings
 
 
@@ -779,7 +812,7 @@ def main():
 
         file_count = len(set(f for f, _ in history_files))
         for filepath, content in history_files:
-            findings = scan_content(content)
+            findings = scan_content(content, scan_path=filepath)
             for line_num, rule, match_str, is_fatal in findings:
                 all_findings.append((filepath, line_num, rule, match_str, is_fatal))
                 if is_fatal:
@@ -808,7 +841,10 @@ def main():
         if is_fatal:
             print(f"HIGH {filepath}:{line_num} {rule} ({masked})")
         else:
-            print(f"ALLOWED-DOC {filepath}:{line_num} {rule} ({masked})")
+            if rule == "connection_string":
+                print(f"ALLOWED-REDACTION-SOURCE {filepath}:{line_num} {rule} ({masked})")
+            else:
+                print(f"ALLOWED-DOC {filepath}:{line_num} {rule} ({masked})")
 
     # Summary and exit
     if len(fatal_findings) == 0:
