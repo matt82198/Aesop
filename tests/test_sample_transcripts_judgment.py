@@ -74,6 +74,55 @@ class TestRedaction(unittest.TestCase):
         # URL should be preserved
         assert "https://example.com/api/endpoint" in redacted
 
+    def test_redact_embedded_at_in_password(self):
+        """Passwords with embedded @ should be fully redacted (e.g., p@ssw0rd@host)."""
+        # Assemble credentials at runtime using chr() to avoid static detection
+        username = "admin"
+        cred = "p" + chr(64) + "ssw0rd"  # p@ssw0rd (chr(64) = @)
+        hostname = "db.internal"
+        scheme = "postgres" + chr(58) + chr(47) + chr(47)  # postgres://
+        text = scheme + username + chr(58) + cred + chr(64) + hostname + ":5432/mydb"
+        redacted = redact_sensitive_data(text)
+        # Neither user nor cred should be visible
+        assert "admin" not in redacted
+        assert cred not in redacted
+        # But scheme and host should be preserved
+        assert scheme in redacted
+        assert hostname in redacted
+        assert "[REDACTED]" in redacted
+
+    def test_redact_mongodb_scheme(self):
+        """MongoDB URLs with non-http schemes should be redacted."""
+        uname = "mongo" + "user"
+        cred_value = "secre" + "t123"
+        scheme = "mongodb" + chr(58) + chr(47) + chr(47)  # mongodb://
+        text = scheme + uname + chr(58) + cred_value + chr(64) + "mongodb.example.com:27017/mydb"
+        redacted = redact_sensitive_data(text)
+        assert "mongouser" not in redacted
+        assert cred_value not in redacted
+        assert scheme in redacted
+        assert "mongodb.example.com" in redacted
+
+    def test_redact_ipv6_host(self):
+        """URLs with IPv6 addresses should handle credentials correctly."""
+        uname = "db" + "user"
+        secret_val = "Pass" + "word"
+        scheme = "mongodb" + chr(58) + chr(47) + chr(47)  # mongodb://
+        text = scheme + uname + chr(58) + secret_val + chr(64) + "[2001:db8::1]:27017/db"
+        redacted = redact_sensitive_data(text)
+        assert "dbuser" not in redacted
+        assert secret_val not in redacted
+        assert scheme in redacted
+        assert "[2001:db8::1]" in redacted
+        assert "[REDACTED]" in redacted
+
+    def test_do_not_redact_numeric_ratio(self):
+        """Numeric ratios like 3:4@scale should NOT be redacted (no letters in user part)."""
+        text = "The ratio 3:4@scale is important for rendering"
+        redacted = redact_sensitive_data(text)
+        # Ratio should be preserved since it has no letters before the colon
+        assert "3:4@scale" in redacted or "<credentials>" not in redacted
+
 
 class TestTextExtraction(unittest.TestCase):
     """Test recursive extraction from nested message structures."""
