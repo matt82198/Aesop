@@ -222,7 +222,7 @@ async function runTests() {
           `bash daemons/run-watchdog.sh --once`,
           {
             cwd: targetDir,
-            timeout: 30000,
+            timeout: Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000,
             stdio: 'pipe'
           }
         );
