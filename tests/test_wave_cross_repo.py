@@ -77,6 +77,10 @@ def setUpModule():
     global _MODULE_TMP, _MODULE_SAVED_CWD, _FIXTURE_REPO_A, _FIXTURE_REPO_B
     _MODULE_SAVED_CWD = os.getcwd()
     _MODULE_TMP = tempfile.mkdtemp(prefix="wave-cross-repo-tests-")
+    # Run the whole module from the tmpdir: some manifests use workDir "."
+    # and would otherwise write stub files into the repo root (hygiene rule:
+    # tests never pollute cwd). tearDownModule restores the saved cwd.
+    os.chdir(_MODULE_TMP)
 
     # Create fixture repo A
     _FIXTURE_REPO_A = Path(_MODULE_TMP) / "repo-a"
