@@ -97,8 +97,13 @@ def reload():
     ORCH_STATUS_FILE = STATE_DIR / "orchestrator-status.json"
 
     # Wave-14 dashboard rewrite (plan D3): built frontend + cost ledger paths.
-    # WEB_DIST: the committed Vite build output served at / and /assets/*.
-    WEB_DIST = AESOP_ROOT / "ui" / "web" / "dist"
+    # WEB_DIST: env AESOP_WEB_DIST > AESOP_ROOT/ui/web/dist (test override for fixtures).
+    WEB_DIST = Path(
+        os.getenv(
+            "AESOP_WEB_DIST",
+            str(AESOP_ROOT / "ui" / "web" / "dist")
+        )
+    )
     # LEDGER_FILE: outcomes ledger parsed by ui/cost.py; sse.py mtime-gates on it.
     LEDGER_FILE = STATE_DIR / "ledger" / "OUTCOMES-LEDGER.md"
 

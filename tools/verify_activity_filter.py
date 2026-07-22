@@ -154,6 +154,8 @@ def start_server(root: Path, port: int):
                AESOP_ROOT=str(root),
                AESOP_STATE_ROOT=str(state_root),
                AESOP_TRANSCRIPTS_ROOT=str(root / "transcripts"),
+               AESOP_WEB_DIST=str(REPO / "ui" / "web" / "dist"),
+               AESOP_PROOF_FIXTURES="1",
                AESOP_UI_COLLECT_INTERVAL="0.3",
                PORT=str(port))
     server = subprocess.Popen([sys.executable, str(SERVE)], env=env,

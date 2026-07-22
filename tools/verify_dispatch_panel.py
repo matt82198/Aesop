@@ -111,6 +111,8 @@ def start_server(root: Path, port: int):
                AESOP_ROOT=str(root),
                AESOP_STATE_ROOT=str(state_root),
                AESOP_TRANSCRIPTS_ROOT=str(root / "transcripts"),
+               AESOP_WEB_DIST=str(REPO / "ui" / "web" / "dist"),
+               AESOP_PROOF_FIXTURES="1",
                AESOP_UI_COLLECT_INTERVAL="0.5",
                PORT=str(port))
     server = subprocess.Popen([sys.executable, str(SERVE)], env=env,
@@ -186,7 +188,11 @@ def run_available(pw, failures):
             initial_rows = page.locator("[data-testid='dispatch-agent-row']").count()
             # Wait for a poll cycle
             time.sleep(2)
-            page.wait_for_load_state("networkidle")
+            # SSE keeps connections open indefinitely, so use a short timeout
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=500)
+            except Exception:
+                pass  # Timeout expected when SSE is active
             # Rows should still be there (no crash)
             final_rows = page.locator("[data-testid='dispatch-agent-row']").count()
             assert final_rows == initial_rows, "agent count changed during poll"
