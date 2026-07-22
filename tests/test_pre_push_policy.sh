@@ -955,8 +955,23 @@ SCANNER
   chmod +x "$AESOP_ROOT/tools/secret_scan.py"
 
   # Test 1: Piped empty stdin (simulates up-to-date push with no ref tuples)
-  # main() should allow (rc=0) — this is the #289 legitimate case
-  stderr_output=$( { printf '' | bash "$HOOK_SCRIPT"; } 2>&1 1>/dev/null )
+  # main() should allow (rc=0) — this is the #289 legitimate case.
+  # HEAD-INDEPENDENCE: check_branch_policy's empty-stdin fallback inspects the
+  # CURRENT branch, so this must run inside an isolated fixture repo on a
+  # feature branch (on main's own CI the repo checkout is main → false block).
+  ISOLATED_MAIN_REPO="$TEST_ROOT/aesop_main_tty_repo"
+  mkdir -p "$ISOLATED_MAIN_REPO"
+  (
+    cd "$ISOLATED_MAIN_REPO" || exit 1
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    echo "dummy" > file.txt
+    git add file.txt
+    git commit -q -m "initial"
+    git checkout -q -b feature/isolated-empty-stdin
+  )
+  stderr_output=$( { printf '' | ( cd "$ISOLATED_MAIN_REPO" && bash "$HOOK_SCRIPT" ); } 2>&1 1>/dev/null )
   exit_code=$?
 
   if [ "$exit_code" -eq 0 ]; then
