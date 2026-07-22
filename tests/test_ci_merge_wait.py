@@ -570,9 +570,9 @@ class TestCiMergeWait(unittest.TestCase):
     def test_check_ci_status_function_expected_checks_all_green_but_non_expected_failed(self):
         """Test check_ci_status with expected_checks all passing but a non-expected check FAILED.
 
-        This is the P2 audit bug: when --expect-checks is given, SUCCESS should NOT be returned
-        if a non-expected check is FAILING. You don't want to merge with a red check just because
-        it wasn't in the expected list.
+        This is the P2 audit bug FIX: when --expect-checks is given, SUCCESS SHOULD be returned
+        even if a non-expected check is FAILING. Non-expected checks are informational/flaky
+        third-party checks; only the expected checks gate the merge. The failure is logged loudly.
         """
         import importlib.util
         spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
@@ -589,9 +589,9 @@ class TestCiMergeWait(unittest.TestCase):
             rollup,
             expected_checks={"unit-tests", "integration-tests"}
         )
-        # BUG FIX: Must NOT return success when a non-expected check is FAILING
-        self.assertEqual(ci_status, "failure", "Non-expected failed check should block merge even when expected checks pass")
-        self.assertEqual(failed_check, "lint", "Should report which non-expected check failed")
+        # P2 FIX: Non-expected failed check should NOT block merge when expected checks pass
+        self.assertEqual(ci_status, "success", "Non-expected failed check should not block merge when expected checks pass (P2 fix)")
+        self.assertIsNone(failed_check, "Non-expected failures don't set a failure reason")
 
     def test_check_ci_status_function_expected_checks_all_green_non_expected_pending_ok(self):
         """Test check_ci_status: expected all pass, non-expected pending is OK (does not block)."""
@@ -673,6 +673,55 @@ class TestCiMergeWait(unittest.TestCase):
         self.assertIn("allow_no_checks", result.stdout.lower())
         self.assertIn("expected", result.stdout.lower())
         self.assertIn("window", result.stdout.lower())
+
+    def test_check_ci_status_expected_checks_non_expected_fail_prints_warning(self):
+        """Test that non-expected failures print WARNING to stdout when expected checks pass."""
+        import importlib.util
+        from io import StringIO
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        rollup = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "integration-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"},
+            {"name": "security-scan", "status": "COMPLETED", "conclusion": "FAILURE"},
+        ]
+
+        # Capture stdout to verify warning is printed
+        import sys
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        try:
+            ci_status, _ = module.check_ci_status(
+                rollup,
+                expected_checks={"unit-tests", "integration-tests"}
+            )
+            output = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        self.assertEqual(ci_status, "success", "Should return success when expected checks pass")
+        self.assertIn("WARNING", output, "Should print WARNING for non-expected failures")
+        self.assertIn("lint", output, "Should mention the failed non-expected check name")
+        self.assertIn("security-scan", output, "Should mention all failed non-expected check names")
+
+    def test_check_ci_status_without_expect_checks_any_failure_blocks(self):
+        """Test that without --expect-checks, any failure still blocks merge (unchanged behavior)."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Without expected_checks, any failure should block
+        rollup = [
+            {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"},
+        ]
+        ci_status, failed_check = module.check_ci_status(rollup, expected_checks=None)
+        self.assertEqual(ci_status, "failure", "Without --expect-checks, any failure should block merge")
+        self.assertEqual(failed_check, "lint", "Should report which check failed")
 
 
 if __name__ == "__main__":

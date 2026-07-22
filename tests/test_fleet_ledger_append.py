@@ -107,7 +107,7 @@ class TestFleetLedgerAppendWave(unittest.TestCase):
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not found", result.stdout)
+        self.assertIn("not found", result.stderr)
 
     def test_append_wave_malformed_json(self):
         """Test append-wave gracefully handles malformed JSON."""
@@ -127,7 +127,7 @@ class TestFleetLedgerAppendWave(unittest.TestCase):
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Failed to read/parse", result.stdout)
+        self.assertIn("Failed to read/parse", result.stderr)
 
     def test_append_wave_missing_fields_tolerance(self):
         """Test append-wave gracefully tolerates missing fields in report."""
@@ -451,7 +451,7 @@ class TestFleetLedgerAppendWave(unittest.TestCase):
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Invalid wave number", result.stdout)
+        self.assertIn("Invalid wave number", result.stderr)
 
     def test_append_wave_creates_ledger_header_if_missing(self):
         """Test that append-wave creates ledger with header if it doesn't exist."""

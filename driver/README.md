@@ -3,11 +3,13 @@
 > Run aesop's wave loop on backends other than Claude Code — Codex, and
 > eventually open models — through one narrow interface.
 
-This directory contains the **AgentDriver seam** (Phase 1) and a working Codex
-implementation (Phase 2). The phase-1 abstraction seam is the interface; the
+This directory contains the **AgentDriver seam** (Phase 1), a working Codex
+implementation (Phase 2), and the wave bridge connecting backends to orchestrator
+dispatch (Phase 3). The phase-1 abstraction seam is the interface; the
 phase-2 Codex driver proves a non-Claude backend can execute a real coding task
 end-to-end and produce orchestrator-verified results, entirely offline (no API
-key, no network in CI tests).
+key, no network in CI tests). Phase 3 routes work items through any backend with
+honest verification (test exit code only) and backend-driven verification tier.
 
 ---
 
@@ -121,10 +123,12 @@ high-confidence subagents **plus** strong orchestration).
 | **1** | Driver interface + Claude Code parity      | **shipped**                |
 |       | Reference adapter, honest Codex stub, tests| in this directory          |
 |       | Refactor wave-flat-dispatch onto the driver| next (harness handoff pts) |
-| **2** | Codex OpenAI Chat Completions HTTP backend | **shipped (Phase 2)**      |
+| **2** | Codex OpenAI Chat Completions HTTP backend | **shipped**                |
 |       | Transport seam (urllib, injectable); dispatch_worker (file injection, JSON validation with retry, full-file replacement); run_command (subprocess); worker_status (in-memory registry); verification_policy mapping; offline test suite with FakeTransport + gated live test | implemented in `codex_driver.py` + `openai_transport.py` + `verification_policy.py` + tests |
-| **3** | Open-model runner library                   | future                     |
-|       | Ollama/OpenRouter/Together adapters, per-model prompt tuning, error-recovery protocol, Tier-4 enforcement, `bench/` accuracy benchmark | future |
+| **3** | Wave bridge + verification policy routing  | **shipped**                |
+|       | Connect AgentDriver backends to wave-flat-dispatch manifest items; honest green (test exit code only); backend-driven verification tier. OpenAI-compatible driver for hosted models (OpenRouter, etc.) and local models (Ollama). | implemented in `wave_bridge.py` + `openai_compatible_driver.py` + tests |
+| **4** | Open-model runner library                   | future                     |
+|       | Dedicated Ollama/local-model adapter, per-model prompt tuning, error-recovery protocol, Tier-4 enforcement, `bench/` accuracy benchmark | future |
 
 **Deployment posture** (from the spike): Claude Code is production. Codex and
 open models stay **experimental / opt-in** until their tiers are proven —

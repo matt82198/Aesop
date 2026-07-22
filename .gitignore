@@ -28,6 +28,10 @@ node_modules/
 __pycache__/
 *.pyc
 
+# Test output artifacts
+node_test_output.txt
+*_test_output.txt
+
 # Web dashboard (wave-14): node_modules ignored; ui/web/dist IS committed
 # (D2: clone-and-run — python ui/serve.py serves the committed build).
 ui/web/node_modules/

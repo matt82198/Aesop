@@ -343,11 +343,11 @@ check_secret_scan() {
   local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
   local scan_script="$aesop_root/tools/secret_scan.py"
 
-  if [ ! -f "$scan_script" ]; then
-    # Scanner not found: log event and warn to stderr, but don't block (fail-open)
-    log_event "secret_scan_unavailable"
-    printf 'Warning: secret_scan.py not found at %s\n' "$scan_script" >&2
-    return 0
+  if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
+    # Scanner not found or not executable: fail-closed (cannot verify => deny)
+    log_block "secret_scan_unavailable"
+    printf 'FATAL: secret_scan.py not found or not executable at %s\n' "$scan_script" >&2
+    return 1
   fi
 
   # Parse pre-push stdin to get commit range(s), then scan files in each range.
@@ -635,9 +635,9 @@ run_test_mode() {
     stderr_output=$( { check_secret_scan; } 2>&1 1>/dev/null )
     exit_code=$?
 
-    # Should return 0 (fail-open)
-    if [ "$exit_code" -ne 0 ]; then
-      printf 'FAIL: check_secret_scan should return 0 when scanner missing (fail-open)\n'
+    # Should return 1 (fail-closed, security-safe default)
+    if [ "$exit_code" -ne 1 ]; then
+      printf 'FAIL: check_secret_scan should return 1 when scanner missing (fail-closed)\n'
       exit 1
     fi
 
@@ -656,22 +656,22 @@ run_test_mode() {
       exit 1
     fi
 
-    # Verify event type is "secret_scan_unavailable"
-    if ! printf '%s' "$audit_line" | grep -q '"event":"secret_scan_unavailable"'; then
+    # Verify event type is "push_blocked" (fail-closed logged as blocked)
+    if ! printf '%s' "$audit_line" | grep -q '"event":"push_blocked"'; then
       printf 'FAIL: Audit log entry missing correct event type\n'
-      printf 'Expected event: "secret_scan_unavailable"\n'
+      printf 'Expected event: "push_blocked"\n'
       printf 'Entry: %s\n' "$audit_line"
       exit 1
     fi
 
     # Verify a warning was printed to stderr
-    if ! printf '%s' "$stderr_output" | grep -q -i 'unavailable\|missing\|not found'; then
+    if ! printf '%s' "$stderr_output" | grep -q -i 'unavailable\|missing\|not found\|fatal'; then
       printf 'FAIL: No warning message printed to stderr\n'
       printf 'stderr was: %s\n' "$stderr_output"
       exit 1
     fi
 
-    printf 'PASS: Secret scan unavailable logged with event and stderr warning\n'
+    printf 'PASS: Secret scan unavailable fails-closed and logged as push_blocked\n'
   )
   if [ $? -eq 0 ]; then
     test_passed=$((test_passed + 1))

@@ -465,6 +465,187 @@ class OrchestratorStatusSource(WaveTelemetryFixtureCase):
         self.assertNotEqual(body["wave"], "wave", "Wave should not be just 'wave'")
         self.assertEqual(body["phase"], "wave-26-verify")
 
+    def test_wave_telemetry_slight_future_date_rejected(self):
+        """Even slightly future-dated timestamps (>0s) should be rejected (P2 bug fix).
+
+        If orchestrator-status.json has a timestamp 30 seconds in the future,
+        it should fall back to STATE.md (not treat it as fresh).
+        """
+        from datetime import datetime, timezone, timedelta
+        # Create slightly future-dated orchestrator status (30 seconds in the future)
+        future_time = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+        future_status = f"""{{
+  "id": "main",
+  "role": "orchestrator",
+  "activity": "dispatching",
+  "phase": "wave-999-future",
+  "updated_at": "{future_time}"
+}}"""
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            future_status, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should reject even slightly future-dated status and fall back to STATE.md
+        self.assertTrue(
+            "rc.2" in body["phase"].lower() or "wave" in body["phase"].lower(),
+            f"Phase should fall back to STATE.md (rc.2 or wave): {body['phase']}"
+        )
+        self.assertEqual(body["source"], "state-md", "Should fall back to state-md for ANY future-dated status")
+
+    def test_wave_telemetry_wave_rc_format_extraction(self):
+        """Wave extraction handles wave-rc.2 format correctly (CRITICAL BUG FIX).
+
+        If orchestrator-status.json has phase='wave-rc.2: build' (release candidate format),
+        the orchestrator-status regex should extract 'wave-rc.2' (including version),
+        NOT just 'wave-rc' or 'rc.2'.
+
+        Previous bug: regex wave[-.]?\\w+ matched only "wave-rc" because \\w excludes dots,
+        silently dropping ".2" and causing data loss in dashboards/telemetry.
+        """
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        fresh_timestamp = (now - timedelta(hours=6)).isoformat()
+        orch_status = f"""{{
+  "id": "main",
+  "role": "orchestrator",
+  "activity": "building wave-rc.2",
+  "phase": "wave-rc.2: build",
+  "updated_at": "{fresh_timestamp}"
+}}"""
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            orch_status, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Must extract EXACTLY "wave-rc.2" including version suffix
+        wave = body["wave"].lower()
+        self.assertEqual(
+            wave, "wave-rc.2",
+            f"Wave field should be exactly 'wave-rc.2', got '{wave}'"
+        )
+        self.assertNotIn(": build", wave, "Wave should not include ': build' suffix")
+
+    def test_wave_telemetry_wave_27_verify_extraction(self):
+        """Wave extraction correctly handles wave-27-verify format (no dots).
+
+        Ensures that patterns like "wave-27-verify" extract "wave-27", not "wave".
+        This tests the non-dot variant to ensure the fix doesn't break it.
+        """
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        fresh_timestamp = (now - timedelta(hours=6)).isoformat()
+        orch_status = f"""{{
+  "id": "main",
+  "role": "orchestrator",
+  "activity": "verifying wave-27",
+  "phase": "wave-27-verify",
+  "updated_at": "{fresh_timestamp}"
+}}"""
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            orch_status, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should extract "wave-27" from "wave-27-verify"
+        wave = body["wave"].lower()
+        self.assertEqual(
+            wave, "wave-27",
+            f"Wave field should be exactly 'wave-27', got '{wave}'"
+        )
+
+    def test_wave_telemetry_wave_3_simple_extraction(self):
+        """Wave extraction correctly handles simple wave-N format (wave-3).
+
+        Ensures that simple patterns like "wave-3" extract correctly.
+        """
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        fresh_timestamp = (now - timedelta(hours=6)).isoformat()
+        orch_status = f"""{{
+  "id": "main",
+  "role": "orchestrator",
+  "activity": "running wave-3",
+  "phase": "wave-3",
+  "updated_at": "{fresh_timestamp}"
+}}"""
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            orch_status, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should extract "wave-3" as-is
+        wave = body["wave"].lower()
+        self.assertEqual(
+            wave, "wave-3",
+            f"Wave field should be exactly 'wave-3', got '{wave}'"
+        )
+
+    def test_wave_telemetry_malformed_wave_prefix_fallback(self):
+        """Wave extraction degrades gracefully on malformed wave prefix (wave-, waveless).
+
+        Ensures that malformed patterns like "wave-" (no identifier) or "waveless"
+        fall back to the phase itself rather than extracting partial garbage.
+        """
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        fresh_timestamp = (now - timedelta(hours=6)).isoformat()
+        # "wave-: malformed" has a wave- prefix but no identifier following the dash
+        orch_status = f"""{{
+  "id": "main",
+  "role": "orchestrator",
+  "activity": "unknown",
+  "phase": "wave-: malformed",
+  "updated_at": "{fresh_timestamp}"
+}}"""
+        (self.fixture_root / "state" / "orchestrator-status.json").write_text(
+            orch_status, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should fall back to phase when wave- has no valid identifier
+        # (Either the whole phase or an empty/single-char result)
+        wave = body["wave"].lower()
+        # The regex should NOT match "wave-:" because there's no \w+ after the dash
+        # So it should fall back to the phase itself
+        self.assertNotEqual(
+            wave, "wave-",
+            f"Wave should not be incomplete 'wave-', got '{wave}'"
+        )
+
+    def test_wave_telemetry_state_md_wave_rc_format_extraction(self):
+        """Wave extraction from STATE.md handles wave-rc.2 format correctly.
+
+        Ensures the STATE.md fallback path also extracts dot-separated versions.
+        """
+        # Remove orchestrator-status to force fallback to STATE.md
+        state_content = """# STATE — aesop refinement loop
+
+## Phase: `wave-rc.2: build` (2026-07-17, current)
+Current phase focuses on wave-rc.2 build work.
+
+## NEXT STEPS
+1. Complete wave-rc.2 implementation
+"""
+        (self.fixture_root / "STATE.md").write_text(state_content, encoding="utf-8")
+
+        status, hdrs, body = self._get_json("/api/wave/telemetry")
+        self.assertEqual(status, 200)
+
+        # Should extract "wave-rc.2" from STATE.md phase
+        wave = body["wave"].lower()
+        self.assertEqual(
+            wave, "wave-rc.2",
+            f"Wave field from STATE.md should be exactly 'wave-rc.2', got '{wave}'"
+        )
+        # Source should be state-md
+        self.assertEqual(body["source"], "state-md")
+
 
 if __name__ == "__main__":
     unittest.main()

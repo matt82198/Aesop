@@ -6,7 +6,9 @@ Surfaces what a wave's workers are doing RIGHT NOW: per-agent phase (dispatch/th
 last-activity age, and token burn estimates.
 
 Data sources:
-  - Agent transcripts: ~/.claude/projects/*/memory/agent-*.jsonl (mtime + file size)
+  - Agent transcripts: recursively scanned from {transcripts_root}/**/agent-*.jsonl (mtime + file size).
+    Real layout: ~/.claude/projects/*/subagents/agent-*.jsonl or {session}/subagents/agent-*.jsonl.
+    Filters to recent files only (<30 min) to avoid hundreds of stale entries.
   - Orchestrator status: state/orchestrator-status.json (phase info)
   - Workflow journal: state/workflow.journal.jsonl (per-agent state transitions, optional)
 
@@ -204,45 +206,43 @@ def get_wave_dispatch(force=False):
         transcripts_root = config.TRANSCRIPTS_ROOT
 
         try:
-            # Look for agent-*.jsonl files in ~/.claude/projects/*/memory/
-            # Pattern: {transcripts_root}/{project}/memory/agent-*.jsonl
+            # Scan recursively for agent-*.jsonl files matching real Claude Code layout:
+            # ~/.claude/projects/*/subagents/agent-*.jsonl or {session}/subagents/agent-*.jsonl
+            # Uses same pattern as agents.py to ensure consistency (ui/agents.py:482)
             if transcripts_root.exists():
-                for project_dir in transcripts_root.iterdir():
-                    if not project_dir.is_dir():
+                for transcript_file in transcripts_root.glob("**/agent-*.jsonl"):
+                    # Filter to recent files only (<30 min) to avoid hundreds of stale entries
+                    age_sec = _get_last_activity_age_sec(transcript_file)
+                    if age_sec < 0:  # File missing or error reading
+                        continue
+                    if age_sec > 1800:  # 30 minutes; skip stale transcripts
                         continue
 
-                    memory_dir = project_dir / "memory"
-                    if not memory_dir.exists():
-                        continue
+                    agent_id = transcript_file.stem  # e.g., "agent-12345"
+                    if agent_id.startswith("agent-"):
+                        # Remove "agent-" prefix for display
+                        display_id = agent_id[6:]  # "12345"
 
-                    # Scan for agent-*.jsonl files
-                    for transcript_file in memory_dir.glob("agent-*.jsonl"):
-                        agent_id = transcript_file.stem  # e.g., "agent-12345"
-                        if agent_id.startswith("agent-"):
-                            # Remove "agent-" prefix for display
-                            display_id = agent_id[6:]  # "12345"
+                        phase = _infer_agent_phase_from_transcript(transcript_file)
+                        tokens = _estimate_tokens_from_file_size(transcript_file)
 
-                            phase = _infer_agent_phase_from_transcript(transcript_file)
-                            age_sec = _get_last_activity_age_sec(transcript_file)
-                            tokens = _estimate_tokens_from_file_size(transcript_file)
+                        # Build warnings
+                        warnings = []
+                        if age_sec > 300:  # 5 minutes
+                            warnings.append("inactive >5min")
+                        if age_sec > 600:  # 10 minutes
+                            warnings.append("stalled >10min")
 
-                            # Build warnings
-                            warnings = []
-                            if age_sec > 300:  # 5 minutes
-                                warnings.append("inactive >5min")
-                            if age_sec > 600:  # 10 minutes
-                                warnings.append("stalled >10min")
+                        agent_entry = {
+                            "id": display_id,
+                            "phase": phase,
+                            "last_activity_age_sec": age_sec,
+                            "token_estimate": tokens,
+                        }
+                        if warnings:
+                            agent_entry["warnings"] = warnings
 
-                            agent_entry = {
-                                "id": display_id,
-                                "phase": phase,
-                                "last_activity_age_sec": age_sec,
-                                "token_estimate": tokens,
-                            }
-                            if warnings:
-                                agent_entry["warnings"] = warnings
-
-                            agents.append(agent_entry)
+                        agents.append(agent_entry)
         except Exception as e:
             print(f"[wave_dispatch] Error scanning transcripts: {e}", file=sys.stderr)
 
