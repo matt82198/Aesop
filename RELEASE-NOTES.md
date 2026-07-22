@@ -1,9 +1,9 @@
 # aesop 0.3.1 — Multi-core waves
 
-> 0.3.1 ships as the release tag for the 0.3.0 milestone (a defective v0.3.0 tag was burned by an automation error and superseded).
+> 0.3.1 ships as the release tag for the 0.3.0 milestone (a defective v0.3.0 tag was burned by an automation error: an agent created an empty release at the wrong commit before the release PR merged; content shipped unchanged as 0.3.1).
 
 0.2.0 shipped the seams; 0.3.0 ships the proof: **a non-Claude model core ran a full
-supervised wave — intake → build → verify → ship — through the same engine, with the
+supervised wave (single-item pilot) — intake → build → verify → ship — through the same engine, with the
 same gates**, and the release was preceded by a fresh adversarial hardening loop that
 exited clean.
 
@@ -29,10 +29,10 @@ exited clean.
 
 ## Measured, not asserted
 
-- **Live structured-output accuracy**: gpt-4o-mini **32/32 (100%)** composite
+- **Live structured-output accuracy**: Single run, N=32 curated tasks — gpt-4o-mini **32/32 (100%)** composite
   (valid-JSON / schema-exact / ownership-respect) under the driver-faithful payload
-  (bench/results/accuracy-live-2026-07-22.json). Single run, N=32 curated tasks —
-  supports the probe's conservative 0.92 assertion; not a transfer claim. The path to
+  (bench/results/accuracy-live-2026-07-22.json).
+  Supports the probe's conservative 0.92 assertion; not a transfer claim. The path to
   this number (33% → 0% → 4% → 100%, each step a real harness defect fixed and
   regression-guarded) is documented in the bench history.
 - **Frontier discrimination slice**: 20 hard judgment tasks with per-task discrimination
@@ -75,10 +75,9 @@ exited clean.
   mistaken for a pre-init condition).
 - **docs/PORTING.md**: step-by-step adopter port with the 10 likeliest failure modes and
   recoveries, sourced from this repo's real incident history.
-- **Windows CI job** (non-required): node+python on windows-latest; parity fixes for
+- **Windows CI job**: node+python on windows-latest; parity fixes for
   file-locking, SSE disconnect noise (WinError 10053/10054 as normal lifecycle), and
-  eod_sweep failing CLOSED on git errors (the 8.3 short-path fail-open root cause). Promotion to required tracked at
-  5 green merges.
+  eod_sweep failing CLOSED on git errors (the 8.3 short-path fail-open root cause). Windows was promoted to a required check on 2026-07-22 after 6 consecutive green main runs.
 - **Monitor stall detection**: stall_check.py active-task predicate + advisory recovery
   emission, surfaced as a monitor signal.
 - **Wave preflight**: backlog validation flags (missing ownership, stale refs, overlaps,
@@ -137,7 +136,7 @@ exited clean.
 
 ## Honest residuals
 
-- Windows job remains non-required until 5 consecutive green merges post-parity.
+- Windows was promoted to a required check on 2026-07-22 after 6 consecutive green main runs.
 - StateAPI baseline: 33 direct-read sites remain; burn-down is the 0.4 track alongside
   caller migration to WriteAPI and validation-ownership consolidation.
 - Codex live proof is one supervised wave on one small item — the unsupervised loop,
