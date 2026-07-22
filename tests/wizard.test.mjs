@@ -11,24 +11,36 @@
 //
 // Run: node --test tests/wizard.test.mjs
 
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { scaffoldOnce, cleanupFixtures } from './helpers/scaffold-fixture.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..', 'bin', 'cli.js'
 );
 
+// Shared fixture for wizard --yes tests (reduces child process spawns)
+let wizardFixture;
+
+before(() => {
+  wizardFixture = scaffoldOnce('wizard-default', { mode: 'wizard', yes: true });
+});
+
+// Note: fixture cleanup is deferred to OS temp dir cleanup
+// Don't call cleanupFixtures() in after() - let tests reference the cache
+
 function runCli(targetDir, args = [], stdin = null) {
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   const res = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
-    timeout: 30000,
+    timeout,
     killSignal: 'SIGKILL',
     input: stdin,
     stdio: stdin ? ['pipe', 'pipe', 'pipe'] : 'inherit'
@@ -41,137 +53,54 @@ function createTestDir() {
 }
 
 function gitCmd(cwd, cmd) {
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
+  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
 }
 
 test('wizard --yes scaffolds with defaults (non-interactive, CI-safe)', () => {
-  const tempDir = createTestDir();
-
-  // Initialize git in tempDir first
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
-
-  // Run wizard with --yes (defaults, no prompts)
-  const res = spawnSync(process.execPath, [CLI, 'wizard', '--yes'], {
-    encoding: 'utf8',
-    cwd: tempDir,
-    timeout: 30000,
-    killSignal: 'SIGKILL'
-  });
-
-  assert.equal(res.status, 0, `Wizard --yes should succeed. stderr: ${res.stderr}`);
+  assert.equal(wizardFixture.result.status, 0, `Wizard --yes should succeed. stderr: ${wizardFixture.result.stderr}`);
 });
 
 test('wizard --yes generates valid aesop.config.json', () => {
-  const tempDir = createTestDir();
-
-  // For wizard mode, we need to scaffold into a git repo, so initialize git first
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
-
-  const res = spawnSync(process.execPath, [CLI, 'wizard', '--yes'], {
-    encoding: 'utf8',
-    cwd: tempDir,
-    timeout: 30000,
-    killSignal: 'SIGKILL'
-  });
-  assert.equal(res.status, 0, `wizard should succeed, got stderr: ${res.stderr}`);
-
-  const configPath = path.join(tempDir, 'aesop-fleet', 'aesop.config.json');
-  assert.ok(fs.existsSync(configPath), `Config should be created at ${configPath}`);
+  assert.ok(fs.existsSync(wizardFixture.configPath), `Config should be created at ${wizardFixture.configPath}`);
 
   // Parse and validate config
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const config = JSON.parse(fs.readFileSync(wizardFixture.configPath, 'utf8'));
   assert.ok(config.aesop_root, 'Config should have aesop_root');
 });
 
 test('wizard --yes generates CLAUDE.md', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'aesop-fleet');
+  assert.ok(fs.existsSync(wizardFixture.claudePath), `CLAUDE.md should be created at ${wizardFixture.claudePath}`);
 
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
-
-  const res = runCli(targetDir, ['wizard', '--yes']);
-  assert.equal(res.status, 0);
-
-  const claudeMdPath = path.join(targetDir, 'CLAUDE.md');
-  assert.ok(fs.existsSync(claudeMdPath), `CLAUDE.md should be created at ${claudeMdPath}`);
-
-  const claudeContent = fs.readFileSync(claudeMdPath, 'utf8');
+  const claudeContent = fs.readFileSync(wizardFixture.claudePath, 'utf8');
   assert.ok(claudeContent.length > 100, 'CLAUDE.md should have substantial content');
   // Verify no unsubstituted tokens
   assert.ok(!claudeContent.match(/{{[A-Z_]+}}/), 'CLAUDE.md should have no unsubstituted {{TOKENS}}');
 });
 
 test('wizard --yes output includes next 3 commands', () => {
-  const tempDir = createTestDir();
-
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
-
-  const res = spawnSync(process.execPath, [CLI, 'wizard', '--yes'], {
-    encoding: 'utf8',
-    cwd: tempDir,
-    timeout: 30000,
-    killSignal: 'SIGKILL',
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-  assert.equal(res.status, 0, `Exit status should be 0, stderr: ${res.stderr}`);
-
-  const output = (res.stdout || '') + (res.stderr || '');
+  const output = (wizardFixture.result.stdout || '') + (wizardFixture.result.stderr || '');
   // Should mention the next commands
   assert.ok(output.includes('cd') || output.includes('watchdog') || output.includes('dashboard'),
     `Output should mention next steps. Got: ${output.substring(0, 500)}`);
 });
 
 test('wizard --yes output includes port in epilogue', () => {
-  const tempDir = createTestDir();
-
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
-
-  const res = spawnSync(process.execPath, [CLI, 'wizard', '--yes'], {
-    encoding: 'utf8',
-    cwd: tempDir,
-    timeout: 30000,
-    killSignal: 'SIGKILL',
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-  assert.equal(res.status, 0, `Exit status should be 0, stderr: ${res.stderr}`);
-
-  const output = (res.stdout || '') + (res.stderr || '');
+  const output = (wizardFixture.result.stdout || '') + (wizardFixture.result.stderr || '');
   // Should mention the default port (8770)
   assert.ok(output.includes('8770') || output.includes('localhost'),
     `Output should mention the dashboard port. Got: ${output.substring(0, 500)}`);
 });
 
 test('wizard --yes creates all required files', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'aesop-fleet');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
-
-  const res = runCli(targetDir, ['wizard', '--yes']);
-  assert.equal(res.status, 0);
-
   // Verify all required files exist
-  assert.ok(fs.existsSync(path.join(targetDir, 'CLAUDE.md')), 'CLAUDE.md should exist');
-  assert.ok(fs.existsSync(path.join(targetDir, 'aesop.config.json')), 'aesop.config.json should exist');
-  assert.ok(fs.existsSync(path.join(targetDir, 'state')), 'state/ should exist');
-  assert.ok(fs.existsSync(path.join(targetDir, 'daemons')), 'daemons/ should exist');
-  assert.ok(fs.existsSync(path.join(targetDir, 'dash')), 'dash/ should exist');
-  assert.ok(fs.existsSync(path.join(targetDir, 'ui')), 'ui/ should exist');
+  assert.ok(fs.existsSync(path.join(wizardFixture.targetDir, 'CLAUDE.md')), 'CLAUDE.md should exist');
+  assert.ok(fs.existsSync(path.join(wizardFixture.targetDir, 'aesop.config.json')), 'aesop.config.json should exist');
+  assert.ok(fs.existsSync(path.join(wizardFixture.targetDir, 'state')), 'state/ should exist');
+  assert.ok(fs.existsSync(path.join(wizardFixture.targetDir, 'daemons')), 'daemons/ should exist');
+  assert.ok(fs.existsSync(path.join(wizardFixture.targetDir, 'dash')), 'dash/ should exist');
+  assert.ok(fs.existsSync(path.join(wizardFixture.targetDir, 'ui')), 'ui/ should exist');
 });
 
 test('wizard subcommand works with explicit target dir', () => {
@@ -183,10 +112,11 @@ test('wizard subcommand works with explicit target dir', () => {
   gitCmd(tempDir, 'git config user.name "Test User"');
 
   // Run: aesop my-wizard-fleet wizard --yes
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   const res = spawnSync(process.execPath, [CLI, 'my-wizard-fleet', 'wizard', '--yes'], {
     encoding: 'utf8',
     cwd: tempDir,
-    timeout: 30000,
+    timeout,
     killSignal: 'SIGKILL'
   });
 
@@ -231,22 +161,10 @@ test('wizard --yes with --repos flag includes repos in config', () => {
 });
 
 test('full wizard --yes flow end-to-end produces working setup', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'aesop-fleet');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
-
-  // Run full wizard
-  const res = runCli(targetDir, ['wizard', '--yes']);
-  assert.equal(res.status, 0, `Full wizard flow should succeed. stderr: ${res.stderr}`);
-
-  // Verify all components
-  const claudeMd = path.join(targetDir, 'CLAUDE.md');
-  const configJson = path.join(targetDir, 'aesop.config.json');
-  const stateDir = path.join(targetDir, 'state');
+  // Reuse the fixture from earlier tests (same params)
+  const claudeMd = wizardFixture.claudePath;
+  const configJson = wizardFixture.configPath;
+  const stateDir = wizardFixture.statePath;
 
   assert.ok(fs.existsSync(claudeMd), 'CLAUDE.md should exist');
   assert.ok(fs.existsSync(configJson), 'aesop.config.json should exist');

@@ -115,10 +115,11 @@ test('generated config uses portable paths (not absolute machine paths)', () => 
 
     // Run scaffold with --name
     const targetDir = path.join(tempDir, 'fleet');
+    const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
     const result = spawnSync('node', [CLI, targetDir, '--name', 'test-service'], {
       encoding: 'utf8',
       cwd: tempDir,
-      timeout: 30000
+      timeout
     });
 
     assert.equal(result.status, 0, `Scaffold should succeed: ${result.stderr}`);
@@ -292,10 +293,11 @@ test('dashboard config generation guards against missing dashboard key (defect b
     // doesn't have a dashboard key
     const targetDir = path.join(tempDir, 'fleet');
 
+    const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
     const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet'], {
       encoding: 'utf8',
       cwd: tempDir,
-      timeout: 30000
+      timeout
     });
 
     assert.equal(result.status, 0,
@@ -427,10 +429,11 @@ test('pre-commit waveguard hook is installed in scaffolded fleet (wave-24 scaffo
   try {
     // Run scaffold with --name into a fresh directory
     const targetDir = path.join(tempDir, 'fleet');
+    const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
     const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet'], {
       encoding: 'utf8',
       cwd: tempDir,
-      timeout: 30000
+      timeout
     });
 
     assert.equal(result.status, 0, `Scaffold should succeed: ${result.stderr}`);
@@ -472,7 +475,7 @@ test('pre-commit waveguard hook is installed in scaffolded fleet (wave-24 scaffo
     const result2 = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--force'], {
       encoding: 'utf8',
       cwd: tempDir,
-      timeout: 30000
+      timeout
     });
 
     assert.equal(result2.status, 0, `Re-scaffold with --force should succeed: ${result2.stderr}`);
