@@ -1,81 +1,40 @@
-# Git Pre-Push Hook Installation Guide
+# Git Pre-Push Hook Setup
 
-**Ship a hook, not a memo.** The pre-push policy hook is **auto-installed during scaffold** (see below). This guide explains customization, verification, and org-wide distribution.
-
-## Security Model: Local Convenience Defense Only
-
-**IMPORTANT**: The pre-push hook is a **local-machine convenience defense** — it is **NOT cryptographic protection**. Any developer can bypass it with `git push --no-verify` or by editing/deleting `.git/hooks/pre-push`. The audit log (`SECURITY-AUDIT.log`) is stored locally and can also be edited by a user with file system access.
-
-**Real enforcement requires server-side branch protection.** See GitHub Configuration below.
+**TL;DR**: The hook is **auto-installed during scaffold**. Real enforcement requires server-side GitHub branch protection.
 
 ## What the Hook Does
 
-`hooks/pre-push-policy.sh` enforces two checks at git push time:
+`hooks/pre-push-policy.sh` enforces:
+1. **Branch Policy** — No direct pushes to `main`/`master` (feature branches only)
+2. **Secret Scan** — `tools/secret_scan.py --staged` blocks credentials
 
-1. **Branch Policy**: Blocks direct pushes to `main` or `master` branches (feature branches only).
-2. **Secret Scan**: Runs `tools/secret_scan.py --staged` to detect credentials before they reach the remote.
+## Security Model
 
-Both blocks append a JSON audit record to `state/SECURITY-AUDIT.log` with timestamp, repo, reason, and user — creating a reviewable trail of policy enforcement.
+**IMPORTANT**: Local hook is a **convenience defense only**—NOT cryptographic protection. Bypass with `git push --no-verify`.
 
-## Auto-Installation During Scaffold
+**Real enforcement**: Pair with GitHub branch protection (server-side). See below.
 
-**Default Behavior:** When you scaffold a new aesop fleet with `npx @matt82198/aesop [target-dir]`, the CLI automatically installs the pre-push hook into `.git/hooks/pre-push`.
+## Auto-Installation
 
-- **On Unix/macOS/Git Bash**: Creates a symlink so hook updates are automatic
-- **On Windows**: Copies the hook directly (symlinks don't work reliably on all NTFS setups)
-- **Idempotent**: Re-running scaffold doesn't clobber a user-customized hook
-- **Preserve Existing**: If you have a different pre-push hook, scaffold warns and preserves it
-- **Force Replace**: Use `npx @matt82198/aesop [target-dir] --force` to replace any existing hook
-
-**Example:**
+Scaffold auto-installs the hook (symlink on Unix, copy on Windows):
 
 ```bash
-# Initial scaffold (creates and installs hook automatically)
 npx @matt82198/aesop my-fleet
-
-# Later: re-scaffold the same directory (preserves customizations)
-npx @matt82198/aesop my-fleet
-
-# Force replace (even if hook was customized)
-npx @matt82198/aesop my-fleet --force
 ```
 
-## Manual Installation
-
-If you're installing into an existing repo (not scaffolded), or you need to manually add the hook:
-
-### Option 1: Symlink (Linux / macOS / Git Bash on Windows)
-
-The cleanest method — hook stays in sync with repo updates:
-
+Manual install:
 ```bash
+# Option 1: Symlink (Unix/macOS/Git Bash)
 ln -s ../../hooks/pre-push-policy.sh .git/hooks/pre-push
-chmod +x .git/hooks/pre-push
+
+# Option 2: Copy (Windows)
+cp hooks/pre-push-policy.sh .git/hooks/pre-push
 ```
 
-### Option 2: Copy (Windows, or to break sync)
-
-Copy the hook directly into `.git/hooks/`:
-
-```powershell
-Copy-Item hooks\pre-push-policy.sh .git\hooks\pre-push
-```
-
-On Windows PowerShell, mark it executable if your git respects file mode:
-
-```bash
-git config core.filemode false
-```
-
-## Testing
-
-Before committing to org-wide deployment, verify the hook works:
-
+Test:
 ```bash
 bash hooks/pre-push-policy.sh --test
 ```
-
-Expected output: **PASS** for all three checks (branch policy, feature branch allowance, audit log format).
 
 ## GitHub Configuration (Server-Side Enforcement)
 
