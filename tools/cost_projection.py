@@ -395,6 +395,7 @@ def check_and_alert(window_minutes=30, ceiling=None, wave=None, config=None, hor
                 )
                 if append_alert_log(state_dir, alert_line_70):
                     mark_alert_fired(state_dir, "70", wave)
+                    fired = True
         # 70% alert (if not at 90%)
         elif pct >= 70.0:
             alert_level = "70"
