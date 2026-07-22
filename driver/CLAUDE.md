@@ -129,8 +129,7 @@ The scheduler emits a Report JSON consumed by the orchestrator to decide merge e
     { "slug": "feat/x", "backend": "claude-code|codex", "tier": 1|2|3|4, "verified": true|false (false = NOT PROVEN, not necessarily failed; tier null = no build record), "testExit": 0|1|null },
     ...
   ],
-  "merged": false, "tracker_update_attempted": true|absent,
-  "tracker_unmapped_slugs": [..]|absent (LOUD: shipped slug with no tracker id -> success false),  // pilot always false (manual merge)
+  "merged": false, "tracker_update_attempted": true|absent, "tracker_unmapped_slugs": [..]|absent (LOUD -> success false),  // pilot always false (manual merge)
   "success": true|false,
   "timestamp": "<ISO8601>",
   "branch": "<branch_name>",  // optional; set when ship succeeds
