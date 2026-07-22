@@ -81,7 +81,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_dispatch_panel.py` — Browser proof for DispatchPanel component (ui/web/dist/ + /api/wave/dispatch; Playwright/Chromium; exit 0=proven, 1=failed, --allow-skip for CI)
 - `verify_ui_trio.py` — Browser proof for UI trio panels (Gantt Timeline, Audit Tail Stream, Live Reasoning Transparency; AESOP_PROOF_FIXTURES)
 - `wave_ledger_hook.py` — Orchestrator-tail CLI wrapper to append per-wave telemetry to OUTCOMES-LEDGER.md (idempotent phase appends; validates timestamp for markdown table safety)
-- `wave_preflight.py` — Wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1)
+- `wave_preflight.py` — Wave-open readiness validator: (1) repo-readiness checks (branch/clean-tree/HALT/heartbeats/tracker JSON parse); (2) backlog validation via --tracker (flags: missing ownsFiles, stale file refs, ownership overlaps, ledger aggregate retry rate); --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1; advisory tool exit 0 for --tracker mode
 - `wave_resume.py` — Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run
 - `watch.js` — Launch the watchdog daemon (spawns bash daemons/run-watchdog.sh with inherited stdio in foreground mode)
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
