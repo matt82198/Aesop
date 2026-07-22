@@ -63,13 +63,23 @@ except ImportError:
     default_openai_transport = None
 
 
-# Abstract-role -> OpenAI model mapping. Workers map to gpt-3.5-turbo (cheap);
+# Abstract-role -> OpenAI model mapping. Workers map to gpt-4o-mini (supports json_schema);
 # setup/verify to gpt-4-turbo (stronger). User decision #1 (plan Section 7)
-# allows upgrading to gpt-4o-mini/gpt-4o; this is the conservative default.
+# allows upgrading to gpt-4o; gpt-3.5-turbo does NOT support response_format json_schema.
 _DEFAULT_MODEL_MAP = {
-    ROLE_WORKER: "gpt-3.5-turbo",
+    ROLE_WORKER: "gpt-4o-mini",
     ROLE_SETUP: "gpt-4-turbo",
     ROLE_VERIFY: "gpt-4-turbo",
+}
+
+# Models that support response_format with type json_schema.
+# Raise ValueError at __init__ if a mapped model is not in this set.
+JSON_SCHEMA_CAPABLE = {
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4-turbo",
+    "gpt-4.1",
+    "gpt-4.1-preview",
 }
 
 # Default schema for structured worker output: full-file replacements.
@@ -165,6 +175,7 @@ class CodexDriver(AgentDriver):
         max_owned_bytes: int = 200_000,
         max_retries: int = 2,
         timeout_s: float = 120.0,
+        allow_unverified_models: bool = False,
     ):
         """Initialize the CodexDriver with optional overrides.
 
@@ -175,10 +186,26 @@ class CodexDriver(AgentDriver):
             max_owned_bytes: max total bytes of owned files before pre-dispatch fail (default 200KB).
             max_retries: max in-turn retries on malformed JSON (default 2).
             timeout_s: HTTP timeout in seconds (default 120).
+            allow_unverified_models: if True, allow models not known to support json_schema
+                (default False). Set to True only for experimental backends.
+
+        Raises:
+            ValueError: if any mapped model is not in JSON_SCHEMA_CAPABLE and
+                allow_unverified_models is False.
         """
         self._model_map = dict(_DEFAULT_MODEL_MAP)
         if model_map:
             self._model_map.update(model_map)
+
+        # Validate that all mapped models support json_schema response_format.
+        if not allow_unverified_models:
+            for role, model in self._model_map.items():
+                if model not in JSON_SCHEMA_CAPABLE:
+                    raise ValueError(
+                        f"Model '{model}' mapped to role '{role}' does not support "
+                        f"response_format json_schema. Known capable models: {sorted(JSON_SCHEMA_CAPABLE)}. "
+                        f"Pass allow_unverified_models=True to override (for experimental backends)."
+                    )
 
         self._transport = transport or default_openai_transport
         self._now = now or time.time
@@ -414,18 +441,36 @@ class CodexDriver(AgentDriver):
                     last_error = str(exc)
                     # If we have retries left, append error feedback and retry.
                     if attempt < self._max_retries:
+                        # Before appending retry messages, check if total payload would exceed budget.
+                        # Serialize the current payload + proposed new messages to estimate size.
+                        error_msg = f"(attempt {attempt+1} failed: {last_error})"
+                        nudge_msg = "Previous response was not valid JSON per the schema; return ONLY the JSON object."
+
+                        # Estimate size of new messages to be added
+                        test_payload = json.dumps(payload)
+                        new_messages = [
+                            {"role": "assistant", "content": error_msg},
+                            {"role": "user", "content": nudge_msg},
+                        ]
+                        test_payload_with_retry = json.dumps({
+                            **payload,
+                            "messages": payload["messages"] + new_messages
+                        })
+
+                        if len(test_payload_with_retry.encode("utf-8")) > self._max_owned_bytes:
+                            return WorkerResult(
+                                worker_id=worker_id,
+                                status=WORKER_FAILED,
+                                ok=False,
+                                error=f"budget_exceeded_on_retry: retry would exceed context budget ({len(test_payload_with_retry)} > {self._max_owned_bytes})",
+                            )
+
                         payload["messages"].append(
                             {
                                 "role": "assistant",
-                                "content": (
-                                    f"(attempt {attempt+1} failed: {last_error})"
-                                ),
+                                "content": error_msg,
                             }
                         )
-                        # Deterministic nudge: instructs model to return valid JSON only.
-                        # Temperature remains 0 (no sampling change). This is reproducible:
-                        # same input + same nudge + temp=0 -> same output (idempotent retry).
-                        nudge_msg = "Previous response was not valid JSON per the schema; return ONLY the JSON object."
                         payload["messages"].append(
                             {
                                 "role": "user",
@@ -449,11 +494,12 @@ class CodexDriver(AgentDriver):
             for file_entry in structured.get("files", []):
                 path_str = file_entry.get("path", "")
                 if path_str not in request.owned_files:
+                    # Distinguish: path not in the owned set (security/isolation violation).
                     return WorkerResult(
                         worker_id=worker_id,
                         status=WORKER_FAILED,
                         ok=False,
-                        error=f"worker attempted to write out-of-scope path: {path_str}",
+                        error=f"out-of-scope: worker attempted to write {path_str} (not in owned set)",
                     )
                 files_to_write.append((path_str, file_entry["contents"]))
 
@@ -465,11 +511,12 @@ class CodexDriver(AgentDriver):
                     full_path.write_text(new_contents, encoding="utf-8")
                     written_paths.append(path_str)
                 except OSError as exc:
+                    # Distinguish: owned path exists but write failed (OS error).
                     return WorkerResult(
                         worker_id=worker_id,
                         status=WORKER_FAILED,
                         ok=False,
-                        error=f"failed to write file {path_str}: {exc}",
+                        error=f"write_failed: {path_str}: {exc}",
                     )
 
             # 10. Cost tracking: read usage.total_tokens (fail-closed-honest).

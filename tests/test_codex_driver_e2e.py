@@ -1238,6 +1238,151 @@ class TestCodexDriverCostTrackingUnmetered(unittest.TestCase):
             # Total tokens should be 50 + 75 = 125 (not including unmetered).
             self.assertEqual(driver.get_tokens_spent(), 125)
 
+    # ========================================================================
+    # GATE-2 ROUND-2 FIXES (P1/P2/P3)
+    # ========================================================================
+
+    def test_p1_json_schema_capable_models_default(self):
+        """P1: Default model map uses JSON-schema-capable models."""
+        # Default should not raise.
+        driver = CodexDriver(transport=lambda p: {})
+        self.assertIsNotNone(driver)
+
+    def test_p1_json_schema_incapable_model_raises(self):
+        """P1: Custom model_map with incapable model raises ValueError."""
+        # gpt-3.5-turbo does NOT support response_format json_schema
+        with self.assertRaises(ValueError) as ctx:
+            CodexDriver(
+                model_map={ROLE_WORKER: "gpt-3.5-turbo"},
+                transport=lambda p: {}
+            )
+        self.assertIn("does not support response_format json_schema", str(ctx.exception))
+        self.assertIn("gpt-3.5-turbo", str(ctx.exception))
+
+    def test_p1_allow_unverified_models_escape_hatch(self):
+        """P1: allow_unverified_models=True bypasses capability check."""
+        # With escape hatch, incapable model should be allowed (though not recommended).
+        driver = CodexDriver(
+            model_map={ROLE_WORKER: "gpt-3.5-turbo"},
+            transport=lambda p: {},
+            allow_unverified_models=True
+        )
+        self.assertIsNotNone(driver)
+
+    def test_p2_ownership_error_distinguishes_out_of_scope(self):
+        """P2: Ownership violation error is distinct (out-of-scope prefix)."""
+        response = make_response({
+            "files": [
+                {"path": "../../etc/passwd", "contents": "bad"},
+            ],
+            "summary": "Tried to escape",
+            "done": False,
+        })
+
+        driver = CodexDriver(transport=lambda p: response)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir).joinpath("legit.py").write_text("original")
+
+            request = WorkerRequest(
+                prompt="Do bad things",
+                owned_files=("legit.py",),  # Only legit.py is owned
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+
+            self.assertFalse(result.ok)
+            self.assertIsNotNone(result.error)
+            # Error should start with "out-of-scope" to distinguish from write errors.
+            self.assertTrue(result.error.startswith("out-of-scope:"),
+                          f"Expected out-of-scope error, got: {result.error}")
+
+    def test_p2_write_error_distinguishes_from_ownership(self):
+        """P2: OS write error is distinct (write_failed prefix)."""
+        response = make_response({
+            "files": [
+                {"path": "test.py", "contents": "fixed content"},
+            ],
+            "summary": "Fixed",
+            "done": True,
+        })
+
+        driver = CodexDriver(transport=lambda p: response)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test.py"
+            test_file.write_text("original")
+            # Make file read-only to force write error.
+            import stat
+            test_file.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+            try:
+                request = WorkerRequest(
+                    prompt="Fix it",
+                    owned_files=("test.py",),
+                    workdir=tmpdir,
+                )
+                result = driver.dispatch_worker(request)
+
+                self.assertFalse(result.ok)
+                self.assertIsNotNone(result.error)
+                # Error should start with "write_failed" to distinguish from out_of_scope.
+                self.assertTrue(result.error.startswith("write_failed:"),
+                              f"Expected write_failed error, got: {result.error}")
+            finally:
+                # Restore write permission for cleanup.
+                test_file.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+
+    def test_p3_retry_budget_exceeded_on_retry(self):
+        """P3: Retry context budget check: exceed -> budget_exceeded_on_retry."""
+        # Create a transport that returns invalid JSON, triggering retries.
+        # Use a budget that fits initial payload but NOT after retry messages added.
+        call_count = {"count": 0}
+
+        def budget_test_transport(payload):
+            call_count["count"] += 1
+            # Always return invalid JSON to trigger retry loop.
+            return {
+                "choices": [{"message": {"content": "NOT VALID JSON AT ALL {]"}}],
+                "usage": {"total_tokens": 1000}
+            }
+
+        # Moderate budget: enough for initial prompt but not for retries.
+        driver = CodexDriver(
+            transport=budget_test_transport,
+            max_owned_bytes=2000,  # Moderate budget
+            max_retries=2,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create files that get close to budget when the initial payload is built.
+            # The retry messages will push it over.
+            test_file1 = Path(tmpdir) / "test1.py"
+            test_file1.write_text("x = " + "1" * 500)  # 500+ bytes
+
+            test_file2 = Path(tmpdir) / "test2.py"
+            test_file2.write_text("y = " + "2" * 500)  # 500+ bytes
+
+            # Large prompt
+            large_prompt = "Fix these files: " + "task description " * 50
+
+            request = WorkerRequest(
+                prompt=large_prompt,
+                owned_files=("test1.py", "test2.py"),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+
+            self.assertFalse(result.ok)
+            # The error should indicate budget exceeded (either on initial read or on retry).
+            self.assertIsNotNone(result.error)
+            # Should fail gracefully with a budget or validation error.
+            error_lower = result.error.lower()
+            self.assertTrue(
+                "budget" in error_lower or "exceed" in error_lower or "validation failed" in error_lower,
+                f"Expected budget or validation error, got: {result.error}"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

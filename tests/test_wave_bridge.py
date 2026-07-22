@@ -132,7 +132,7 @@ class TestBuildManifestItem(unittest.TestCase):
         self.assertEqual(result["prompt"], "Implement feature X")
 
         # Should add model and verificationTier from probe.
-        self.assertEqual(result["model"], "gpt-3.5-turbo")
+        self.assertEqual(result["model"], "gpt-4o-mini")  # Default worker model (P1 fix)
         self.assertEqual(result["verificationTier"], 2)
 
         # Should bake all four policy knobs (tier-2: stricter).
@@ -170,8 +170,8 @@ class TestBuildManifestItem(unittest.TestCase):
         # Verify the actual expected models
         self.assertEqual(claude_result["model"], "haiku",
                         msg="ClaudeCodeDriver worker should resolve to haiku")
-        self.assertEqual(codex_result["model"], "gpt-3.5-turbo",
-                        msg="CodexDriver worker should resolve to gpt-3.5-turbo")
+        self.assertEqual(codex_result["model"], "gpt-4o-mini",
+                        msg="CodexDriver worker should resolve to gpt-4o-mini (P1 fix)")
 
     def test_preserves_optional_fields(self):
         """build_manifest_item preserves optional fields like workDir, selfCheckCmd."""
@@ -190,7 +190,7 @@ class TestBuildManifestItem(unittest.TestCase):
         self.assertEqual(result["workDir"], "/tmp/work")
         self.assertEqual(result["selfCheckCmd"], "python -m pytest file.py")
         self.assertEqual(result["label"], "custom-label")
-        self.assertEqual(result["model"], "gpt-3.5-turbo")
+        self.assertEqual(result["model"], "gpt-4o-mini")  # Default worker model (P1 fix)
         self.assertEqual(result["verificationTier"], 2)
 
 
@@ -500,7 +500,50 @@ class TestDispatchItemOwnershipEnforcement(unittest.TestCase):
 
             # Driver should reject this and return ok=False.
             self.assertFalse(result["ok"])
-            self.assertIn("out-of-scope", result["error"].lower())
+            self.assertIn("out-of-scope", result["error"])
+
+
+class TestBuildManifestItemVerificationTierValidation(unittest.TestCase):
+    """P2: Verify build_manifest_item validates probe tier and includes driver name."""
+
+    def test_build_manifest_invalid_tier_raises_with_driver_name(self):
+        """P2: Invalid verification tier from driver -> ValueError with driver name."""
+        # Create a mock driver with an invalid tier (outside [1, 2, 3, 4])
+        class BadTierDriver(ad.AgentDriver):
+            name = "bad_tier_driver"
+
+            def probe_capabilities(self):
+                return ad.DriverCapabilities(
+                    name="bad_tier_driver",
+                    recommended_verification_tier=99  # Invalid!
+                )
+
+            def dispatch_worker(self, request):
+                return ad.WorkerResult(worker_id="x", ok=False)
+
+            def run_command(self, cmd, cwd=None, shell=False):
+                return ad.CommandResult(exit_code=1)
+
+            def worker_status(self, worker_id):
+                return ad.WorkerStatus(status="unknown")
+
+            def resolve_model(self, role):
+                return "test-model"
+
+        driver = BadTierDriver()
+        item = {
+            "slug": "test",
+            "ownsFiles": ["test.py"],
+            "prompt": "Fix it",
+        }
+
+        # Should raise ValueError with driver name included.
+        with self.assertRaises(ValueError) as ctx:
+            build_manifest_item(driver, item)
+
+        error_str = str(ctx.exception)
+        self.assertIn("bad_tier_driver", error_str, "Driver name should be in error")
+        self.assertIn("tier", error_str.lower(), "Should mention verification tier")
 
 
 if __name__ == "__main__":

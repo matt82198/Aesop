@@ -425,4 +425,4 @@ Every regex ground truth now includes two validation fields:
 
 Validation is machine-checked: `tests/test_frontier_slice.py::TestGroundTruthValidation::test_regex_ground_truth_has_exemplar_and_counter` asserts that every exemplar matches and every counter_example fails.
 
-**Offline accuracy with tightened patterns: 50.0% (10/20)** — represents the FakeTransport mock runner's performance against substance-demanding patterns. The mock runner is weak on semantic judgment and multi-step reasoning; this reflects its limited instruction-following, not a ceiling for real models.
+**Offline accuracy with tightened patterns: 55.0% (11/20)** — represents the FakeTransport mock runner's performance against substance-demanding patterns. The mock runner is weak on semantic judgment and multi-step reasoning; this reflects its limited instruction-following, not a ceiling for real models. (P2 gate-2 round-2 fix: broadened ft08 and ft15 synonym alternations to reduce false negatives.)
