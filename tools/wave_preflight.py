@@ -51,6 +51,12 @@ try:
 except ImportError:
     from tools import halt
 
+try:
+    from state_store.read_api import ReadAPI
+except ImportError:
+    # Fallback if state_store not accessible (shouldn't happen)
+    ReadAPI = None
+
 
 def load_config(root_dir=None):
     """Load aesop.config.json from root, return dict (or {} if absent/bad)."""
@@ -134,8 +140,10 @@ def parse_orchestrator_status_phase(status_json_path):
 def check_orchestrator_status_freshness(status_json_path, threshold_s):
     """Check if orchestrator-status.json is fresh based on updated_at timestamp.
 
+    Uses read_api if available; falls back to direct read if not.
+
     Args:
-        status_json_path: Path to orchestrator-status.json
+        status_json_path: Path to orchestrator-status.json (or state dir)
         threshold_s: Staleness threshold in seconds
 
     Returns:
@@ -144,6 +152,49 @@ def check_orchestrator_status_freshness(status_json_path, threshold_s):
           age_s (int): Age in seconds (0 if file missing/unreadable)
           info (str or None): Descriptive message if stale/missing, None if fresh
     """
+    # If ReadAPI is available, use it for the check
+    if ReadAPI is not None:
+        try:
+            # Determine state_dir: if status_json_path is the status file, use its parent
+            status_path = Path(status_json_path)
+            if status_path.name == "orchestrator-status.json":
+                state_dir = status_path.parent
+            else:
+                state_dir = status_path
+
+            api = ReadAPI(str(state_dir))
+            status = api.read_orchestrator_status()
+            if status is None:
+                return True, 0, "orchestrator-status.json file missing or unreadable"
+
+            # Check freshness
+            updated_at = status.get("updated_at")
+            if not updated_at:
+                return True, 0, "orchestrator-status.json missing updated_at field"
+
+            # Parse ISO 8601 timestamp
+            import datetime
+            normalized_ts = updated_at.replace("Z", "+00:00")
+            updated_dt = datetime.datetime.fromisoformat(normalized_ts)
+            timestamp = updated_dt.timestamp()
+
+            age_seconds = int(time.time()) - int(timestamp)
+
+            # Check for far-future timestamp (clock skew beyond tolerance)
+            if age_seconds < -120:
+                return True, 0, "orchestrator-status timestamp in future (clock skew)"
+
+            # Clamp small negative ages to 0
+            age_seconds = max(0, age_seconds)
+
+            if age_seconds >= threshold_s:
+                return True, age_seconds, f"orchestrator-status stale ({age_seconds}s >= {threshold_s}s)"
+
+            return False, age_seconds, None
+        except Exception as e:
+            return True, 0, f"orchestrator-status.json unreadable: {e}"
+
+    # Fallback to direct file read if ReadAPI not available
     if not status_json_path.exists():
         return True, 0, "orchestrator-status.json file missing"
 

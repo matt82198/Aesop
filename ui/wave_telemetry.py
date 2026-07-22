@@ -3,11 +3,11 @@
 Wave telemetry collector — current wave phase, cost metrics, and blockers.
 
 Reads state at CALL TIME (not import time) to ensure test isolation.
-State sources:
-  - state/orchestrator-status.json: current phase and activity (preferred, <24h)
+State sources (via read_api facade):
+  - orchestrator-status: current phase and activity (preferred, <24h)
   - STATE.md: current phase and wave info (fallback if status file missing/stale)
   - AUDIT-BACKLOG.md: top blocker via parse
-  - state/ledger/OUTCOMES-LEDGER.md: cost data (re-uses cost.py logic)
+  - ledger: cost data (re-uses cost.py logic)
 """
 import json
 import re
@@ -17,24 +17,24 @@ from pathlib import Path
 
 import config
 import cost
+from state_store.read_api import ReadAPI
 
 
 def _read_orchestrator_status():
-    """Read orchestrator-status.json if fresh (<24h old).
+    """Read orchestrator-status.json if fresh (<24h old) using the read_api.
 
     Returns:
         tuple: (phase_str, activity_str, source_str) or (None, None, None) if missing/stale/malformed
     """
     try:
-        status_file = config.ORCH_STATUS_FILE
-        if not status_file.exists():
+        # Use read_api to read orchestrator status
+        api = ReadAPI(str(config.STATE_DIR))
+        status = api.read_orchestrator_status()
+        if status is None:
             return None, None, None
 
-        content = status_file.read_text(encoding='utf-8')
-        data = json.loads(content)
-
-        # Extract updated_at and check freshness
-        updated_at_str = data.get("updated_at")
+        # Check freshness (24h threshold)
+        updated_at_str = status.get("updated_at")
         if not updated_at_str:
             return None, None, None
 
@@ -53,8 +53,8 @@ def _read_orchestrator_status():
             return None, None, None
 
         # Extract phase and activity
-        phase = data.get("phase", "").lower()
-        activity = data.get("activity", "").lower()
+        phase = status.get("phase", "").lower()
+        activity = status.get("activity", "").lower()
 
         if not phase:
             return None, None, None
@@ -225,12 +225,12 @@ def _get_wave_start_time():
         datetime or None: wave start time in UTC, or None if not available
     """
     try:
-        status_file = config.ORCH_STATUS_FILE
-        if status_file.exists():
-            content = status_file.read_text(encoding='utf-8')
-            data = json.loads(content)
+        # Use read_api to read orchestrator status
+        api = ReadAPI(str(config.STATE_DIR))
+        status = api.read_orchestrator_status()
+        if status is not None:
             # Check if there's a wave_start_time or started_at field
-            start_time_str = data.get("wave_start_time") or data.get("started_at")
+            start_time_str = status.get("wave_start_time") or status.get("started_at")
             if start_time_str:
                 start_time_str_normalized = start_time_str.replace("Z", "+00:00")
                 return datetime.fromisoformat(start_time_str_normalized)
