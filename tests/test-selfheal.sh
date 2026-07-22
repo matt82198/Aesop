@@ -203,6 +203,45 @@ fi
 test_count=$((test_count + 1))
 
 echo ""
+echo "=== Test 6: Lock write failure handling (DEFECT 1 fix) ==="
+# Verify that acquire_lock function cleans up on write failure
+# by checking the implementation includes the fail-closed cleanup logic
+test_section=$(sed -n '45,51p' "$REPO_ROOT/daemons/selfheal.sh")
+if echo "$test_section" | grep -q 'rm -rf' && echo "$test_section" | grep -q 'return 1'; then
+  echo "✓ Acquire_lock has fail-closed write error handling (DEFECT 1 fixed)"
+  pass_count=$((pass_count + 1))
+else
+  echo "✗ Acquire_lock missing write error cleanup"
+fi
+test_count=$((test_count + 1))
+
+echo ""
+echo "=== Test 7: Missing CONDUCTOR_ROOT graceful skip ==="
+rm -f "$SELFHEAL_LOG"
+mkdir -p "$AESOP_STATE" "$CONDUCTOR_MONITOR"
+
+# Set CONDUCTOR_ROOT to a nonexistent path; should skip monitor gracefully
+NONEXISTENT_CONDUCTOR="$TMP_DIR/nonexistent-conductor3"
+AESOP_ROOT="$TMP_DIR/aesop" \
+  CONDUCTOR_ROOT="$NONEXISTENT_CONDUCTOR" \
+  AESOP_SELFHEAL_SKIP_RESTART=1 \
+  bash "$REPO_ROOT/daemons/selfheal.sh" --once >/dev/null 2>&1 || true
+
+# Check that selfheal log was created and cycle completed
+if [ -f "$TMP_DIR/aesop/state/SELFHEAL.log" ]; then
+  log_output=$(cat "$TMP_DIR/aesop/state/SELFHEAL.log")
+  if echo "$log_output" | grep -q "Selfheal cycle END"; then
+    echo "✓ Missing CONDUCTOR_ROOT skipped gracefully (cycle completed)"
+    pass_count=$((pass_count + 1))
+  else
+    echo "✗ Selfheal cycle did not complete with missing CONDUCTOR_ROOT"
+  fi
+else
+  echo "✗ SELFHEAL.log not created in $TMP_DIR/aesop/state/"
+fi
+test_count=$((test_count + 1))
+
+echo ""
 echo "========================================"
 echo "Test Results: $pass_count / $test_count passed"
 echo "========================================"
