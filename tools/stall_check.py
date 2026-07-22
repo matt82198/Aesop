@@ -73,9 +73,12 @@ def verify_path_containment(resolved_path, base_dir):
     Returns:
         True if path is safely contained, False if escape attempted
     """
-    resolved_base = base_dir.resolve()
+    # Resolve BOTH sides: an unresolved 8.3 short-form candidate compared
+    # against a resolved long-form base raises ValueError and reads as an
+    # escape (windows-runner regression: stale+active reported ok).
+    resolved_base = Path(base_dir).resolve()
     try:
-        resolved_path.relative_to(resolved_base)
+        Path(resolved_path).resolve().relative_to(resolved_base)
         return True
     except ValueError:
         # Path is outside base_dir

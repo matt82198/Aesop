@@ -65,6 +65,21 @@ class TestEodSweep(unittest.TestCase):
             capture_output=True
         )
 
+    def _diag(self, result, repo=None):
+        """Forensics for runner-only failures (windows job red while local
+        green under every reproduced condition incl. full short-TMPDIR):
+        surface exactly what the tool and git saw."""
+        import subprocess as _sp
+        parts = ["rc=" + str(result.returncode),
+                 "STDOUT<<" + (result.stdout or "")[-800:] + ">>",
+                 "STDERR<<" + (result.stderr or "")[-400:] + ">>"]
+        if repo is not None:
+            st = _sp.run(["git", "status", "--porcelain"], cwd=str(repo),
+                         capture_output=True, text=True)
+            parts.append("git-status rc=" + str(st.returncode)
+                         + " out<<" + st.stdout[:200] + ">> err<<" + st.stderr[:200] + ">>")
+        return " | ".join(parts)
+
     def _run_eod_sweep(self, repos=None, readonly_repos=None, fix_push=False,
                        buildlog=None, timestamp=None, env_overrides=None):
         """Run eod_sweep.py with specified repos."""
@@ -127,7 +142,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "README.md").write_text("# Modified\n")
 
         result = self._run_eod_sweep([test_repo])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
         self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
         self.assertIn("dirty working tree", result.stdout)
 
@@ -140,7 +155,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "untracked.txt").write_text("content\n")
 
         result = self._run_eod_sweep([test_repo])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
         self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
         self.assertIn("untracked files", result.stdout)
 
@@ -193,7 +208,7 @@ class TestEodSweep(unittest.TestCase):
         (repo2 / "README.md").write_text("# Modified\n")
 
         result = self._run_eod_sweep([repo1, repo2])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
         self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
 
     def test_output_format_safe(self):
@@ -214,7 +229,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "untracked.txt").write_text("content\n")  # untracked
 
         result = self._run_eod_sweep([test_repo])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
         self.assertIn("AT-RISK", result.stdout)
         # Should mention findings count
         self.assertIn("findings", result.stdout)
@@ -236,7 +251,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "README.md").write_text("# Modified\n")
 
         result = self._run_eod_sweep([test_repo])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
 
     def test_readonly_repos_not_modified(self):
         """Test that readonly-repos flag prevents modifications."""
@@ -287,7 +302,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "README.md").write_text("# Modified\n")
 
         result = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
 
         # Verify BUILDLOG was created and contains the AT-RISK verdict
         self.assertTrue(buildlog_path.exists())
