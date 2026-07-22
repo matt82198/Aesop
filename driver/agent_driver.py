@@ -216,8 +216,13 @@ class WorkerResult:
 
     `structured` is the parsed/validated result object (may be None if the
     backend produced only free text). `files_written` records what the worker
-    (or the orchestrator on its behalf) changed, for verification. `ok` is the
-    single boolean the wave loop branches on.
+    (or the orchestrator on its behalf) changed, for verification. `ok` indicates
+    the worker dispatched and produced valid, ownership-clean output. It NEVER
+    implies tests passed — verification is the caller's job (see wave_bridge, which
+    sets `verified` only from run_command exit 0). `verified` is an optional field
+    used by the orchestrator to track whether this result has been independently
+    verified (e.g., via test exit code). The bridge is the ONLY place that sets
+    verified=True, and only when a test passes (exit 0).
     """
 
     worker_id: str
@@ -228,6 +233,7 @@ class WorkerResult:
     files_written: Tuple[str, ...] = field(default_factory=tuple)
     tokens_spent: Optional[int] = None   # None => backend does not report spend
     error: Optional[str] = None
+    verified: Optional[bool] = None      # None => not yet verified; True/False set by orchestrator (e.g., wave_bridge)
 
 
 @dataclass

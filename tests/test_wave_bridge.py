@@ -87,8 +87,8 @@ def make_response(patch_dict, total_tokens=42):
 class TestBuildManifestItem(unittest.TestCase):
     """Test build_manifest_item with Claude and Codex drivers."""
 
-    def test_claude_driver_yields_tier1_and_haiku(self):
-        """Claude driver probe -> tier 1 + haiku model."""
+    def test_claude_driver_yields_tier1_and_haiku_with_all_policy_knobs(self):
+        """Claude driver probe -> tier 1 + haiku model + tier-1 policy knobs."""
         driver = ClaudeCodeDriver()
         item = {
             "slug": "fix-test",
@@ -109,8 +109,14 @@ class TestBuildManifestItem(unittest.TestCase):
         self.assertEqual(result["model"], "haiku")
         self.assertEqual(result["verificationTier"], 1)
 
-    def test_codex_driver_yields_tier2_and_gpt35(self):
-        """Codex driver probe -> tier 2 + gpt-3.5-turbo model."""
+        # Should bake all four policy knobs (tier-1 defaults).
+        self.assertEqual(result["repairCap"], 1)
+        self.assertFalse(result["requireAdversarialReview"])
+        self.assertEqual(result["spotCheckFrac"], 0.10)
+        self.assertFalse(result["validateAllJson"])
+
+    def test_codex_driver_yields_tier2_and_gpt35_with_tier2_policy(self):
+        """Codex driver probe -> tier 2 + gpt-3.5-turbo model + tier-2 policy knobs."""
         driver = CodexDriver()
         item = {
             "slug": "codex-task",
@@ -128,6 +134,12 @@ class TestBuildManifestItem(unittest.TestCase):
         # Should add model and verificationTier from probe.
         self.assertEqual(result["model"], "gpt-3.5-turbo")
         self.assertEqual(result["verificationTier"], 2)
+
+        # Should bake all four policy knobs (tier-2: stricter).
+        self.assertEqual(result["repairCap"], 2)
+        self.assertTrue(result["requireAdversarialReview"])
+        self.assertEqual(result["spotCheckFrac"], 0.50)
+        self.assertTrue(result["validateAllJson"])
 
     def test_preserves_optional_fields(self):
         """build_manifest_item preserves optional fields like workDir, selfCheckCmd."""

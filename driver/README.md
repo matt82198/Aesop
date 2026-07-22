@@ -148,12 +148,15 @@ for driver in (ClaudeCodeDriver(), CodexDriver()):
     print(caps.summary())              # ASCII one-liner for logs/dashboards
     print("worker model ->", driver.resolve_model("worker"))
     
-    # Map the backend's verification tier to wave manifest settings.
-    # The wave template mirrors this mapping exactly (JS function tierPolicy).
+    # The verification policy is RESOLVED in Python (verification_policy function)
+    # and baked into the manifest by build_manifest_item. JS consumes these literal fields;
+    # it does NOT recompute the policy (that was the drift trap).
     policy = verification_policy(caps)
     print("verification tier:", caps.recommended_verification_tier)
     print("  repair_cap:", policy['repair_cap'])
     print("  require_adversarial_review:", policy['require_adversarial_review'])
+    print("  spot_check_frac:", policy['spot_check_frac'])
+    print("  validate_all_json:", policy['validate_all_json'])
 ```
 
 ### Running other models (OpenAI-compatible backends)
@@ -325,26 +328,38 @@ made. Tests can inject a `FakeTransport` to avoid network entirely.
 
 ### Wiring verification tier into a wave manifest
 
-When building a manifest for `wave-flat-dispatch.template.mjs`, include the
-backend's `verificationTier` to enforce its policy:
+When building a manifest for `wave-flat-dispatch.template.mjs`, the backend's
+verification policy is RESOLVED in Python (via `build_manifest_item`) and baked
+into the manifest as literal fields:
 
 ```python
-caps = driver.probe_capabilities()
-policy = verification_policy(caps)
+from wave_bridge import build_manifest_item
 
-manifest = {
-    "verificationTier": caps.recommended_verification_tier,
-    # ... other manifest fields
-    # When verificationTier >= 2, the template will:
-    #   - Force adversarialReview=true (overrides manifest setting)
-    #   - Set repairCap from tier policy (overrides manifest repairCap)
-    # Tier 1 (or absent) uses manifest knobs as-is (backward-compatible).
+item = {
+    "slug": "fix-test",
+    "ownsFiles": ["test.py"],
+    "prompt": "Fix the test",
+    "testCmd": "python -m unittest test",
 }
+
+# build_manifest_item resolves ALL FOUR policy knobs from the driver's tier
+# and includes them in the manifest as literal fields (no JS recomputation).
+manifest_item = build_manifest_item(driver, item)
+
+# Result includes:
+#   "model": "haiku"  (from driver.resolve_model)
+#   "verificationTier": 1  (from driver.probe_capabilities)
+#   "repairCap": 1  (from verification_policy)
+#   "requireAdversarialReview": false  (from verification_policy)
+#   "spotCheckFrac": 0.10  (from verification_policy)
+#   "validateAllJson": false  (from verification_policy)
 ```
 
-The wave template enforces the same `tierPolicy()` mapping (in pure JS) so the
-Python driver and JS wave always agree. See `skills/buildsystem/wave-flat-dispatch.template.mjs`
-for the complete mapping and template arguments.
+The wave template **consumes these literal fields directly** — it does NOT
+recompute the policy. This eliminates the JS/Python drift trap: the single source
+of truth is Python's `verification_policy()` function; JS just uses the manifest
+values. See `skills/buildsystem/wave-flat-dispatch.template.mjs` for the complete
+template arguments and consumption logic.
 
 Run the contract tests:
 

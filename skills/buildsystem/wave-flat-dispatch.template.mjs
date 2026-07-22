@@ -97,30 +97,15 @@ const HINT = A.contractHint || `Read the shared contract/spec files in ${WORK} b
 const CEILING = A.ceiling ? { tokens: A.ceiling.tokens, recheckBrake: A.ceiling.recheckBrake } : null
 const TIMEBOX_MINUTES = typeof A.agentTimeboxNote === 'number' ? A.agentTimeboxNote : null
 
-// Verification tier policy: pure function mapping tier -> {repair_cap, require_adversarial_review}.
-// source of truth: driver/verification_policy.py — JS numbers MUST match Python exactly.
-// See spike-multitool-portability.md Section 4.3 for the design rationale.
-function tierPolicy(tier) {
-  tier = typeof tier === 'number' ? tier : 1
-  if (tier === 1) {
-    return { repair_cap: 1, require_adversarial_review: false }
-  } else if (tier === 2) {
-    return { repair_cap: 2, require_adversarial_review: true }
-  } else if (tier === 3) {
-    return { repair_cap: 2, require_adversarial_review: true }
-  } else if (tier === 4) {
-    return { repair_cap: 3, require_adversarial_review: true }
-  } else {
-    log(`WARNING: unknown verification tier ${tier}, defaulting to tier 1`)
-    return { repair_cap: 1, require_adversarial_review: false }
-  }
-}
-
-// Parse verification tier (default 1). When tier >= 2, override manifest knobs with tier policy.
+// Verification policy: resolved in Python, consumed in JS (no recomputation).
+// source of truth: driver/verification_policy.py — JS consumes them directly: the resolved literal
+// manifest fields (repairCap, requireAdversarialReview, spotCheckFrac, validateAllJson) baked by
+// build_manifest_item. The policy is resolved ONCE in Python and carried as literal manifest fields,
+// so there is no drift and no recomputation here. When fields are absent (legacy/tier-1 path),
+// defaults maintain byte-identical behavior.
 const VERIFICATION_TIER = typeof A.verificationTier === 'number' ? A.verificationTier : 1
-const tierPolicySetting = tierPolicy(VERIFICATION_TIER)
-const CAP = VERIFICATION_TIER >= 2 ? tierPolicySetting.repair_cap : (typeof A.repairCap === 'number' ? A.repairCap : 1)
-const ADVERSARIAL_REVIEW = VERIFICATION_TIER >= 2 ? true : !!A.adversarialReview
+const CAP = typeof A.repairCap === 'number' ? A.repairCap : 1
+const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false
 // LEVER 2 (wall-clock): adversarialReview blocking vs concurrent-note. Default 'blocking' = current inline
 // behavior (findings produced before return). 'concurrent-note' defers the refutation so the orchestrator
 // can kick CI immediately and run adversarialReview in parallel, gating MERGE (not CI) on contractFindings.
