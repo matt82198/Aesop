@@ -12,7 +12,7 @@
 - **scan/** — Example IOC/secret scanner template — read scan/CLAUDE.md
 - **tools/** — Build utilities (Python/shell, secret scanning, verification gates) — read tools/CLAUDE.md
 - **hooks/** — Git pre-push policy enforcement (branch protection, secrets) — read hooks/CLAUDE.md
-- **driver/** — AgentDriver backend-portability seam (multi-model: Claude Code reference + Codex stub) — read driver/CLAUDE.md
+- **driver/** — AgentDriver multi-model seam (Claude Code, Codex, OpenAI-compatible backends; wave bridge for verification routing) — read driver/CLAUDE.md
 - **bin/** — CLI scaffolder (Node.js entry point) — read bin/CLAUDE.md
 - **ui/** — Web dashboard (SSE, CSRF protection, collector thread) — read ui/CLAUDE.md
 - **state_store/** — Event-sourced state layer (SQLite WAL, projections) — read state_store/CLAUDE.md
