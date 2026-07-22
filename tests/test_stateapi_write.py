@@ -658,7 +658,7 @@ class WriteAPIProjectionRecoveryTest(unittest.TestCase):
         self.assertIn(item1["id"], recovered_ids)
 
     def test_rebuild_projection_bypasses_conflict_check(self):
-        """rebuild_projection(force=True) bypasses OCC check for recovery."""
+        """rebuild_projection() bypasses OCC check for recovery."""
         # Create initial state
         item1 = self.api.tracker_append_item({"title": "Item 1"})
         tracker_file = self.state_dir / "tracker.json"
@@ -685,8 +685,8 @@ class WriteAPIProjectionRecoveryTest(unittest.TestCase):
         tracker_data["items"] = [external_item]
         tracker_file.write_text(json.dumps(tracker_data, indent=2), encoding="utf-8")
 
-        # rebuild_projection(force=True) should still work (bypass conflict check)
-        self.api.rebuild_projection(force=True)
+        # rebuild_projection() should work (always bypasses conflict check for recovery)
+        self.api.rebuild_projection()
 
         # Both items should be in projection now
         recovered_tracker = json.loads(tracker_file.read_text(encoding="utf-8"))

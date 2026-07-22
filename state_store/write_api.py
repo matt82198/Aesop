@@ -90,19 +90,6 @@ class WriteAPI:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.state_dir / "tracker_events.db")
         self.tracker_file = self.state_dir / "tracker.json"
-        # Track the last projection hash this instance wrote (or read at init)
-        # Used for OCC conflict detection
-        self._tracked_projection_hash: str | None = None
-        # Capture initial on-disk state for OCC baseline
-        if self.tracker_file.exists():
-            try:
-                current_on_disk = json.loads(
-                    self.tracker_file.read_text(encoding="utf-8")
-                )
-                self._tracked_projection_hash = self._compute_content_hash(current_on_disk)
-            except Exception:
-                # Corrupt file; no baseline
-                self._tracked_projection_hash = None
 
     def tracker_update_status(
         self,
@@ -282,25 +269,21 @@ class WriteAPI:
 
         return created_items[item_id]
 
-    def rebuild_projection(self, force: bool = False) -> None:
+    def rebuild_projection(self) -> None:
         """Rebuild tracker.json from the event store.
 
-        Force-renders the projection from events, bypassing OCC conflict detection.
+        Renders the projection from events, bypassing OCC conflict detection.
         Use this to recover from orphaned events (event in store, missing from projection).
 
         The projection is derived from the event store, so rebuilding naturally recovers
         prior events. This is the self-healing recovery contract: if projection becomes
         stale or corrupted, rebuild_projection() restores consistency.
 
-        Args:
-            force: If True, bypass OCC check (always required for recovery). This should
-                  only be called explicitly by users doing disaster recovery.
-
         Raises:
             WriteConflict: If atomic write fails (disk write error, not conflict).
         """
         store = EventStore(self.db_path)
-        # Bypass OCC check by passing force=True
+        # Bypass OCC check with force=True (recovery always bypasses conflict detection)
         self._render_tracker_atomic(store, start_disk_hash=None, force=True)
 
     # --- Private helpers ---
@@ -458,9 +441,6 @@ class WriteAPI:
                 # Atomic rename (fails if target exists on some systems, but Python's
                 # os.replace is cross-platform atomic where the OS supports it)
                 os.replace(str(temp_path), str(self.tracker_file))
-
-                # Success: update tracked hash for next operation
-                self._tracked_projection_hash = new_hash
 
             except Exception:
                 # Ensure fd is closed on error
