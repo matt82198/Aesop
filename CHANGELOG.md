@@ -5,7 +5,9 @@ All notable changes to Aesop are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-21
+
+Minor release shipping multi-model orchestration portability and adaptive verification safety.
 
 ### Added
 - **AgentDriver Phase 1-3 shipping** (wave-32+): Complete multi-model driver abstraction with three production drivers — Claude Code reference adapter, OpenAI-compatible backend (Ollama, OpenRouter, etc.), and Phase 3 wave bridge enabling any backend to drive coding tasks end-to-end with verified-honest verification tiers.
