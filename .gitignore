@@ -22,6 +22,8 @@ ledger/
 # Exceptions: committed benchmark ground truth and sampled task sets
 !bench/tasks_sampled_judgment.jsonl
 !bench/ground_truth_sampled.jsonl
+!bench/tasks_frontier.jsonl
+!bench/ground_truth_frontier.jsonl
 
 # System artifacts
 .git/

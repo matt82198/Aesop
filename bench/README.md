@@ -337,3 +337,68 @@ Cost:     total_tokens=512 avg_tokens/task=42.7 total_latency_ms=1450.5 avg_late
 This latency data is strictly observational — it describes *your* execution
 environment (network, model load, time of day, etc.), not the model itself.
 Do not interpret a single run's latency as a model property.
+
+## Frontier discrimination slice (Phase 2)
+
+**Goal:** Test whether the benchmark can *discriminate* between model tiers
+(Haiku vs Opus) or whether it's ceiling-bound (both models score ~40/40).
+
+The existing 12-task set scored Haiku 39/39 vs Opus 38/39 — essentially no
+separation. The frontier slice builds a harder task set (~20 tasks) designed to
+expose tier differences:
+
+- **Multi-step reasoning** (SQL refactoring, boolean logic, configuration merging)
+- **Subtle defect detection** (race conditions, type coercion, format-string vulns)
+- **Long-context needle** (find contradictions in 2500-word spec)
+- **Semantic judgment** (instruction conflict resolution, state machine safety)
+
+Each task carries a `discrimination_rationale` field explaining why a weaker model
+should struggle (e.g., "Requires understanding TOCTOU race conditions, which Haiku
+often misses; Opus catches them precisely").
+
+### Usage
+
+Offline (zero-cost, canned responses for validation):
+```bash
+python bench/frontier_slice.py --mode offline
+```
+
+Live (against real models, cost-gated):
+```bash
+# Estimate cost, then exit without --confirm-spend
+python bench/frontier_slice.py --mode live --model claude-3-5-opus-20241022
+
+# Actually run (requires ANTHROPIC_API_KEY + --confirm-spend)
+python bench/frontier_slice.py --mode live --model claude-3-5-opus-20241022 --confirm-spend
+python bench/frontier_slice.py --mode live --model claude-3-5-haiku-20241022 --confirm-spend
+```
+
+### Output format
+
+Same as the main benchmark: `tasks_frontier.jsonl` (prompt + discriminator rationale),
+`ground_truth_frontier.jsonl` (id + expected/expected_regex), and `frontier_slice.py`
+(runner, offline/live modes, cost gating).
+
+Scoring is deterministic: regex or exact-match against ground truth. No model in the
+scoring loop.
+
+### Expected results
+
+- **Haiku**: ~50–70% accuracy (ceiling on multi-step reasoning, misses subtle defects)
+- **Opus**: ~80–95% accuracy (handles most judgment tasks, catches edge cases)
+
+If both models score similarly on this slice, the frontier slice itself needs revision
+(tasks were not hard enough). If a large gap appears, that gap is evidence the
+benchmark can measure tier separation.
+
+### Limitations
+
+- Small N (~20 tasks); a few percentage points is noise, not signal
+- Task selection bias: hand-authored for "hard" not sampled from real workflows
+- Scoring cannot credit "right for wrong reason" — semantic judgment ground truth
+  must be explicit (not just test-case checking)
+- No safety/adversarial robustness measurement
+
+This phase is validation infrastructure, not a final verdict. The benchmark is now
+measurable; the question "is Haiku sufficient for fleet work?" remains open pending
+live runs and result analysis.
