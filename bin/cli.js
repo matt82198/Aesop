@@ -11,8 +11,8 @@ const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
 
-// Check for runtime subcommands (doctor, watch, dash, status, fleet, health-score)
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health-score'];
+// Check for runtime subcommands (doctor, watch, dash, status, fleet, health-score, reproduce)
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health-score', 'reproduce'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
 
 if (isRuntimeCommand) {
@@ -22,7 +22,8 @@ if (isRuntimeCommand) {
     'dash': '../tools/dash.js',
     'status': '../tools/status.js',
     'fleet': '../tools/fleet.js',
-    'health-score': '../tools/health-score.js'
+    'health-score': '../tools/health-score.js',
+    'reproduce': '../tools/reproduce.js'
   };
   // Load and run the appropriate runtime module
   // These modules run async code that sets process.exitCode and will cause Node to exit
@@ -154,6 +155,7 @@ Usage:
   npx @matt82198/aesop dash
   npx @matt82198/aesop status
   npx @matt82198/aesop fleet
+  npx @matt82198/aesop reproduce
 
 Commands:
   doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port)
@@ -161,6 +163,7 @@ Commands:
   dash                    Launch the web dashboard (spawns python3 ui/serve.py or python fallback)
   status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
+  reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
 Arguments:
@@ -181,6 +184,7 @@ Examples:
   npx @matt82198/aesop dash                                 # Launch web dashboard (default localhost:8770)
   npx @matt82198/aesop status                               # Show fleet status (heartbeats, port, git)
   npx @matt82198/aesop fleet                                # Show fleet snapshot (JSON agents, heartbeats, tracker, orchestrator)
+  npx @matt82198/aesop reproduce                            # Run offline verification suite (full repo tests or installed checks)
   npx @matt82198/aesop                                      # Creates ./aesop-fleet/ with template
   npx @matt82198/aesop my-fleet                             # Creates ./my-fleet/ with template
   npx @matt82198/aesop wizard                               # Interactive onboarding (60-second setup)
