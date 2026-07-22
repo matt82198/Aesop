@@ -33,6 +33,7 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 
 ## Module Layout
 - **read_api.py** — `ReadAPI` facade over state surfaces; read-only. Delegates to existing parsers: tracker snapshot, orchestrator status, heartbeat freshness via `tools/common`, ledger rows via `tools/fleet_ledger`. Never forks logic.
+- **write_api.py** — `WriteAPI(state_dir)` facade for tracker mutations (WS4b: state consolidation write path). Exposes two operations: `tracker_update_status(item_id, new_status, note)` and `tracker_append_item(item_dict)`. Both append events atomically AND update tracker.json projection (tempfile + os.replace). Fail-closed: event append failure blocks projection write; projection write conflict raises `WriteConflict` (no silent overwrite).
 - **store.py** — `EventStore(db_path)`: append-only SQLite log. `append(stream, type, payload, actor, expected_version=None)` returns new version or raises `ConcurrencyConflict` on OCC mismatch; `read(stream)` / `read_all()` return event rows. Corrupt JSON payloads are skipped with stderr log; snapshot read/write for tail-replay optimization.
 - **__init__.py** — Public exports: `EventStore`, `StateAPI`, `ConcurrencyConflict`, `project_tracker`, `export_tracker`, `ingest_tracker_json`.
 - **projections.py** — `project_tracker(events)`: folds `item_created` / `item_updated` / `item_archived` into the full `tracker.json` shape, preserving first-seen order.
@@ -59,6 +60,16 @@ Run from repo root:
 - `python -m unittest tests.test_state_store_hardening` — Corrupt event handling, input validation.
 - `python -m unittest tests.test_state_store_snapshots` — Snapshot read/write and tail-replay.
 - `npm run test:py` — All Python test suites (includes state_store).
+
+## Agent Lifecycle Events (Wave-29)
+
+**New event types** (additive, appended by UI collectors on agent phase changes):
+- `agent_dispatched` — payload `{agent_id, timestamp}` — marks agent dispatch start
+- `agent_working` — payload `{agent_id, timestamp}` — marks work in progress (thinking/tool-use)
+- `agent_done` — payload `{agent_id, timestamp}` — marks completion
+- `agent_stalled` — payload `{agent_id, timestamp}` — marks stall/error detected
+
+**Projection**: `project_agent_lifecycle(events)` folds these into per-agent lifecycle state with transition history (state + timestamp). Enables Activity view to show agents entering/leaving states over time.
 
 ## Next (cutover, follow-up — NOT this increment)
 **Phase 1 (early)**: Add `orchestrator_status` stream (orchestrator_status → `append("orchestrator_status", "phase_changed", ...)`, read from `project("orchestrator_status")` on recovery).

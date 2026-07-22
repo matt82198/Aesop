@@ -478,6 +478,19 @@ def run_wave(
       - Any exception in an item's dispatch -> verified=False for that item.
       - Cost ceiling: if check() says exceeded, abort immediately with no more dispatch.
       - Disjoint ownership: any overlap -> abort with structured error, no dispatch.
+
+    Explicit-repo preflight (deprecate expectTopLevel default):
+      When git shipping is configured AND a manifest contains ANY item with an
+      explicit 'repo' field, items WITHOUT 'repo' are REJECTED at preflight
+      with a clear error. This prevents silent mismatches caused by mixed
+      manifests (some items use expectTopLevel default, others are explicit).
+
+      Pure-legacy manifests (NO item has 'repo') keep the expectTopLevel
+      default unchanged (backward compat). Fully-explicit manifests (ALL items
+      have 'repo') work unchanged. Mixed manifests are fail-closed.
+
+      Error: abort_reason="mixed_repo_manifest", with items_with_repo and
+      items_without_repo counts in the result.
     """
     result = {
         "preflight_ok": False,
@@ -524,6 +537,34 @@ def run_wave(
     if git is not None:
         default_repo = git.get("expectTopLevel")
 
+    # EXPLICIT-REPO PREFLIGHT: Detect mixed manifests (some items with repo, some without).
+    # Contract:
+    #  - Pure-legacy manifest (NO item has repo) → use expectTopLevel default (backward compat)
+    #  - Fully-explicit manifest (ALL items have repo) → use explicit repos (unchanged)
+    #  - Mixed manifest (SOME items have repo) → REJECT with clear error (fail-closed)
+    #
+    # This ensures:
+    #  1. Legacy manifests continue to work (no breaking change)
+    #  2. Explicit manifests work correctly (no confusion)
+    #  3. Mixed manifests are caught early, preventing subtle bugs
+    if git is not None:
+        # Count items with and without explicit repo field
+        items_with_repo = sum(1 for item in items if item.get("repo"))
+        items_without_repo = len(items) - items_with_repo
+
+        if items_with_repo > 0 and items_without_repo > 0:
+            # Mixed manifest: some items have repo, some don't
+            result["aborted"] = True
+            result["abort_reason"] = "mixed_repo_manifest"
+            result["error"] = (
+                "mixed manifest detected: some items have explicit 'repo' field, others don't. "
+                "Manifests must be fully explicit (all items have 'repo') or fully implicit (none have 'repo'). "
+                "To fix: either add 'repo' field to all items or remove it from all items (use expectTopLevel instead)."
+            )
+            result["items_with_repo"] = items_with_repo
+            result["items_without_repo"] = items_without_repo
+            return result
+
     # Validate and resolve all repos; populate default for missing items (only if shipping).
     repo_paths = set()
 
@@ -533,7 +574,7 @@ def run_wave(
         if not repo:
             # No explicit repo field.
             if git is not None:
-                # Ship phase is configured; must have a default or explicit repo.
+                # Ship phase is configured; must have a default (repo field must be missing on ALL items, per mixed check above).
                 if default_repo:
                     repo = default_repo
                 else:

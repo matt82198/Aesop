@@ -16,6 +16,7 @@
     "tools/orchestrator_status.py@status-json",
     "tools/power_selftest.py@monitor-hb",
     "tools/power_selftest.py@watchdog-hb",
+    "tools/verify_cost_panel.py@ledger-md",
     "tools/verify_dash.py@ledger-md",
     "tools/verify_dash.py@status-json",
     "tools/verify_dash.py@tracker-json",

@@ -1057,6 +1057,159 @@ class TestGitToplevelGuard(unittest.TestCase):
         self.assertEqual(result["abort_reason"], "repo_field_missing_no_default")
 
 
+class TestExplicitRepoMixedManifestPreflight(unittest.TestCase):
+    """Test explicit-repo preflight: mixed manifest rejection."""
+
+    def test_pure_legacy_manifest_no_repo(self):
+        """Pure-legacy manifest (NO items have repo) should use expectTopLevel (backward compat)."""
+        driver = FakeDriver()
+        temp_repo = tempfile.mkdtemp(prefix="wave-test-repo-")
+
+        try:
+            manifest = {
+                "items": [
+                    {
+                        "slug": "item-1",
+                        "ownsFiles": ["file1.py"],
+                        "prompt": "Fix 1",
+                        "testCmd": "true",
+                        "workDir": ".",
+                        # NO repo field
+                    },
+                    {
+                        "slug": "item-2",
+                        "ownsFiles": ["file2.py"],
+                        "prompt": "Fix 2",
+                        "testCmd": "true",
+                        "workDir": ".",
+                        # NO repo field
+                    },
+                ]
+            }
+
+            git_config = {"expectTopLevel": temp_repo}
+            result = run_wave(driver, manifest, git=git_config)
+
+            # Should NOT abort at preflight; pure-legacy is valid (backward compat)
+            self.assertNotEqual(result["abort_reason"], "mixed_repo_manifest",
+                              "pure-legacy manifest should not trigger mixed_repo_manifest abort")
+        finally:
+            shutil.rmtree(temp_repo, ignore_errors=True)
+
+    def test_fully_explicit_manifest_all_repo(self):
+        """Fully-explicit manifest (ALL items have repo) should work unchanged."""
+        driver = FakeDriver()
+        temp_repo1 = tempfile.mkdtemp(prefix="wave-test-repo1-")
+        temp_repo2 = tempfile.mkdtemp(prefix="wave-test-repo2-")
+
+        try:
+            manifest = {
+                "items": [
+                    {
+                        "slug": "item-1",
+                        "ownsFiles": ["file1.py"],
+                        "prompt": "Fix 1",
+                        "testCmd": "true",
+                        "workDir": ".",
+                        "repo": temp_repo1,  # Explicit repo
+                    },
+                    {
+                        "slug": "item-2",
+                        "ownsFiles": ["file2.py"],
+                        "prompt": "Fix 2",
+                        "testCmd": "true",
+                        "workDir": ".",
+                        "repo": temp_repo2,  # Explicit repo
+                    },
+                ]
+            }
+
+            git_config = {"expectTopLevel": temp_repo1}
+            result = run_wave(driver, manifest, git=git_config)
+
+            # Should NOT abort at preflight; fully-explicit is valid
+            self.assertNotEqual(result["abort_reason"], "mixed_repo_manifest",
+                              "fully-explicit manifest should not trigger mixed_repo_manifest abort")
+        finally:
+            shutil.rmtree(temp_repo1, ignore_errors=True)
+            shutil.rmtree(temp_repo2, ignore_errors=True)
+
+    def test_mixed_manifest_some_with_some_without_repo(self):
+        """Mixed manifest (SOME items have repo, SOME don't) should REJECT with clear error."""
+        driver = FakeDriver()
+        temp_repo = tempfile.mkdtemp(prefix="wave-test-repo-")
+
+        try:
+            manifest = {
+                "items": [
+                    {
+                        "slug": "item-1",
+                        "ownsFiles": ["file1.py"],
+                        "prompt": "Fix 1",
+                        "testCmd": "true",
+                        "workDir": ".",
+                        "repo": temp_repo,  # HAS repo
+                    },
+                    {
+                        "slug": "item-2",
+                        "ownsFiles": ["file2.py"],
+                        "prompt": "Fix 2",
+                        "testCmd": "true",
+                        "workDir": ".",
+                        # NO repo field — MIXED!
+                    },
+                ]
+            }
+
+            git_config = {"expectTopLevel": temp_repo}
+            result = run_wave(driver, manifest, git=git_config)
+
+            # Should abort at preflight with mixed_repo_manifest
+            self.assertTrue(result["aborted"], "mixed manifest should abort")
+            self.assertEqual(result["abort_reason"], "mixed_repo_manifest",
+                           "should reject mixed manifest")
+            self.assertIn("mixed manifest detected", result["error"],
+                        "error message should mention mixed manifest")
+            self.assertEqual(result["items_with_repo"], 1)
+            self.assertEqual(result["items_without_repo"], 1)
+            # No items should be built
+            self.assertEqual(len(result["built"]), 0)
+        finally:
+            shutil.rmtree(temp_repo, ignore_errors=True)
+
+    def test_mixed_manifest_without_git_config_allows_mixed(self):
+        """Mixed manifest WITHOUT git config should NOT trigger error (no shipping)."""
+        driver = FakeDriver()
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "ownsFiles": ["file1.py"],
+                    "prompt": "Fix 1",
+                    "testCmd": "true",
+                    "workDir": ".",
+                    "repo": "/some/repo",  # HAS repo
+                },
+                {
+                    "slug": "item-2",
+                    "ownsFiles": ["file2.py"],
+                    "prompt": "Fix 2",
+                    "testCmd": "true",
+                    "workDir": ".",
+                    # NO repo field
+                },
+            ]
+        }
+
+        # git=None means no shipping, so mixed manifest is allowed
+        result = run_wave(driver, manifest, git=None)
+
+        # Should NOT abort with mixed_repo_manifest (git is None)
+        self.assertNotEqual(result["abort_reason"], "mixed_repo_manifest",
+                          "mixed manifest without git config should not trigger error")
+
+
 class TestAdversarialReviewHonesty(unittest.TestCase):
     """Test that adversarial review is marked deferred and not enforced."""
 

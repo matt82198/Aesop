@@ -32,10 +32,11 @@ const MEMORY_TEMPLATE = path.join(
 );
 
 function runCli(targetDir, args = []) {
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   const res = spawnSync(process.execPath, [CLI, targetDir, ...args], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
-    timeout: 30000,
+    timeout,
     killSignal: 'SIGKILL'
   });
   return res;
@@ -43,10 +44,11 @@ function runCli(targetDir, args = []) {
 
 function runCliInDir(cwd, args = []) {
   // Invoke CLI without a positional targetDir; uses default
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   const res = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     cwd: cwd,
-    timeout: 30000,
+    timeout,
     killSignal: 'SIGKILL'
   });
   return res;
@@ -57,8 +59,9 @@ function createTestDir() {
 }
 
 function gitCmd(cwd, cmd) {
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
+  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
 }
 
 test('CLAUDE-TEMPLATE.md has no "[Your " style bare placeholders', () => {

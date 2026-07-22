@@ -458,7 +458,7 @@ def emit_report(
     phase: str,
     wave_id: str,
     items_selected: List[str],
-    items_shipped: Optional[List[str]] = None,
+    items_shipped: Optional[List[Dict[str, Any]]] = None,
     items_failed_build: Optional[List[str]] = None,
     items_skipped: Optional[List[Dict[str, str]]] = None,
     branch: Optional[str] = None,
@@ -470,7 +470,9 @@ def emit_report(
     success: bool = False,
     merged: bool = False,
 ) -> Dict[str, Any]:
-    """Emit a Report JSON structure.
+    """Emit a Report JSON structure (GATE-1 HANDOFF KIT).
+
+    Per-item observability: items_shipped includes full details {slug, backend, tier, verified, testExit}.
 
     Returns:
         report dict (ready to serialize)
@@ -692,20 +694,41 @@ def run_wave_scheduler(
         )
 
         # P2c: verify no merged=True, record merged=false
-        items_shipped = [
-            item.get("id", "unknown")
-            for item in wave_result.get("shipped", []) or []
-        ]
+        # GATE-1: per-item observability {slug, backend, tier, verified, testExit}.
+        # REAL run_wave shape (live-pilot fix): "shipped" is a list of SLUG
+        # STRINGS; the per-item records live in "built". Join them.
+        backend_name = driver.probe_capabilities().name
+        built_by_slug = {
+            b.get("slug"): b for b in (wave_result.get("built") or []) if isinstance(b, dict)
+        }
+        items_shipped = []
+        shipped_slugs = []
+        for slug in wave_result.get("shipped", []) or []:
+            if isinstance(slug, dict):  # tolerate dict-shaped fakes
+                slug = slug.get("slug", "unknown")
+            shipped_slugs.append(slug)
+            b = built_by_slug.get(slug, {})
+            items_shipped.append({
+                "slug": slug,
+                "backend": backend_name,
+                "tier": b.get("verificationTier", 1),
+                "verified": b.get("verified", False),
+                "testExit": b.get("testExit"),
+            })
 
-        branch = wave_result.get("branch")
-        sha = wave_result.get("sha")
+        # Ship sha comes from the per-repo ship results (no top-level sha key).
+        repo_results = wave_result.get("shipped_repos") or []
+        sha = next((r.get("sha") for r in repo_results if isinstance(r, dict) and r.get("sha")), None)
+        branch = None  # run_wave ships on the current branch; scheduler does not switch branches
 
-        # P1-5 (WIRED): After successful ship, mark items "in_progress" (P1 DEAD CODE fix)
+        # P1-5 (WIRED): After successful ship, mark items "in_progress" by ITEM ID.
         tracker_update_error = None
         if items_shipped:
+            slug_to_id = {it.get("slug"): it.get("id") for it in selected_items}
+            shipped_item_ids = [slug_to_id[s] for s in shipped_slugs if slug_to_id.get(s)]
             success_update, update_error = _write_tracker_status_atomic(
                 tracker_path,
-                items_shipped,
+                shipped_item_ids,
                 "in_progress",
                 wave_id,
                 expected_hash=intake_hash,  # P6: conflict detection
@@ -713,6 +736,8 @@ def run_wave_scheduler(
             if not success_update:
                 tracker_update_error = update_error
 
+        # run_wave has NO top-level "success" key: derive honestly.
+        wave_ok = bool(wave_result.get("preflight_ok")) and not wave_result.get("aborted")
         return emit_report(
             phase="dispatch",
             wave_id=wave_id,
@@ -722,7 +747,7 @@ def run_wave_scheduler(
             branch=branch,
             sha=sha,
             tracker_update_error=tracker_update_error,
-            success=wave_result.get("success", False) and tracker_update_error is None,
+            success=wave_ok and tracker_update_error is None,
             merged=False,  # P2c: pilot stops before merge
         )
 
@@ -742,7 +767,7 @@ def run_wave_scheduler(
 # ========================================================================
 
 def main():
-    """CLI entry point."""
+    """CLI entry point (GATE-1: driver injection, --driver claude|codex)."""
     parser = argparse.ArgumentParser(
         description="Wave scheduler: intake -> manifest -> dispatch -> report"
     )
@@ -771,16 +796,48 @@ def main():
         "--state-dir",
         help="State directory (default: ./state)",
     )
+    parser.add_argument(
+        "--driver",
+        choices=["claude", "codex"],
+        default="claude",
+        help="Backend driver (claude|codex, default: claude)",
+    )
 
     args = parser.parse_args()
 
     dry_run = not args.execute
+
+    # GATE-1: driver injection (instantiate based on --driver flag)
+    driver = None
+    if args.driver == "codex":
+        # CodexDriver requires OPENAI_API_KEY for execute; --dry-run works without it
+        try:
+            from codex_driver import CodexDriver
+            if args.execute and not os.environ.get("OPENAI_API_KEY"):
+                print(
+                    "ERROR: --driver codex --execute requires OPENAI_API_KEY environment variable",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            driver = CodexDriver()
+        except ImportError:
+            print("ERROR: --driver codex requires codex_driver.py", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Default: Claude Code driver
+        try:
+            from claude_code_driver import ClaudeCodeDriver
+            driver = ClaudeCodeDriver()
+        except ImportError:
+            print("ERROR: claude_code_driver.py not found", file=sys.stderr)
+            sys.exit(1)
 
     # Run scheduler
     report = run_wave_scheduler(
         tracker_path=args.tracker,
         max_items=args.max_items,
         dry_run=dry_run,
+        driver=driver,
         state_dir=Path(args.state_dir) if args.state_dir else None,
     )
 

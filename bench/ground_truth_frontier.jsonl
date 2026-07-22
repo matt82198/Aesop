@@ -1,0 +1,20 @@
+{"id": "ft01_multi_step_sql_refactor", "expected_regex": "Problem 1:.*YEAR.*conversion\\nFix:.*index.*or.*column comparison\\nProblem 2:.*GROUP BY.*missing.*columns\\nFix:.*include.*all columns"}
+{"id": "ft02_code_defect_detection_concurrent", "expected_regex": "Broken version: B\\nRace condition:.*TOCTOU|check.*then.*act|get.*then.*set"}
+{"id": "ft03_instruction_conflict_precedence", "expected_regex": "Requirements (conflict|contradict)\\s|emoji|could not satisfy all"}
+{"id": "ft04_long_context_needle_judgment", "expected_regex": "contradiction.*cached.*reject|cached.*HTTP 409|duplicate.*return.*24 hours.*HTTP 409"}
+{"id": "ft05_json_schema_validation_edge_case", "expected_regex": "INVALID\\s.*(additionalProperties|unknown_field)"}
+{"id": "ft06_git_history_blame_analysis", "expected_regex": "55443210|Alice.*2024-10-15.*14:25|removed.*permission"}
+{"id": "ft07_ambiguous_english_resolution", "expected_regex": "Interpretation 1:.*sequential|logged.*then\\nInterpretation 2:.*prerequisite|before.*handling"}
+{"id": "ft08_nested_boolean_logic_simplification", "expected_regex": "A.*NOT.*B.*OR.*NOT.*C|A.*NOT.*\\(B.*AND.*C\\)|minimal"}
+{"id": "ft09_refactoring_correctness_semantic", "expected_regex": "EQUIVALENT"}
+{"id": "ft10_config_validation_corner_case", "expected_regex": "timeout.*15|retries.*5|service.*api.*precedence|deeper.*override"}
+{"id": "ft11_regex_pattern_equivalence", "expected_regex": "NOT_EQUIVALENT|[a-z0-9].*mixing|example.*differs"}
+{"id": "ft12_api_contract_violation_detection", "expected_regex": "id.*string.*integer|created_at.*missing|required"}
+{"id": "ft13_database_migration_safety", "expected_regex": "Risk.*downtime|Risk.*locking|dual.column|version|shadow|blue.?green"}
+{"id": "ft14_performance_bottleneck_identification", "expected_regex": "database.*bottleneck|50ms|profile|N.*1.*query|marginal"}
+{"id": "ft15_state_machine_correctness", "expected_regex": "break|problem|invariant|skip.*PROCESSING|notification|cleanup|audit"}
+{"id": "ft16_unicode_normalization_gotcha", "expected_regex": "NFC|NFD|normalize|decompose|compose|unicode.*form"}
+{"id": "ft17_caching_invalidation_consistency", "expected_regex": "race.*condition|stale|version|ETag|event.*source|consistency"}
+{"id": "ft18_type_coercion_subtle_bug", "expected_regex": "zero|print.*zero|loose.*equality|==.*===|coercion"}
+{"id": "ft19_format_string_vulnerability", "expected_regex": "format.*string|memory.*read|vulnerability|printf.*%s|%x|overflow"}
+{"id": "ft20_distributed_lock_correctness", "expected_regex": "safety|clock.*skew|process.*pause|token|Redlock|validity"}

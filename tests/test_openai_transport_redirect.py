@@ -16,6 +16,7 @@ import os
 import socketserver
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -65,15 +66,32 @@ class _TestHTTPHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def _call_transport(*args, **kwargs):
+    """Invoke the real transport, retrying ONCE on Windows loopback aborts.
+
+    Under full-suite load, localhost sockets on Windows sporadically die with
+    WinError 10053/10054 mid-read (3 occurrences across 2 tests in one day;
+    never isolated, never on ubuntu). One bounded retry converts that host
+    artifact into a stable test while persistent aborts still fail. Production
+    transport behavior is untouched; expected RuntimeErrors propagate normally.
+    """
+    try:
+        return openai_transport.default_openai_transport(*args, **kwargs)
+    except (ConnectionAbortedError, ConnectionResetError):
+        time.sleep(0.5)
+        return openai_transport.default_openai_transport(*args, **kwargs)
+
+
 class TestRedirectSecurity(unittest.TestCase):
     """Test redirect behavior and Authorization header handling."""
 
     @classmethod
     def setUpClass(cls):
         """Start a local HTTP server on an ephemeral port."""
-        cls.server = socketserver.TCPServer(
+        cls.server = socketserver.ThreadingTCPServer(
             ("127.0.0.1", 0), _TestHTTPHandler
         )
+        cls.server.daemon_threads = True
         cls.host, cls.port = cls.server.server_address
         cls.base_url = f"http://{cls.host}:{cls.port}"
 
@@ -106,7 +124,8 @@ class TestRedirectSecurity(unittest.TestCase):
         hostnames (localhost vs 127.0.0.1) which urllib treats as different origins.
         """
         # Create a second server on a different port (different origin).
-        server2 = socketserver.TCPServer(("127.0.0.1", 0), _TestHTTPHandler)
+        server2 = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _TestHTTPHandler)
+        server2.daemon_threads = True
         host2, port2 = server2.server_address
         base_url2 = f"http://{host2}:{port2}"
 
@@ -223,7 +242,7 @@ class TestRedirectSecurity(unittest.TestCase):
             }
 
             # Call the transport with our local server.
-            result = openai_transport.default_openai_transport(
+            result = _call_transport(
                 payload,
                 timeout_s=30.0,
                 base_url=self.base_url,
@@ -322,7 +341,7 @@ class TestRedirectSecurity(unittest.TestCase):
 
             # Call should raise RuntimeError
             with self.assertRaises(RuntimeError) as cm:
-                openai_transport.default_openai_transport(
+                _call_transport(
                     payload,
                     timeout_s=30.0,
                     base_url=self.base_url,
@@ -366,7 +385,7 @@ class TestRedirectSecurity(unittest.TestCase):
 
             # Call should raise RuntimeError without crashing on JSON parse
             with self.assertRaises(RuntimeError) as cm:
-                openai_transport.default_openai_transport(
+                _call_transport(
                     payload,
                     timeout_s=30.0,
                     base_url=self.base_url,

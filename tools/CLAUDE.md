@@ -23,6 +23,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `buildlog.py` — Uniform BUILDLOG.md appender
 - `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks requires ALL named checks present AND concluded, --allow-no-checks escape hatch)
 - `ci_workflow_lint.py` — CI workflow linter (YAML parsing, npm ci lockfile checks, test coverage)
+- `crossos_drift.py` — Cross-OS CI drift measurement (Windows vs Linux outcome drift from GitHub Actions history; CLI: `--runs N=10 [--json]`; reports pass rates, divergence set, failing test aggregation; exit 3 on auth failure)
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness)
 - `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
 - `cost_projection.py` — Live burn-rate observability; projects end-of-wave spend and fires threshold alerts at 70% and 90% of ceiling; CLI: `--projection [--window N] [--json]` or `--check-alerts --wave N [--json]`; idempotent per wave via flag files under state/
@@ -57,7 +58,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `secret_scan.py` — Pre-push secret/credential detection gate (staged/history/paths)
 - `self_stats.py` — Git-derived metrics counter + README block generator
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
-- `stall_check.py` — Automated agent transcript stall detector
+- `stall_check.py` — Automated agent transcript stall detector; optional --active-from flag refines STALLED verdict to require both stale mtime AND active task file; --emit-recovery emits JSON advisories; --recovery-dir writes recovery-<agent>.json files (idempotent)
 - `status.js` — One-shot fleet status snapshot (watchdog/monitor heartbeat age, dashboard port reachability, git branch and working tree state)
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
@@ -74,6 +75,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_activity_filter.py` — Browser proof for Activity view agent status filter
 - `verify_agent_inspector.py` — Browser proof for Agent Inspector drawer (/api/agent?id=)
 - `verify_dash.py` — Browser proof for realtime SSE dashboard
+- `verify_cost_panel.py` — Browser proof for Cost Analytics Panel (spend per wave, model efficiency, burn rate; self-hosted test port + fixture ledger + pricing; exit 0=proven, 1=failed, --allow-skip for CI)
 - `verify_failure_drilldown.py` — Browser proof for wave failure drill-down feature
 - `verify_prboard.py` — Browser proof for Wave PR Board (/api/wave/prs)
 - `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap

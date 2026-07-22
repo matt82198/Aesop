@@ -124,3 +124,66 @@ def save_snapshot(store, stream: str, event_version: int, projection: dict) -> N
         projection: the materialized state dict (e.g. full tracker projection)
     """
     store.save_snapshot(stream, event_version, projection)
+
+
+AGENT_LIFECYCLE_VERSION = 1
+
+
+def project_agent_lifecycle(events: list) -> dict:
+    """Project current agent lifecycle state from agent_* events.
+
+    Folds agent lifecycle events into a map of agent_id -> {state, transitions, last_activity}.
+
+    Event types:
+    - agent_dispatched: payload {"agent_id", "timestamp"}; marks dispatch start
+    - agent_working: payload {"agent_id", "timestamp"}; marks work in progress
+    - agent_done: payload {"agent_id", "timestamp"}; marks completion
+    - agent_stalled: payload {"agent_id", "timestamp"}; marks stall/error
+
+    Returns a dict: {"version": 1, "agents": [{"id", "state", "transitions", "last_activity"}, ...]}
+    where transitions is a list of {state, at (ISO 8601 timestamp)} in chronological order.
+    """
+    agents = {}
+
+    for ev in events:
+        etype = ev.get("type")
+        payload = ev.get("payload") or {}
+
+        if etype in ("agent_dispatched", "agent_working", "agent_done", "agent_stalled"):
+            agent_id = payload.get("agent_id")
+            timestamp = payload.get("timestamp")
+
+            if agent_id is None:
+                continue
+
+            # Initialize agent if first time seeing it
+            if agent_id not in agents:
+                agents[agent_id] = {
+                    "id": agent_id,
+                    "state": None,
+                    "transitions": [],
+                    "last_activity": None,
+                }
+
+            # Map event type to state
+            state_map = {
+                "agent_dispatched": "dispatch",
+                "agent_working": "working",
+                "agent_done": "done",
+                "agent_stalled": "stalled",
+            }
+            new_state = state_map.get(etype)
+
+            # Only append transition if state actually changed
+            if new_state and new_state != agents[agent_id]["state"]:
+                agents[agent_id]["state"] = new_state
+                if timestamp:
+                    agents[agent_id]["transitions"].append({
+                        "state": new_state,
+                        "at": timestamp,
+                    })
+                    agents[agent_id]["last_activity"] = timestamp
+
+    # Return as versioned list (ordered by agent_id for determinism)
+    agent_list = sorted(agents.values(), key=lambda a: a["id"])
+    return {"version": AGENT_LIFECYCLE_VERSION, "agents": agent_list}
