@@ -256,17 +256,38 @@ check_branch_policy() {
     :
   else
     # Not a tty; read stdin normally
+    local saw_tuple=0
+    local saw_nondelete=0
     while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
       # Skip empty lines
       if [ -z "$remote_ref" ]; then
         continue
       fi
+      saw_tuple=1
+
+      # Delete refspec (local sha all zeros): removes a remote ref, pushes no
+      # content. Deleting refs/heads/main|master is still blocked below; other
+      # deletions never constitute a push TO main.
+      if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        if [ "$remote_ref" = "refs/heads/main" ] || [ "$remote_ref" = "refs/heads/master" ]; then
+          return 1
+        fi
+        continue
+      fi
+      saw_nondelete=1
 
       # Block if attempting to push to main or master
       if [ "$remote_ref" = "refs/heads/main" ] || [ "$remote_ref" = "refs/heads/master" ]; then
         return 1
       fi
     done
+
+    # Delete-only push (tuples seen, none pushing content): allowed regardless
+    # of the currently checked-out branch -- branch deletion from a main
+    # checkout is administrative, not a push to main.
+    if [ "$saw_tuple" = "1" ] && [ "$saw_nondelete" = "0" ]; then
+      return 0
+    fi
   fi
 
   # If no protected branch in stdin, also check current branch as fallback
@@ -302,9 +323,19 @@ get_commit_range() {
     return 1
   fi
 
+  local saw_delete=0
   while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
     # Skip empty lines
     if [ -z "$remote_ref" ]; then
+      continue
+    fi
+
+    # Delete refspec (local sha all zeros): no content is pushed, so there is
+    # no commit range to scan. Skipped here; if the WHOLE push is deletes we
+    # return 2 so the caller can pass without weakening fail-closed behavior
+    # for unparseable stdin (which stays return 1).
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+      saw_delete=1
       continue
     fi
 
@@ -326,6 +357,10 @@ get_commit_range() {
 
   if [ "$found" -eq 1 ]; then
     return 0
+  fi
+  if [ "$saw_delete" -eq 1 ]; then
+    # Delete-only push: nothing to scan (distinct from unparseable stdin)
+    return 2
   fi
   return 1
 }
@@ -358,6 +393,14 @@ check_secret_scan() {
   local commit_ranges
   commit_ranges=$(get_commit_range)
   local parse_exit_code=$?
+
+  if [ $parse_exit_code -eq 2 ]; then
+    # Delete-only push: no content pushed, nothing to scan. Explicitly allowed
+    # (rc=2 is only emitted when tuples WERE parsed and all were deletions);
+    # unparseable/empty stdin still fails closed below.
+    log_event "secret_scan_skipped_delete_only_push"
+    return 0
+  fi
 
   if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
     # Malformed stdin or unable to parse: fail-CLOSED (security P1 fix)
