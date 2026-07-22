@@ -10,7 +10,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
-CONDUCTOR_ROOT="$(dirname "$AESOP_ROOT")/conductor3"
+CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
 MODE="${1:-daemon}"
 
 SELFHEAL_LOCK_DIR="$AESOP_ROOT/state/.selfheal-lock"
@@ -43,8 +43,10 @@ acquire_lock() {
   mkdir -p "$(dirname "$lock_dir")" 2>/dev/null || true
 
   if mkdir "$lock_dir" 2>/dev/null; then
-    date +%s > "$lock_dir/timestamp" 2>/dev/null || true
-    echo $$ > "$lock_dir/pid" 2>/dev/null || true
+    if ! date +%s > "$lock_dir/timestamp" 2>/dev/null || ! echo $$ > "$lock_dir/pid" 2>/dev/null; then
+      rm -rf "$lock_dir" 2>/dev/null || true
+      return 1
+    fi
     return 0
   fi
 
@@ -152,6 +154,10 @@ restart_watchdog() {
 
 restart_monitor() {
   ensure_log_dir
+
+  if [ ! -d "$CONDUCTOR_ROOT" ]; then
+    return 1
+  fi
 
   if is_heartbeat_stale "$MONITOR_HB" "$MONITOR_STALE_THRESHOLD"; then
     if [ -z "${AESOP_SELFHEAL_SKIP_RESTART:-}" ]; then

@@ -8,9 +8,9 @@
 
 ## Test Suite Map & Run Commands
 
-**Shell (7 suites)**:
-backup-fleet.test.sh, dash-watchdog-gui.test.sh, test_agent_forensics.sh, test_pre_push_policy.sh, test_reconstitute.sh, test_reconstitute_fixes.sh, test_waveguard.sh.
-Run: `bash tests/test_pre_push_policy.sh && bash tests/backup-fleet.test.sh && bash tests/test_reconstitute.sh && bash tests/test_reconstitute_fixes.sh && bash tests/test_agent_forensics.sh && bash hooks/pre-push-policy.sh --test && bash tools/reconstitute.sh --test`
+**Shell (11 suites)**:
+backup-fleet.test.sh, dash-watchdog-gui.test.sh, test_agent_forensics.sh, test_pre_push_policy.sh, test-run-watchdog.sh, test-run-watchdog-halt.sh, test-run-watchdog-lockguard.sh, test_reconstitute.sh, test_reconstitute_fixes.sh, test-selfheal.sh, test_waveguard.sh.
+Run: `bash tests/test_pre_push_policy.sh && bash tests/backup-fleet.test.sh && bash tests/test_reconstitute.sh && bash tests/test_reconstitute_fixes.sh && bash tests/test_agent_forensics.sh && bash tests/test-selfheal.sh && bash hooks/pre-push-policy.sh --test && bash tools/reconstitute.sh --test`
 
 **Node (19 suites)**:
 buildsystem-template.test.mjs, cli-config.test.mjs, collect-signals.test.mjs, config-doc-drift.test.mjs, dash-agents-panel.test.mjs, dash-extra.test.mjs, demo-e2e.test.mjs, domain-map-drift.test.mjs, first-hour.test.mjs, fleet-cli.test.mjs, force-model-policy.test.mjs, lock.test.mjs, mcp-fleet.test.mjs, packaging-portability.test.mjs, proposals.test.mjs, scaffold-hook-install.test.mjs, scaffold-onboarding.test.mjs, test_orchestration_core.test.mjs, wizard.test.mjs.
@@ -70,7 +70,7 @@ Tests document **actual gaps** found in rounds of refactoring/audit:
 - **Self-test mode**: Hooks & tools (pre-push-policy.sh, reconstitute.sh, tools/secret_scan.py) include `--test` flag for inline validation.
 
 ## Dropped (reason)
-- Shell count revised 10→7 (removed stale entries: test-run-watchdog-halt.sh, test-run-watchdog-lockguard.sh, test-run-watchdog.sh do not exist in repo).
+- Shell count corrected 7→11: test-run-watchdog{,-halt,-lockguard}.sh DO exist (a prior reconcile confused unwired with nonexistent) and all pass; halt/lockguard now wired into test:sh.
 - Node count revised 17→18→19 (added first-hour.test.mjs which was present but unlisted; added demo-e2e.test.mjs for init-prime-demo feature).
 - Python count revised 67→95→98 (recounted: 94 existing + 1 new drift-test = 95 at branch #246; integration union adds test_backend_config_docs.py + test_wave_dispatch_agents_parity.py + test_fleet_ledger_injection.py = 98 total).
 - Prior revisions: Node 15→17 (recounted); Shell 9→10 (test_waveguard.sh was present but unlisted); Python 60→65 (recounted).

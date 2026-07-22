@@ -13,7 +13,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Never print secrets**: mask as pattern name + masked value only; NEVER output raw credentials/tokens.
 - **AESOP_STATE_ROOT**: all heartbeat/ledger/logs use `AESOP_STATE_ROOT` env var (default `./state`) or CLI args; no hardcoded personal paths.
 - **Fragment-assembled secrets in tests**: `scanner_selftest.py` concatenates dummy secrets at runtime so pattern text never appears contiguously (self-scan invariant).
-- **verify_*.py are mandatory CI gates**: `verify_dash.py`, `verify_submit_encoding.py`, `verify_activity_filter.py`, `verify_agent_inspector.py`, `verify_prboard.py`, `verify_failure_drilldown.py`, `verify_wave_telemetry.py` are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run all).
+- **verify_*.py are mandatory CI gates**: `verify_dash.py`, `verify_submit_encoding.py`, `verify_activity_filter.py`, `verify_agent_inspector.py`, `verify_prboard.py`, `verify_failure_drilldown.py`, `verify_wave_telemetry.py`, `verify_dispatch_panel.py`, `verify_scorecards.py`, `verify_ui_trio.py` are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run all).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
 
 ## Tool index (one-liners)
@@ -73,6 +73,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_submit_encoding.py` — Browser proof for /submit UTF-8 inbox bootstrap
 - `verify_wave_telemetry.py` — Browser proof for wave telemetry components
 - `verify_dispatch_panel.py` — Browser proof for DispatchPanel component (ui/web/dist/ + /api/wave/dispatch; Playwright/Chromium; exit 0=proven, 1=failed, --allow-skip for CI)
+- `verify_ui_trio.py` — Browser proof for UI trio panels (Gantt Timeline, Audit Tail Stream, Live Reasoning Transparency; AESOP_PROOF_FIXTURES)
 - `wave_ledger_hook.py` — Orchestrator-tail CLI wrapper to append per-wave telemetry to OUTCOMES-LEDGER.md (idempotent phase appends; validates timestamp for markdown table safety)
 - `wave_preflight.py` — Wave-open readiness validator (branch/clean-tree/HALT/heartbeats/tracker; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1)
 - `wave_resume.py` — Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run

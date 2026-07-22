@@ -25,7 +25,7 @@ class TestClaudeMdDrift(unittest.TestCase):
         # Use subprocess to count via git ls-files (repo-aware).
         cls.actual_node_count = cls._count_git_files("tests/*.test.mjs")
         cls.actual_shell_count = cls._count_git_files(
-            "tests/*.test.sh", "tests/test_*.sh"
+            "tests/*.test.sh", "tests/test_*.sh", "tests/test-*.sh"
         )
         cls.actual_python_count = cls._count_git_files("tests/test_*.py")
 
