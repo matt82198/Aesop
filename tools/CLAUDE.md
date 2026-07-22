@@ -37,7 +37,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache)
 - `halt.py` — Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
 - `health-score.js` — Readiness score for primed projects (0-100 weighted score: config, git hooks, CLAUDE.md, state writable, daemon heartbeats, git identity, secret-scan runnable)
-- `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config/hooks/CLAUDE.md/writable/heartbeats/git-identity/secret-scan with weighted scoring
+- `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
 - `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
@@ -50,6 +50,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject via lock.mjs)
+- `reproduce.js` — Offline verification suite (mirrors reproduce.yml; REPO/INSTALLED modes; exit 0=pass; exact-match doctor pre-init classification)
 - `reconcile.py` — Detect/resolve drift (git STATE.md vs. state_store projection; git-authoritative; --resolve appends to SQLite only, never rewrites git-side state)
 - `reconstitute.sh` — Clone/fetch repos from config with security validation
 - `rotate_logs.py` — Log rotation utility (size/line thresholds)
