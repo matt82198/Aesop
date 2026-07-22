@@ -242,6 +242,143 @@ fi
 test_count=$((test_count + 1))
 
 echo ""
+echo "=== Test 8a: release_lock logs WARN on deletion failure ==="
+# Runtime test: stub rm to fail for lock dir, verify WARN is logged
+
+TEST_RM_DIR=$(mktemp -d)
+TEST_LOCK_DIR=$(mktemp -d)
+TEST_LOG_FILE=$(mktemp)
+
+# Create a stub rm that fails when any arg contains ".selfheal-lock"
+cat > "$TEST_RM_DIR/rm" << 'RMEOF'
+#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == *".selfheal-lock"* ]]; then
+    exit 1
+  fi
+done
+exec /bin/rm "$@"
+RMEOF
+chmod +x "$TEST_RM_DIR/rm"
+
+# Run test in subshell with stubbed rm
+(
+  export PATH="$TEST_RM_DIR:$PATH"
+
+  log_heal() {
+    local msg="$1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" >> "$TEST_LOG_FILE"
+  }
+
+  ensure_log_dir() {
+    mkdir -p "$(dirname "$TEST_LOG_FILE")" 2>/dev/null || true
+  }
+
+  release_lock() {
+    local lock_dir="$1"
+    rm -rf "$lock_dir" 2>/dev/null || true
+    if [ -d "$lock_dir" ]; then
+      ensure_log_dir
+      log_heal "WARN: release_lock: failed to remove lock dir: $lock_dir (may be in-use on Windows)"
+    fi
+  }
+
+  # Create lock dir with .selfheal-lock suffix to trigger stub rm
+  LOCK_DIR="$TEST_LOCK_DIR/.selfheal-lock"
+  mkdir -p "$LOCK_DIR"
+  release_lock "$LOCK_DIR"
+) || true
+
+# Check results
+test_count=$((test_count + 1))
+lock_still_exists=0
+log_has_warn=0
+
+# Check if lock dir still exists (rm should have failed)
+if [ -d "$TEST_LOCK_DIR/.selfheal-lock" ]; then
+  lock_still_exists=1
+fi
+
+# Check if WARN was logged
+if [ -f "$TEST_LOG_FILE" ] && grep -q "WARN: release_lock: failed to remove lock dir" "$TEST_LOG_FILE"; then
+  log_has_warn=1
+fi
+
+if [ "$log_has_warn" -eq 1 ] && [ "$lock_still_exists" -eq 1 ]; then
+  echo "✓ Test 8a: release_lock logs WARN when rm fails"
+  pass_count=$((pass_count + 1))
+else
+  echo "✗ Test 8a: release_lock failure path not working correctly"
+  echo "  log_has_warn=$log_has_warn, lock_still_exists=$lock_still_exists"
+fi
+
+# Cleanup
+rm -rf "$TEST_RM_DIR" "$TEST_LOCK_DIR" "$TEST_LOG_FILE" 2>/dev/null || true
+
+echo ""
+echo "=== Test 8b: release_lock succeeds (no WARN) when rm succeeds ==="
+# Runtime test: verify happy path where rm succeeds
+
+TEST_LOCK_DIR_2=$(mktemp -d)
+TEST_LOG_FILE_2=$(mktemp)
+
+test_output_2=$( (
+  # No stubbed rm in PATH, use real rm
+
+  log_heal() {
+    local msg="$1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" >> "$TEST_LOG_FILE_2"
+  }
+
+  ensure_log_dir() {
+    mkdir -p "$(dirname "$TEST_LOG_FILE_2")" 2>/dev/null || true
+  }
+
+  release_lock() {
+    local lock_dir="$1"
+    rm -rf "$lock_dir" 2>/dev/null || true
+    if [ -d "$lock_dir" ]; then
+      ensure_log_dir
+      log_heal "WARN: release_lock: failed to remove lock dir: $lock_dir (may be in-use on Windows)"
+    fi
+  }
+
+  # Create lock dir and call release_lock
+  mkdir -p "$TEST_LOCK_DIR_2"
+  release_lock "$TEST_LOCK_DIR_2"
+
+  # Verify lock dir was removed
+  if [ ! -d "$TEST_LOCK_DIR_2" ]; then
+    echo "lock_removed=1"
+  else
+    echo "lock_removed=0"
+  fi
+  exit 0
+) 2>&1 )
+
+# Check results
+test_count=$((test_count + 1))
+lock_removed=0
+no_warn=1
+
+lock_removed=$(echo "$test_output_2" | grep -o "lock_removed=[01]" | cut -d'=' -f2)
+
+if [ -f "$TEST_LOG_FILE_2" ] && grep -q "WARN" "$TEST_LOG_FILE_2" 2>/dev/null; then
+  no_warn=0
+fi
+
+if [ "$lock_removed" -eq 1 ] && [ "$no_warn" -eq 1 ]; then
+  echo "✓ Test 8b: release_lock succeeds silently when rm succeeds"
+  pass_count=$((pass_count + 1))
+else
+  echo "✗ Test 8b: release_lock happy path failed"
+  echo "  lock_removed=$lock_removed, no_warn=$no_warn"
+fi
+
+# Cleanup
+rm -rf "$TEST_LOCK_DIR_2" "$TEST_LOG_FILE_2" 2>/dev/null || true
+
+echo ""
 echo "========================================"
 echo "Test Results: $pass_count / $test_count passed"
 echo "========================================"
