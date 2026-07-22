@@ -206,17 +206,15 @@ Add or modify the `backend` section:
 
 ```json
 {
-  "backend": {
-    "type": "openai-compatible",
-    "model": "ollama-mistral",
-    "base_url": "http://localhost:11434/v1",
-    "api_key_env": "OLLAMA_API_KEY"
-  }
+  "backend": "openai-compatible",
+  "model": "ollama-mistral",
+  "base_url": "http://localhost:11434/v1",
+  "api_key_env": "OLLAMA_API_KEY"
 }
 ```
 
 Supported backends:
-- `"claude-code"` (default) — Claude Code CLI harness
+- `"claude"` (default) — Claude Code CLI harness
 - `"openai-compatible"` — OpenAI Chat Completions API (Ollama, OpenRouter, etc.)
 - `"codex"` — CodeX OpenAI backend (legacy)
 
@@ -234,12 +232,10 @@ ollama pull mistral
 # 3. Configure Aesop to use it
 cat > aesop.config.json <<EOF
 {
-  "backend": {
-    "type": "openai-compatible",
-    "model": "mistral",
-    "base_url": "http://localhost:11434/v1",
-    "api_key_env": "OLLAMA_API_KEY"
-  }
+  "backend": "openai-compatible",
+  "model": "mistral",
+  "base_url": "http://localhost:11434/v1",
+  "api_key_env": "OLLAMA_API_KEY"
 }
 EOF
 
