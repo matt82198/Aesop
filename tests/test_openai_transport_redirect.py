@@ -88,9 +88,10 @@ class TestRedirectSecurity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Start a local HTTP server on an ephemeral port."""
-        cls.server = socketserver.TCPServer(
+        cls.server = socketserver.ThreadingTCPServer(
             ("127.0.0.1", 0), _TestHTTPHandler
         )
+        cls.server.daemon_threads = True
         cls.host, cls.port = cls.server.server_address
         cls.base_url = f"http://{cls.host}:{cls.port}"
 
@@ -123,7 +124,8 @@ class TestRedirectSecurity(unittest.TestCase):
         hostnames (localhost vs 127.0.0.1) which urllib treats as different origins.
         """
         # Create a second server on a different port (different origin).
-        server2 = socketserver.TCPServer(("127.0.0.1", 0), _TestHTTPHandler)
+        server2 = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _TestHTTPHandler)
+        server2.daemon_threads = True
         host2, port2 = server2.server_address
         base_url2 = f"http://{host2}:{port2}"
 
