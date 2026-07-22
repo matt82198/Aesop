@@ -18,6 +18,7 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 No dependencies: no openai, no jsonschema, no pytest.
 """
 
+import os
 import json
 import shutil
 import sys
@@ -46,6 +47,28 @@ from agent_driver import (  # noqa: E402
 )
 from wave_loop import run_wave  # noqa: E402
 from verification_policy import verification_policy  # noqa: E402
+
+# Several test manifests use workDir "." (FakeDriver then writes stub files
+# into the current directory). Run the ENTIRE module inside a throwaway
+# tmpdir so those writes can never pollute the repo root (hygiene rule:
+# tests never pollute cwd) — cwd is saved before chdir and restored after.
+_MODULE_TMP = None
+_MODULE_SAVED_CWD = None
+
+
+def setUpModule():
+    global _MODULE_TMP, _MODULE_SAVED_CWD
+    _MODULE_SAVED_CWD = os.getcwd()
+    _MODULE_TMP = tempfile.mkdtemp(prefix="wave-loop-tests-")
+    os.chdir(_MODULE_TMP)
+
+
+def tearDownModule():
+    global _MODULE_TMP, _MODULE_SAVED_CWD
+    if _MODULE_SAVED_CWD:
+        os.chdir(_MODULE_SAVED_CWD)
+    if _MODULE_TMP:
+        shutil.rmtree(_MODULE_TMP, ignore_errors=True)
 
 
 class FakeDriver(AgentDriver):
