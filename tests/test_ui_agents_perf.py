@@ -82,10 +82,10 @@ class FingerprintCachingCase(unittest.TestCase):
     def _create_dummy_agent(self, agent_name):
         """Create a dummy agent transcript file."""
         project_dir = self.transcripts_root / "test-project"
-        memory_dir = project_dir / "memory"
-        memory_dir.mkdir(parents=True, exist_ok=True)
+        subagents_dir = project_dir / "subagents"
+        subagents_dir.mkdir(parents=True, exist_ok=True)
 
-        agent_file = memory_dir / f"agent-{agent_name}.jsonl"
+        agent_file = subagents_dir / f"agent-{agent_name}.jsonl"
         # Write a minimal NDJSON transcript
         content = '{"type":"user","content":"test"}\n{"type":"assistant","content":"response"}\n'
         agent_file.write_text(content, encoding='utf-8')
