@@ -5,33 +5,25 @@ All notable changes to Aesop are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - 0.3.0 era] - Waves 28-31
-
-Ongoing development of multi-core wave orchestration, advanced scheduling, write-path seams, and hardening-loop convergence.
+## [Unreleased - 0.3.0] - Waves 28-31
 
 ### Added
-- **Multi-core supervised wave proof** (waves-28–31): Validated multi-core orchestration under supervised human operator control; measured throughput, cost efficiency, and reliability across heterogeneous fleets.
-- **Wave scheduler + gate-1 kit** (wave-28): Wave dispatch prioritization scheduler with gate-1 proof-of-work verification, enabling dynamic workload balancing and predictable completion times.
-- **WriteAPI seam + OCC** (wave-29): Mutation-gate WriteAPI layer with optimistic concurrency control (OCC) for state updates; prevents phantom writes and enables safe concurrent dispatch.
-- **Cost window unification + analytics panel** (wave-30): Unified cost-tracking window across all backends with live analytics dashboard showing burn rate, token distribution, and per-model spend trends.
-- **Windows CI green + drift tool + parity fixes** (wave-30): Full Windows CI pipeline validation with real-time drift detection tool (compares expected vs. observed behavior across platforms); confirmed CI/production parity.
-- **Stall recovery + preflight backlog flags** (wave-31): Automatic stall recovery heuristics with preflight backlog validation flags; prevents dispatch of malformed items and auto-recovers from timeouts.
-- **Frontier slice** (wave-31): Frontier exploration boundary conditions for model selection; enables dynamic backend routing based on capability probe results.
-- **Battery** (wave-31): Energy-aware dispatch scheduling for long-running fleets; tracks resource headroom and throttles work when system capacity approached.
-- **Hardening-loop fixes summary** (waves-28–31): 40+ hardening fixes identified through adversarial review loops and integrated; zero known P0/P1 gaps at wave close.
-
-### Changed
-- **State reconciliation protocol** (wave-29): Tracker state now reconciles against shipped work at wave open to prevent duplicate dispatch.
-- **Verification tier auto-adaptation** (wave-30): Verification tiers now adapt per-dispatch based on driver capability probe; no manual config required.
+- **Non-Claude core proof (release gate 1)**: a Codex-backed worker (gpt-4o-mini via AgentDriver) built, verified, and shipped a full wave increment end to end (PR #325); JSON-schema-capable model gate with `allow_unverified_models` escape.
+- **Wave scheduler + gate-1 kit** (wave-28): dispatch prioritization plus the proof harness used for the multi-model gate.
+- **WriteAPI seam + OCC** (wave-29): mutation-gate write layer with optimistic concurrency control for state updates.
+- **Cost window unification + analytics panel** (wave-30): unified cost-tracking window with dashboard burn-rate and per-model spend views.
+- **Parallel local test battery** (`tools/test_battery.py`): runs the 4-harness union (python/node/shell/ui) concurrently with per-harness logs and enforced timeouts; ~5.4 min vs ~10 min serial, now the standard local gate.
+- **Frontier external-benchmark slice** (wave-31): spend-capped external grading slice for the held-out benchmark.
+- **Stall recovery + preflight backlog flags** (wave-31): recovery heuristics and preflight validation that rejects malformed backlog items before dispatch.
 
 ### Fixed
-- **Multi-core coordination edge cases** (wave-28): Fixed race conditions in lease-by-append coordination under concurrent dispatch.
-- **Windows path traversal guards** (wave-30): Hardened cross-platform path normalization to prevent symlink/junction attacks on Windows.
-- **Cost-ceiling enforcement gaps** (wave-29): Cost ceiling now enforces fail-closed on ledger read errors; prevents silent budget overruns.
+- **Windows CI green and release-blocking**: `eod_sweep` repo-list split on `:` ate drive letters (silent vacuous SAFE) — now `os.pathsep` with fail-closed missing-repo findings; `stall_check` path containment resolves 8.3 short paths on both sides; per-harness timeout now kills the process tree.
+- **Refinement-loop convergence (release gate 2)**: 4 full audit rounds, ~30 verified defects fixed, ~10 findings refuted on adversarial verification, final round clean.
+- **Test-fixture git-identity isolation**: the pre-push hook self-test wrote `git config user.name` unscoped on every shell-suite run — now scoped inside its fixture; added a writes-only identity-hygiene scanner, self-guarding fixtures, and a README canary in the regression lens.
 
-### Documentation
-- **Wave-28–31 architecture guide**: Updated driver/CLAUDE.md and state_store/CLAUDE.md to document WriteAPI seam, OCC protocol, and cost-window unification.
-- **Windows portability guide**: New docs/WINDOWS.md for Windows CI setup, path handling, and known platform differences.
+### Security
+- `secret_scan`: narrow reviewed exemption (`ALLOWED-REDACTION-SOURCE`) for the redaction-regex source fixture — single pattern, single file, always reported, never silent.
+- Pre-push gate runs **main's** scanner so a branch cannot weaken its own gate.
 
 ## [0.2.0] - 2026-07-21
 
