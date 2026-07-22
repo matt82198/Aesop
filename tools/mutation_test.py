@@ -208,8 +208,12 @@ def run_tests(test_module_path: str, work_dir: str, timeout: int = 30) -> Tuple[
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = work_dir + (os.pathsep + existing if existing else "")
 
+    # Convert absolute path to relative path from work_dir to avoid pytest path
+    # resolution issues. The test file is in work_dir, so just use its name.
+    test_file_name = Path(test_module_path).name
+
     if _pytest_available():
-        cmd = [sys.executable, "-m", "pytest", "-xvs", test_module_path]
+        cmd = [sys.executable, "-m", "pytest", "-xvs", test_file_name]
     else:
         # unittest needs a module name (importable via cwd/PYTHONPATH), not a path.
         cmd = [sys.executable, "-m", "unittest", "-v", Path(test_module_path).stem]
@@ -300,7 +304,19 @@ def run(target_module_path: str, test_module_path: str) -> Dict[str, Any]:
                 "error": f"failed to copy test: {e}",
             }
 
-        # Copy any other Python files from test directory (dependencies)
+        # Copy any other Python files from target's package directory (siblings).
+        # This is critical for modules that import siblings (e.g., ui/wave_audit_tail
+        # imports ui/config). Without this, baseline tests fail with ImportError.
+        target_dir = target_path.parent
+        for py_file in target_dir.glob("*.py"):
+            if py_file.name not in (test_path.name, target_path.name):
+                try:
+                    dest = tmpdir / py_file.name
+                    dest.write_text(py_file.read_text(encoding="utf-8"), encoding="utf-8")
+                except Exception:
+                    pass  # Best effort (skip files we can't read)
+
+        # Also copy any other Python files from test directory (additional dependencies)
         test_dir = test_path.parent
         for py_file in test_dir.glob("*.py"):
             if py_file.name not in (test_path.name, target_path.name):
