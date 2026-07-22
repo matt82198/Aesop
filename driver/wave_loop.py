@@ -79,6 +79,37 @@ except ImportError:
 # Sanitization and Security
 # ========================================================================
 
+def _quote_arg(s: str) -> str:
+    """Quote an argument for safe shell execution across Windows and POSIX.
+
+    On Windows (cmd.exe), single quotes don't quote; shlex.quote (POSIX-only)
+    is unsafe. This function uses subprocess.list2cmdline semantics for Windows
+    and shlex.quote for POSIX systems.
+
+    The durable fix is to refactor run_command to accept a list of arguments
+    instead of shell=True strings (deferred).
+
+    Args:
+        s: the string to quote for shell execution
+
+    Returns:
+        str: properly quoted argument safe for shell execution on this OS
+    """
+    if os.name == 'nt':
+        # Windows (cmd.exe): use subprocess.list2cmdline semantics.
+        # Double quotes are the safe quoting mechanism; embed quotes are escaped
+        # with backslash, and backslashes before quotes are escaped.
+        # For safety, we wrap in double quotes and escape embedded quotes/backslashes.
+        if not s:
+            return '""'
+        # Escape backslashes before quotes, then escape quotes
+        escaped = s.replace('\\', '\\\\').replace('"', '\\"')
+        return f'"{escaped}"'
+    else:
+        # POSIX: shlex.quote handles all cases safely
+        return shlex.quote(s)
+
+
 def _safe_slug(slug: str) -> str:
     """Sanitize a slug to prevent path traversal attacks.
 
@@ -86,11 +117,16 @@ def _safe_slug(slug: str) -> str:
     This prevents '../../../etc/x' style escape attempts when slug is used
     in path joins.
 
+    If normalization changed the string (removed characters), appends a stable
+    suffix derived from a hash of the raw slug to prevent collisions when two
+    different raw slugs normalize to the same value.
+
     Args:
         slug: the slug to sanitize
 
     Returns:
-        str: sanitized slug with only alphanumeric, underscore, hyphen
+        str: sanitized slug with only alphanumeric, underscore, hyphen,
+             optionally with a hash suffix if normalization occurred
 
     Raises:
         ValueError: if slug is empty or contains only invalid characters
@@ -103,6 +139,12 @@ def _safe_slug(slug: str) -> str:
 
     if not sanitized:
         raise ValueError(f"slug contains no valid characters: {slug}")
+
+    # If normalization changed the string, append a stable suffix to prevent collisions
+    if sanitized != slug:
+        import hashlib
+        raw_hash = hashlib.sha1(slug.encode()).hexdigest()[:8]
+        sanitized = f"{sanitized}-{raw_hash}"
 
     return sanitized
 
@@ -769,7 +811,8 @@ def run_wave(
 
             if files_to_add:
                 # Add files. Escape each filename to prevent shell injection.
-                escaped_files = [shlex.quote(f) for f in files_to_add]
+                # Use _quote_arg for platform-safe quoting (Windows + POSIX).
+                escaped_files = [_quote_arg(f) for f in files_to_add]
                 add_cmd = "git add " + " ".join(escaped_files)
                 add_result = driver.run_command(add_cmd)
                 if add_result.exit_code != 0:
@@ -778,8 +821,9 @@ def run_wave(
                     return result
 
                 # Commit. Escape the message to prevent shell injection.
+                # Use _quote_arg for platform-safe quoting.
                 commit_msg = f"Wave: {len(verified_items)} items verified"
-                commit_cmd = f"git commit -m {shlex.quote(commit_msg)}"
+                commit_cmd = f"git commit -m {_quote_arg(commit_msg)}"
                 commit_result = driver.run_command(commit_cmd)
                 if commit_result.exit_code != 0:
                     # Might be "nothing to commit"; not necessarily a failure.
