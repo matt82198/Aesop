@@ -22,6 +22,11 @@ if str(UI_DIR) not in sys.path:
 import config
 import cost
 
+# Add tools directory to path for fleet_ledger import
+TOOLS_DIR = Path(__file__).parent.parent / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
 ENV_KEYS = ("AESOP_ROOT", "AESOP_STATE_ROOT", "AESOP_TRANSCRIPTS_ROOT",
             "AESOP_UI_COLLECT_INTERVAL", "PORT")
 
@@ -680,6 +685,271 @@ class TestModelMixTrend(CostIsolationCase):
             total_pct = sum(model_dist.values())
             # Allow small floating point error
             self.assertAlmostEqual(total_pct, 100.0, places=1)
+
+
+class TestLedgerSchemaVariations(CostIsolationCase):
+    """Test parsing of 7-column (old) and 9-column (new) ledger formats.
+
+    Issue fix: Accept both 7-column format (legacy, no phase/wave) and 9-column
+    format (new with phase/wave optional trailing columns).
+    """
+
+    def test_parses_7_column_ledger(self):
+        """Accept legacy 7-column format (no phase/wave columns)."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | FAILED |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should parse both rows without error
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertIn("claude-haiku-4-5-20251001", summary["models"])
+        self.assertIn("claude-opus-4-8", summary["models"])
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 2)
+        self.assertEqual(summary["overall_scorecard"]["ok_count"], 1)
+        self.assertEqual(summary["overall_scorecard"]["failed_count"], 1)
+        self.assertEqual(summary["skipped_lines"], 0)
+        # No error should be set
+        self.assertNotIn("error", summary)
+
+    def test_parses_9_column_ledger(self):
+        """Accept new 9-column format (with phase and wave columns)."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|-------|------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK | build | 7 |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | FAILED | verify | 7 |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should parse both rows without error
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertIn("claude-haiku-4-5-20251001", summary["models"])
+        self.assertIn("claude-opus-4-8", summary["models"])
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 2)
+        self.assertEqual(summary["overall_scorecard"]["ok_count"], 1)
+        self.assertEqual(summary["overall_scorecard"]["failed_count"], 1)
+        self.assertEqual(summary["skipped_lines"], 0)
+        # No error should be set
+        self.assertNotIn("error", summary)
+
+    def test_parses_mixed_7_and_9_column_rows(self):
+        """Accept mixed ledger with both 7-column (old) and 9-column (new) rows."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|-------|------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | FAILED | build | 7 |
+| 2026-07-11T22:08:22 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK | verify | 7 |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should parse all rows despite column count variations
+        self.assertEqual(len(summary["models"]), 2)
+        haiku_stats = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku_stats["runs"], 2)
+        self.assertEqual(haiku_stats["tokens_in"], 16)  # 8 + 8
+        self.assertEqual(haiku_stats["tokens_out"], 302)  # 186 + 116
+
+        opus_stats = summary["models"]["claude-opus-4-8"]
+        self.assertEqual(opus_stats["runs"], 1)
+        self.assertEqual(opus_stats["tokens_in"], 2)
+        self.assertEqual(opus_stats["tokens_out"], 3)
+
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 3)
+        self.assertEqual(summary["overall_scorecard"]["ok_count"], 2)
+        self.assertEqual(summary["overall_scorecard"]["failed_count"], 1)
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertNotIn("error", summary)
+
+    def test_9_column_with_empty_phase_wave(self):
+        """Accept 9-column format with empty phase/wave cells."""
+        ledger = """|--------|------------|-------|--------------|-----------|------------|--------|-------|------|
+| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |  |  |
+| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 0 | 2 | 3 | FAILED | build |  |
+"""
+        self.write_ledger(ledger)
+        summary = cost.get_cost_summary()
+
+        # Should parse both rows even with empty trailing columns
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 2)
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertNotIn("error", summary)
+
+
+class TestCrossArtifactWithFleetLedger(CostIsolationCase):
+    """Cross-artifact test: append via fleet_ledger.py, parse via cost.py."""
+
+    def test_cost_parses_fleet_ledger_appended_9_column_rows(self):
+        """Verify cost.get_cost_summary() works with rows appended by fleet_ledger.append_ledger_line()."""
+        # This test verifies the bridge between fleet_ledger.py (writer) and cost.py (reader)
+        # by using the actual fleet_ledger append function.
+        try:
+            import fleet_ledger
+        except ImportError:
+            self.skipTest("fleet_ledger module not available")
+
+        # Set environment so fleet_ledger uses our isolated state dir
+        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
+
+        # Import datetime for valid ISO-8601 timestamps
+        from datetime import datetime, timezone
+
+        # Use fleet_ledger.append_ledger_line to append 9-column rows
+        # This ensures the test truly tests the integration between writer and reader
+        base_time = datetime.fromisoformat("2026-07-11T22:08:17+00:00")
+        ts1 = base_time.isoformat()
+        ts2 = base_time.replace(second=21).isoformat()
+        ts3 = base_time.replace(second=22).isoformat()
+
+        fleet_ledger.append_ledger_line(ts1, "Agent", "claude-haiku-4-5-20251001", 0, 8, 186, "OK", "build", 7)
+        fleet_ledger.append_ledger_line(ts2, "Agent", "claude-opus-4-8", 1, 2, 3, "FAILED", "verify", 7)
+        fleet_ledger.append_ledger_line(ts3, "Agent", "claude-haiku-4-5-20251001", 0, 8, 116, "OK", "repair", 7)
+
+        # Reload config to pick up the ledger
+        config.reload()
+
+        # Now parse with cost.get_cost_summary()
+        summary = cost.get_cost_summary()
+
+        # Verify all rows were parsed successfully
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertIn("claude-haiku-4-5-20251001", summary["models"])
+        self.assertIn("claude-opus-4-8", summary["models"])
+
+        # Verify haiku stats
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 2)
+        self.assertEqual(haiku["tokens_in"], 16)  # 8 + 8
+        self.assertEqual(haiku["tokens_out"], 302)  # 186 + 116
+        self.assertEqual(haiku["verdicts"]["OK"], 2)
+
+        # Verify opus stats
+        opus = summary["models"]["claude-opus-4-8"]
+        self.assertEqual(opus["runs"], 1)
+        self.assertEqual(opus["tokens_in"], 2)
+        self.assertEqual(opus["tokens_out"], 3)
+        self.assertEqual(opus["verdicts"]["FAILED"], 1)
+
+        # Verify overall scorecard
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 3)
+        self.assertEqual(summary["overall_scorecard"]["ok_count"], 2)
+        self.assertEqual(summary["overall_scorecard"]["failed_count"], 1)
+
+        # Verify no errors
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertNotIn("error", summary)
+
+    def test_cost_parses_manually_written_9_column_rows(self):
+        """Verify cost.get_cost_summary() handles manually-written 9-column rows.
+
+        This test ensures the parser handles hand-crafted markdown rows correctly,
+        but it does NOT verify integration with fleet_ledger.py (that's in
+        test_cost_parses_fleet_ledger_appended_9_column_rows).
+        """
+        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
+        ledger_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create ledger with header
+        header = '| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n'
+        header += '|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n'
+        ledger_file.write_text(header, encoding='utf-8')
+
+        # Append manually-written 9-column rows
+        row1 = '| 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK | build | 7 |\n'
+        row2 = '| 2026-07-11T22:08:21 | Agent | claude-opus-4-8 | 1 | 2 | 3 | FAILED | verify | 7 |\n'
+        row3 = '| 2026-07-11T22:08:22 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 116 | OK | repair | 7 |\n'
+
+        with open(ledger_file, 'a', encoding='utf-8') as f:
+            f.write(row1)
+            f.write(row2)
+            f.write(row3)
+
+        # Reload config to pick up the ledger
+        config.reload()
+
+        # Now parse with cost.get_cost_summary()
+        summary = cost.get_cost_summary()
+
+        # Verify all rows were parsed successfully
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertIn("claude-haiku-4-5-20251001", summary["models"])
+        self.assertIn("claude-opus-4-8", summary["models"])
+
+        # Verify haiku stats
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 2)
+        self.assertEqual(haiku["tokens_in"], 16)  # 8 + 8
+        self.assertEqual(haiku["tokens_out"], 302)  # 186 + 116
+        self.assertEqual(haiku["verdicts"]["OK"], 2)
+
+        # Verify opus stats
+        opus = summary["models"]["claude-opus-4-8"]
+        self.assertEqual(opus["runs"], 1)
+        self.assertEqual(opus["tokens_in"], 2)
+        self.assertEqual(opus["tokens_out"], 3)
+        self.assertEqual(opus["verdicts"]["FAILED"], 1)
+
+        # Verify overall scorecard
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 3)
+        self.assertEqual(summary["overall_scorecard"]["ok_count"], 2)
+        self.assertEqual(summary["overall_scorecard"]["failed_count"], 1)
+
+        # Verify no errors
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertNotIn("error", summary)
+
+    def test_cost_parses_8_column_rows(self):
+        """Verify cost.get_cost_summary() accepts 8-column rows (phase optional, wave omitted).
+
+        8-column format: | timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict | phase |
+        This is an intermediate format between 7-column (legacy) and 9-column (full).
+        """
+        ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
+        ledger_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create ledger with header
+        header = '| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase |\n'
+        header += '|--------|------------|-------|--------------|-----------|------------|--------|-------|\n'
+        ledger_file.write_text(header, encoding='utf-8')
+
+        # Append 8-column rows (no wave column)
+        row1 = '| 2026-07-11T22:10:01 | Agent | claude-haiku-4-5-20251001 | 0 | 10 | 200 | OK | build |\n'
+        row2 = '| 2026-07-11T22:10:05 | Agent | claude-opus-4-8 | 2 | 5 | 50 | OK | verify |\n'
+
+        with open(ledger_file, 'a', encoding='utf-8') as f:
+            f.write(row1)
+            f.write(row2)
+
+        # Reload config to pick up the ledger
+        config.reload()
+
+        # Now parse with cost.get_cost_summary()
+        summary = cost.get_cost_summary()
+
+        # Verify both rows were parsed successfully (8-column format is accepted)
+        self.assertEqual(len(summary["models"]), 2)
+        self.assertIn("claude-haiku-4-5-20251001", summary["models"])
+        self.assertIn("claude-opus-4-8", summary["models"])
+
+        # Verify haiku stats
+        haiku = summary["models"]["claude-haiku-4-5-20251001"]
+        self.assertEqual(haiku["runs"], 1)
+        self.assertEqual(haiku["tokens_in"], 10)
+        self.assertEqual(haiku["tokens_out"], 200)
+
+        # Verify opus stats
+        opus = summary["models"]["claude-opus-4-8"]
+        self.assertEqual(opus["runs"], 1)
+        self.assertEqual(opus["tokens_in"], 5)
+        self.assertEqual(opus["tokens_out"], 50)
+
+        # Verify overall scorecard
+        self.assertEqual(summary["overall_scorecard"]["total_runs"], 2)
+        self.assertEqual(summary["overall_scorecard"]["ok_count"], 2)
+        self.assertEqual(summary["skipped_lines"], 0)
+        self.assertNotIn("error", summary)
 
 
 if __name__ == "__main__":

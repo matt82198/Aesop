@@ -198,6 +198,12 @@ def main(argv=None):
 
     result = check(spent=args.spent, period=args.period)
 
+    # Check for errors FIRST (fail-closed): exception during check() means abort the wave
+    if "error" in result:
+        reason = result.get("reason", result["error"])
+        print(f"[cost_ceiling] FATAL: {reason}", file=sys.stderr)
+        return 1
+
     if result["ceiling"] is None:
         print(f"[cost_ceiling] no {args.period} ceiling configured — skipping (spent={result['spent']})")
         return 0

@@ -16,7 +16,9 @@ Contract under test:
       ],
       "at": str (ISO 8601)
     }
-  - Reads from agent transcripts (mtime, size) in ~/.claude/projects/*/memory/agent-*.jsonl
+  - Reads recursively from agent transcripts (mtime, size) in {transcripts_root}/**/agent-*.jsonl
+    Real Claude Code layout: ~/.claude/projects/*/subagents/agent-*.jsonl or {session}/subagents/agent-*.jsonl
+    Filters to <30 min mtime to avoid stale entries.
   - Degrades to {available:false} when no active workflow.
 
 Isolation: every test binds serve.py to a throwaway fixture AESOP_ROOT /
@@ -98,13 +100,17 @@ class WaveDispatchFixtureCase(unittest.TestCase):
         self.server_thread.start()
 
     def _create_fixture_transcripts(self):
-        """Create fixture agent transcripts for testing."""
-        # Create aesop project with memory dir
-        aesop_project = self.transcripts_root / "aesop" / "memory"
-        aesop_project.mkdir(parents=True, exist_ok=True)
+        """Create fixture agent transcripts for testing.
+
+        Uses real Claude Code layout: {project}/subagents/agent-*.jsonl
+        (matching ui/agents.py recursive glob pattern and real orchestration structure).
+        """
+        # Create aesop project with subagents dir (real layout, not memory/)
+        aesop_subagents = self.transcripts_root / "aesop" / "subagents"
+        aesop_subagents.mkdir(parents=True, exist_ok=True)
 
         # Agent 1: active, tool-use phase
-        agent1_path = aesop_project / "agent-fleet-fix-0.jsonl"
+        agent1_path = aesop_subagents / "agent-fleet-fix-0.jsonl"
         agent1_content = self._make_agent_jsonl(
             "User dispatch",
             "Assistant thinking",
@@ -114,7 +120,7 @@ class WaveDispatchFixtureCase(unittest.TestCase):
         agent1_path.write_text(agent1_content, encoding='utf-8')
 
         # Agent 2: stalled, many entries
-        agent2_path = aesop_project / "agent-fleet-fix-1.jsonl"
+        agent2_path = aesop_subagents / "agent-fleet-fix-1.jsonl"
         agent2_content = self._make_agent_jsonl(
             "User dispatch",
             "Assistant thinking",
@@ -128,7 +134,7 @@ class WaveDispatchFixtureCase(unittest.TestCase):
         os.utime(agent2_path, (old_time, old_time))
 
         # Agent 3: new, thinking phase
-        agent3_path = aesop_project / "agent-fleet-review-0.jsonl"
+        agent3_path = aesop_subagents / "agent-fleet-review-0.jsonl"
         agent3_content = self._make_agent_jsonl(
             "User dispatch",
             "Assistant thinking",

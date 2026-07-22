@@ -30,12 +30,10 @@
 //   items:      [ { slug, ownsFiles:[string], prompt:string, selfCheckCmd?: string, workDir?: string } ]
 //                // selfCheckCmd: optional per-item verification (exits 0 = pass, non-0 = fail)
 //                // workDir: optional override for selfCheckCmd execution (defaults to args.workDir)
-//   repairCap:   number  // default 1; OVERRIDDEN by verificationTier if tier >= 2
+//   repairCap:   number  // default 1; resolved from driver/verification_policy.py by build_manifest_item.
 //   verificationTier: number | null  // optional: backend verification tier (1=light spot-check, 2+=heavier)
-//              // When present and >= 2, forces adversarialReview=true and sets repairCap from policy
-//              // (mirrors driver/verification_policy.py — source of truth is Python, JS must match exactly).
-//              // Tier 1 (or absent): uses repairCap and adversarialReview values as-is (backward-compatible).
-//              // Tier 2: repair_cap=2, require_adversarial_review=true (Codex/weaker backends).
+//              // Policy is resolved in Python and carried as literal manifest fields (repairCap, requireAdversarialReview).
+//              // JS consumes manifest fields directly; no recomputation (no drift). Source of truth: driver/verification_policy.py.
 //              // Absent => defaults to 1 (Claude Code, high-accuracy path).
 //   brake:      { checkCmd: string, cwd?: string } | null  // optional kill-switch/cost-ceiling
 //              // gate run BEFORE any worker spawns (wave-26 critique fix — wires .HALT/cost_ceiling
@@ -50,13 +48,16 @@
 //              // Absent => unchanged behavior (backward-compatible).
 //   postBuild:  { cmd: string, afterItems: [string] } | null  // optional: run cmd (via agent) as soon as
 //                                                               // all named items pass self-check (pipeline semantics)
-//   adversarialReview: boolean | null  // optional: when truthy, after integration green, spawn one Haiku
-//                                       // reviewer per item to refute that it meets its CONTRACT
-//                                       // (reads actual code, constructs breaking scenarios).
-//                                       // Returns {holds:boolean, breakingScenario:string} per item;
-//                                       // items where holds=false are collected as contractFindings.
-//                                       // OVERRIDDEN to true if verificationTier >= 2.
-//                                       // Absent => unchanged behavior (backward-compatible, unless verificationTier overrides).
+//   requireAdversarialReview: boolean | null  // optional: when truthy, after integration green, spawn one Haiku
+//                                              // reviewer per item to refute that it meets its CONTRACT
+//                                              // (reads actual code, constructs breaking scenarios).
+//                                              // Returns {holds:boolean, breakingScenario:string} per item;
+//                                              // items where holds=false are collected as contractFindings.
+//                                              // Defaults to true (enable by default). Set false to disable.
+//                                              // ADVISORY: contractFindings never affect mergeReady (which gates
+//                                              // on integration green only) — the ORCHESTRATOR owns merge/escalation
+//                                              // decisions based on the findings it receives in Report.
+//                                              // Resolved by driver/verification_policy.py and passed via manifest.
 //   adversarialReviewMode: 'blocking' | 'concurrent-note' | null  // optional (LEVER 2, wall-clock)
 //                                       // 'blocking' (default): run the refutation INLINE before return (current behavior).
 //                                       // 'concurrent-note': do NOT await adversarialReview before signaling merge-readiness —
@@ -103,9 +104,8 @@ const TIMEBOX_MINUTES = typeof A.agentTimeboxNote === 'number' ? A.agentTimeboxN
 // build_manifest_item. The policy is resolved ONCE in Python and carried as literal manifest fields,
 // so there is no drift and no recomputation here. When fields are absent (legacy/tier-1 path),
 // defaults maintain byte-identical behavior.
-const VERIFICATION_TIER = typeof A.verificationTier === 'number' ? A.verificationTier : 1
 const CAP = typeof A.repairCap === 'number' ? A.repairCap : 1
-const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : false
+const ADVERSARIAL_REVIEW = typeof A.requireAdversarialReview === 'boolean' ? A.requireAdversarialReview : true
 // LEVER 2 (wall-clock): adversarialReview blocking vs concurrent-note. Default 'blocking' = current inline
 // behavior (findings produced before return). 'concurrent-note' defers the refutation so the orchestrator
 // can kick CI immediately and run adversarialReview in parallel, gating MERGE (not CI) on contractFindings.
@@ -400,6 +400,11 @@ let verifyOut = 0, repairOut = 0, repairsUsed = 0
 }
 
 phase('Repair')
+// Declare contractFindings, adversarialReviewOut, adversarialReviewPending here (before while loop)
+// to avoid TDZ ReferenceError when they're referenced in early returns (lines ~419, ~452).
+let contractFindings = []
+let adversarialReviewOut = 0
+let adversarialReviewPending = false
 let round = 0
 while (v && !v.green && round < CAP) {
   round++
@@ -508,9 +513,6 @@ while (v && !v.green && round < CAP) {
 }
 
 // -------- Adversarial Review (optional, gated on args.adversarialReview) --------
-let contractFindings = []
-let adversarialReviewOut = 0
-let adversarialReviewPending = false
 if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green) {
   phase('AdversarialReview')
   const reviewStart = budget.spent()
