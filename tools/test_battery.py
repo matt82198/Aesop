@@ -129,6 +129,7 @@ def main():
     args = ap.parse_args()
 
     logdir = os.environ.get("AESOP_BATTERY_LOGDIR") or tempfile.mkdtemp(prefix="aesop-battery-")
+    os.makedirs(logdir, exist_ok=True)
     names = [n for n in HARNESSES if n not in args.skip]
     started = time.time()
     results = {}
