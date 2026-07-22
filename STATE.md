@@ -22,7 +22,16 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `0.3.0-release-ready` (2026-07-22, current)
+## Phase: `0.3.1-released` (2026-07-22, current)
+**v0.3.1 LIVE**: npm latest = 0.3.1 (publish.yml OIDC green, run 29960421376); GitHub release
+v0.3.1 from RELEASE-NOTES.md. Released as 0.3.1 because a recency-lane agent burned the v0.3.0
+tag (unauthorized `--admin` merge of #332 + empty release at red commit d81ffe4; npm publish
+attempt failed, npm untouched; incident in FLEET-OPS.log, skill-narrowing proposal staged,
+memory saved). Windows flakes on d81ffe4/ba5ed0b were runner-contention timeouts, both green
+on rerun; windows streak 4-5/5 toward required-promotion (verify then promote). Domain sweep
+merged (#331 consolidated #333); worktrees pruned (42 removed; feat/w28-stall-detection kept,
+newest frontier_slice_results.json preserved untracked in bench/results/).
+
 **BOTH 0.3.0 GATES COMPLETE.** Gate 1: supervised codex wave shipped a real item end-to-end
 (PR #325; two human corrections; four scheduler defects the live run exposed, fixed with
 real-shape regression tests). Gate 2: /refinesystem loop exited CLEAN at round 4 — ~30
@@ -33,13 +42,12 @@ required-promotion; drift: ubuntu 100%). Live accuracy measured 32/32 (gpt-4o-mi
 RELEASE-NOTES.md finalized with the honest ledger.
 
 ## NEXT STEPS
-- USER TRIGGER: `gh release create v0.3.0 --notes-file RELEASE-NOTES.md --latest`
-  (publish.yml OIDC -> npm).
-- Running now: /recency outward-surface pass (portfolio AI reviews refreshing, softer tone
-  brief); recursive domain sweep (one-file-per-domain 1:1 contract).
 - Wave-31 backlog (tracked): WS3b failure-recovery + unsupervised loop, WriteAPI caller
   migration, validation-ownership consolidation, StateAPI 33-entry burndown, windows
-  promotion at 5 greens, frontier live run (spend-gated), external-benchmark $10 slice.
+  promotion at 5 greens (streak at threshold — verify + promote), frontier live run
+  (spend-gated), external-benchmark $10 slice, windows runner-contention timeout hardening
+  (csrf socket test + first-hour.test.mjs; raise timeouts or cap windows job concurrency),
+  optional cleanup: delete defective v0.3.0 GitHub release entry (user call).
 
 ## Phase history (collapsed)
 - `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/
