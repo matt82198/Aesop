@@ -808,5 +808,253 @@ class TestOrchestratorStatusFreshness(PrefightTestBase):
         self.assertNotEqual(result.returncode, 0)
 
 
+class TestBacklogAnalysis(unittest.TestCase):
+    """Test backlog item flagging for risky conditions."""
+
+    def setUp(self):
+        """Create temporary directories for test fixtures."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_path = Path(self.temp_dir.name)
+        self.tracker_file = self.temp_path / "tracker.json"
+        self.ledger_file = self.temp_path / "ledger.md"
+        self.work_dir = self.temp_path / "work"
+        self.work_dir.mkdir()
+
+    def tearDown(self):
+        """Clean up temporary directories."""
+        self.temp_dir.cleanup()
+
+    def _write_tracker(self, items):
+        """Write a tracker.json fixture."""
+        data = {"version": 1, "items": items}
+        self.tracker_file.write_text(json.dumps(data, indent=2), encoding='utf-8')
+
+    def _write_ledger(self, rows):
+        """Write a minimal ledger.md with header and rows.
+
+        Args:
+            rows: list of tuples: (iso_ts, agent_type, model, dur_sec, tokens_in, tokens_out, verdict, phase, wave)
+        """
+        header = '| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n'
+        header += '|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n'
+        content = header
+        for row in rows:
+            # row is already formatted as pipe-separated values
+            if isinstance(row, str) and row.startswith('|'):
+                # Already formatted
+                content += row + '\n'
+            else:
+                # Format the row
+                content += f"| {' | '.join(str(v) for v in row)} |\n"
+        self.ledger_file.write_text(content, encoding='utf-8')
+
+    def _write_file(self, path, content="test"):
+        """Write a file at the given path (relative to work_dir)."""
+        file_path = self.work_dir / path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding='utf-8')
+
+    def test_flag_missing_owns_files(self):
+        """Flag items with missing or empty owns_files."""
+        self._write_tracker([
+            {
+                "id": "1", "title": "Item without owns_files",
+                "priority": "P1", "status": "todo", "lane": "proposed",
+                "source": "test", "tags": [], "notes": "no owns_files field",
+                "pr_link": None, "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            },
+            {
+                "id": "2", "title": "Item with empty owns_files",
+                "priority": "P1", "status": "todo", "lane": "proposed",
+                "source": "test", "tags": [], "notes": "empty owns_files",
+                "owns_files": [],
+                "pr_link": None, "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            }
+        ])
+
+        # Import and run the tool
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(self.tracker_file), str(self.work_dir))
+
+        # Should flag both items as having missing/empty file ownership
+        self.assertTrue(result["success"])
+        flags_text = str(result["items"])
+        self.assertTrue(any("missing_ownership" in flags_text for _ in [None]))
+
+    def test_flag_stale_items(self):
+        """Flag items that reference non-existent files."""
+        self._write_file("existing.py", "real file")
+        self._write_tracker([
+            {
+                "id": "1", "title": "Item refs non-existent file",
+                "priority": "P1", "status": "todo", "lane": "proposed",
+                "source": "test", "tags": [], "notes": "fixes nonexistent.py",
+                "owns_files": ["nonexistent.py"],
+                "pr_link": None, "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            }
+        ])
+
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(self.tracker_file), str(self.work_dir))
+
+        self.assertTrue(result["success"])
+        # Should flag item 1 as stale
+        stale_found = any(
+            flag.get("type") == "stale_reference"
+            for item in result["items"]
+            for flag in item.get("flags", [])
+        )
+        self.assertTrue(stale_found, "Expected stale_reference flag")
+
+    def test_flag_overlapping_ownership(self):
+        """Flag two items that own the same file."""
+        self._write_file("shared.py", "shared")
+        self._write_tracker([
+            {
+                "id": "1", "title": "Item A owns shared",
+                "priority": "P1", "status": "todo", "lane": "proposed",
+                "source": "test", "tags": [], "notes": "owns shared.py",
+                "owns_files": ["shared.py"],
+                "pr_link": None, "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            },
+            {
+                "id": "2", "title": "Item B also owns shared",
+                "priority": "P1", "status": "todo", "lane": "proposed",
+                "source": "test", "tags": [], "notes": "also owns shared.py",
+                "owns_files": ["shared.py"],
+                "pr_link": None, "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            }
+        ])
+
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(self.tracker_file), str(self.work_dir))
+
+        self.assertTrue(result["success"])
+        # Should flag overlap
+        overlap_found = any(
+            flag.get("type") == "ownership_overlap"
+            for item in result["items"]
+            for flag in item.get("flags", [])
+        )
+        self.assertTrue(overlap_found, "Expected ownership_overlap flag")
+
+    def test_history_signal_from_ledger(self):
+        """Extract repair/retry rate from ledger."""
+        self._write_tracker([
+            {
+                "id": "1", "title": "Item", "priority": "P1", "status": "todo",
+                "lane": "proposed", "source": "test", "tags": [], "notes": "",
+                "owns_files": ["test.py"], "pr_link": None,
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            }
+        ])
+        self._write_file("test.py", "test")
+        # Simulate a ledger with some entries (format: iso_ts, agent_type, model, dur, tokens_in, tokens_out, verdict, phase, wave)
+        self._write_ledger([
+            ("2026-01-01T00:00:00Z", "haiku", "haiku", "10", "100", "200", "OK", "build", "1"),
+            ("2026-01-01T00:01:00Z", "haiku", "haiku", "12", "100", "300", "FAILED", "build", "1"),
+            ("2026-01-01T00:02:00Z", "haiku", "haiku", "10", "100", "250", "OK", "repair", "1"),
+        ])
+
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(self.tracker_file), str(self.work_dir), str(self.ledger_file))
+
+        # Should have extracted ledger stats
+        self.assertIn("ledger_stats", result)
+        stats = result.get("ledger_stats", {})
+        self.assertEqual(stats.get("data"), "AVAILABLE")
+        self.assertEqual(stats.get("total_entries"), 3)
+        self.assertEqual(stats.get("failed_count"), 1)
+
+    def test_data_unavailable_when_no_ledger(self):
+        """Return DATA-UNAVAILABLE signal when ledger is missing."""
+        self._write_tracker([
+            {
+                "id": "1", "title": "Item", "priority": "P1", "status": "todo",
+                "lane": "proposed", "source": "test", "tags": [], "notes": "",
+                "owns_files": ["test.py"], "pr_link": None,
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            }
+        ])
+        self._write_file("test.py", "test")
+
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(self.tracker_file), str(self.work_dir))
+
+        # Should indicate data unavailable, never fabricate
+        stats = result.get("ledger_stats", {})
+        self.assertEqual(stats.get("data"), "DATA-UNAVAILABLE")
+
+    def test_malformed_tracker_fails_gracefully(self):
+        """Handle malformed tracker input gracefully."""
+        bad_tracker = self.temp_path / "bad.json"
+        bad_tracker.write_text("{ invalid json }", encoding='utf-8')
+
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(bad_tracker), str(self.work_dir))
+
+        # Should indicate failure
+        self.assertFalse(result.get("success", True))
+
+    def test_json_output_format(self):
+        """Test JSON output format is valid."""
+        self._write_tracker([
+            {
+                "id": "1", "title": "Test item", "priority": "P1", "status": "todo",
+                "lane": "proposed", "source": "test", "tags": [], "notes": "test",
+                "owns_files": ["test.py"], "pr_link": None,
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            }
+        ])
+        self._write_file("test.py", "test")
+
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(self.tracker_file), str(self.work_dir))
+
+        # Result should be serializable to JSON
+        json_str = json.dumps(result)
+        self.assertIsInstance(json_str, str)
+        reparsed = json.loads(json_str)
+        self.assertIsInstance(reparsed, dict)
+
+    def test_empty_tracker(self):
+        """Handle empty tracker gracefully."""
+        self._write_tracker([])
+
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(self.tracker_file), str(self.work_dir))
+
+        self.assertTrue(result.get("success", True))
+        self.assertEqual(len(result.get("items", [])), 0)
+
+    def test_todo_items_only(self):
+        """Only flag items that are todo (not archived/done)."""
+        self._write_tracker([
+            {
+                "id": "1", "title": "Todo item",
+                "priority": "P1", "status": "todo", "lane": "proposed",
+                "source": "test", "tags": [], "notes": "",
+                "owns_files": [],
+                "pr_link": None, "created_at": "2026-01-01T00:00:00Z", "completed_at": None
+            },
+            {
+                "id": "2", "title": "Done item",
+                "priority": "P1", "status": "done", "lane": "done",
+                "source": "test", "tags": [], "notes": "",
+                "owns_files": [],
+                "pr_link": None, "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-02T00:00:00Z"
+            }
+        ])
+
+        from tools.wave_preflight import scan_backlog_items
+        result = scan_backlog_items(str(self.tracker_file), str(self.work_dir))
+
+        # Should only process todo items (id=1)
+        item_ids = [item.get("id") for item in result.get("items", [])]
+        self.assertIn("1", item_ids)
+        # Done items should not be flagged
+        self.assertNotIn("2", item_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
