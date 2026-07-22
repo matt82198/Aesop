@@ -153,14 +153,22 @@ def check_orchestrator_status_freshness(status_json_path, threshold_s):
         if not updated_at:
             return True, 0, "orchestrator-status.json missing updated_at field"
 
-        # Parse ISO 8601 timestamp
+        # Parse ISO 8601 timestamp (handle both "Z" and "+00:00" timezone formats)
         import datetime
-        # Handle both formats: "2026-07-17T00:00:00Z" and with fractional seconds
-        updated_dt = datetime.datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        # Normalize Z suffix to +00:00 for fromisoformat compatibility
+        normalized_ts = updated_at.replace("Z", "+00:00")
+        updated_dt = datetime.datetime.fromisoformat(normalized_ts)
         timestamp = updated_dt.timestamp()
 
         age_seconds = int(time.time()) - int(timestamp)
-        age_seconds = max(0, age_seconds)  # Never negative
+
+        # Check for far-future timestamp (clock skew beyond tolerance)
+        # More than 120s in the future is treated as stale, not clamped-to-fresh
+        if age_seconds < -120:
+            return True, 0, "orchestrator-status timestamp in future (clock skew)"
+
+        # Clamp small negative ages to 0 (normal clock skew recovery)
+        age_seconds = max(0, age_seconds)
 
         if age_seconds >= threshold_s:
             return True, age_seconds, f"orchestrator-status stale ({age_seconds}s >= {threshold_s}s)"
@@ -340,9 +348,11 @@ def run_checks(root_dir=None, state_dir=None, config=None):
     status_phase = parse_orchestrator_status_phase(status_json_path)
 
     # Determine phase drift: only if both are defined and differ
+    drift_detected = False
     if state_phase is not None and status_phase is not None:
         if state_phase != status_phase:
             # Drift detected: both phases exist but differ
+            drift_detected = True
             phase_detail = f"STATE.md={state_phase}, status.json={status_phase} [WARN: drift detected]"
         else:
             # Phases match
@@ -351,7 +361,9 @@ def run_checks(root_dir=None, state_dir=None, config=None):
         # One or both phases missing (not yet ready or not applicable)
         phase_detail = f"STATE.md={state_phase}, status.json={status_phase}"
 
-    # Phase drift is warning-level: never blocks the wave
+    # Phase drift check: warning-level (drift is reported but does not block)
+    # The check always passes (phase_ok = True), but drift detail is visible in output
+    # This makes the check non-vacuous: drift is detected and reported, but doesn't block
     phase_ok = True
 
     checks.append({
