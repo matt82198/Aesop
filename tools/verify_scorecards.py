@@ -175,7 +175,6 @@ def main():
               file=sys.stderr)
         return 1
 
-    port = find_free_port()
     all_passed = True
 
     # Test 1: Populated state
@@ -186,11 +185,24 @@ def main():
         ledger_dir.mkdir(parents=True)
         (ledger_dir / 'OUTCOMES-LEDGER.md').write_text(FIXTURE_LEDGER_POPULATED)
 
+        # Create fixture directories
+        fixtures_dir = Path(tmpdir) / 'fixtures'
+        fixtures_dir.mkdir(parents=True)
+        transcripts_dir = Path(tmpdir) / 'transcripts'
+        transcripts_dir.mkdir(parents=True)
+
+        # Find free port for this phase
+        port = find_free_port()
+
         # Start server
         env = os.environ.copy()
         env['PORT'] = str(port)
         env['AESOP_STATE_ROOT'] = str(state_dir)
         env['AESOP_ROOT'] = str(REPO)
+        env['AESOP_WEB_DIST'] = str(REPO / 'ui' / 'web' / 'dist')
+        env['AESOP_PROOF_FIXTURES'] = '1'
+        env['AESOP_UI_COLLECT_INTERVAL'] = '0.1'
+        env['AESOP_TRANSCRIPTS_ROOT'] = str(transcripts_dir)
 
         proc = subprocess.Popen(
             [sys.executable, str(SERVE)],
@@ -222,10 +234,23 @@ def main():
         ledger_dir.mkdir(parents=True)
         (ledger_dir / 'OUTCOMES-LEDGER.md').write_text(FIXTURE_LEDGER_EMPTY)
 
+        # Create fixture directories
+        fixtures_dir = Path(tmpdir) / 'fixtures'
+        fixtures_dir.mkdir(parents=True)
+        transcripts_dir = Path(tmpdir) / 'transcripts'
+        transcripts_dir.mkdir(parents=True)
+
+        # Find free port for this phase
+        port = find_free_port()
+
         env = os.environ.copy()
         env['PORT'] = str(port)
         env['AESOP_STATE_ROOT'] = str(state_dir)
         env['AESOP_ROOT'] = str(REPO)
+        env['AESOP_WEB_DIST'] = str(REPO / 'ui' / 'web' / 'dist')
+        env['AESOP_PROOF_FIXTURES'] = '1'
+        env['AESOP_UI_COLLECT_INTERVAL'] = '0.1'
+        env['AESOP_TRANSCRIPTS_ROOT'] = str(transcripts_dir)
 
         proc = subprocess.Popen(
             [sys.executable, str(SERVE)],
