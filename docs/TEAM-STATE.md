@@ -1,203 +1,35 @@
-# Team-Shared State: Architecture & Migration
+# Team-Shared State: Current & Future Architecture
 
-**Status**: Design document. Prototype complete (`state_store/` SQLite module shipped). Migration path defined. NOT YET INTEGRATED into orchestrator reader/writer paths.
+**Status (0.1.0)**: Single-instance with durable git checkpointing. Event-sourced SQLite module (`state_store/`) is production-ready but not yet integrated into orchestrator reader/writer paths.
 
 ---
 
-## Problem Statement
+## Current State Model (Git-as-Checkpoint)
 
 Aesop currently stores orchestration state in **two git-tracked files**:
-- `STATE.md` — intent, decisions, phase, NEXT STEPS (single-writer orchestrator)
-- `BUILDLOG.md` — append-only progress snapshots (agents append one line per work unit)
 
-This works **for single-user/single-orchestrator** workflows but does not scale to teams:
+- **STATE.md** — Orchestrator intent, decisions, phase, and NEXT STEPS (single-writer)
+- **BUILDLOG.md** — Append-only progress snapshots (agents append one line per work unit)
 
-1. **Hot-file merge conflicts** — Multiple agents appending to the same files requires rebasing and re-coordination; a team of 3+ users editing these simultaneously causes conflicts.
-2. **No transactions/concurrency** — Git has no concept of atomic multi-file updates or per-agent locks; coordination is manual and error-prone.
-3. **No real-time status** — Readers must `git fetch` to see the latest state; no subscription/push model for live updates.
-4. **Single-writer bottleneck** — The orchestrator is the only writer to STATE.md; other workers cannot safely report their own state.
+**Why it works**: Single-instance is proven. State survives machine wipes, resync on session restart, human-diffable for review and forensics.
+
+**Limitation**: Does not scale to teams—no concurrent writers, no transactions, high latency (requires `git push`).
 
 ---
 
-## Current Truth: Git-as-State (Single-Instance)
+## Future: SQLite Event Log + Git Export
 
-### Data model
+**Vision**: Event-sourced SQLite WAL becomes the system-of-record. Git exports are rendered from current projections for durability and review.
 
-State lives as **human-readable JSON** in two git-tracked files:
+**In the repo now**:
+- `state_store/store.py` — EventStore with atomic `append()`, concurrency-safe writes
+- `state_store/projections.py` — Fold events into tracker state
+- `state_store/api.py` — Facade for backend swaps (SQLite today, Postgres later)
+- `tests/test_state_store.py` — Concurrent-write proofs, projection tests
 
-```
-orchestrator (Fable/Opus) ←→ STATE.md (single-writer, locked decisions + phase + NEXT STEPS)
-                          ←→ BUILDLOG.md (append-only, agents append one line per work unit)
-                          
-↓ (read-only consumers)
+**Next steps**: Wire the orchestrator and agent writers to use `StateAPI` instead of git direct writes. This unblocks team-scale coordination without breaking single-instance durability (git exports remain).
 
-dashboards, monitoring, forensics
-```
-
-**Invariants**:
-- Only the orchestrator writes to STATE.md (enforced by discipline, not by code)
-- BUILDLOG.md is append-only; orchestrator never rewrites earlier entries
-- All state is human-diffable (intentional — enables review, forensics, inheritance)
-- Durability via git: push after each update, recover from `git log` on session restart
-- Git is the **source of truth** for current state
-
-### Limitations for team scale
-
-- **No concurrent writers** — Two orchestrators or agents trying to write simultaneously causes merge conflicts
-- **No transactions** — A phase update + next-steps change is two separate commits, not atomic
-- **High latency** — State changes require `git push`; observability is on a push-frequency, not real-time
-- **No locking** — State can be read/modified while orchestrator is deciding; no optimistic concurrency
-- **No history/events** — Only final state (current file contents) is stored; intermediate states are lost
-
----
-
-## Target: SQLite WAL as Live Substrate, Git as Export
-
-### Proposed data model
-
-```
-orchestrator/agents write events ─→ SQLite WAL event log (LIVE substrate, fast, transactional)
-                                 ↓
-                            state_store/ EventStore
-                            (append() atomic across processes/threads)
-                                 ↓
-                            [snapshots for O(n) tail-replay]
-                                 ↓
-                            projections/StateAPI (project tracker state)
-                                 ↓
-export_tracker() ─────────→ STATE.md / BUILDLOG.md (git-tracked EXPORT, human-diffable, immutable)
-                                 ↓
-                            [dashboards, monitoring, forensics read git export]
-```
-
-### Key design principles
-
-1. **Event sourcing**: State is a fold of immutable events, not mutable files. Each write is a single `append(stream, event_type, payload, actor)` call — atomic, ordered, versionable.
-
-2. **Append-only**: No deletes or mutations. History is preserved forever. Replayability + auditing for free.
-
-3. **Per-stream versioning**: Each "stream" (e.g., `"tracker"`, `"orchestrator_status"`) has its own 1-based, gapless version. Enables deterministic snapshots and tail-replay (see `state_store/store.py` line 81–92 and `state_store/projections.py` line 117–127).
-
-4. **Concurrency-safe writes**: SQLite WAL mode + `BEGIN IMMEDIATE` transactions guarantee that two writers on the same file never collide or duplicate a version (see `state_store/store.py` line 30–94). Tested in `tests/test_state_store.py::EventStoreTest::test_concurrent_appends_have_no_dupes_or_gaps`.
-
-5. **Snapshots for O(n) tail-replay**: Instead of replaying all events on every read, save materialized state snapshots at key versions; future replays fold only newer events (see `state_store/store.py` line 130–196 and `state_store/projections.py` line 84–114).
-
-6. **Git as export, not source**: The SQLite store is the system-of-record. `export_tracker(api, out_path)` renders the current projection back to human-readable JSON for git durability and review (see `state_store/export.py`). Git is now **read-only for state** (except for manual edits, which become new events on next `ingest_tracker_json`).
-
-7. **Projection-based readers**: Callers do not query the raw event log; instead, they call `api.project(view)` to get the current state as a dict. New projections (e.g., `project_orchestrator_status`) can be registered in `state_store/api.py` without changing the event store (see line 12–35).
-
----
-
-## Architecture: The Three Layers
-
-### 1. Event Store (SQLite WAL)
-
-**File**: `state_store/store.py`
-
-**Class**: `EventStore(db_path)`
-
-**Public API**:
-- `append(stream: str, event_type: str, payload: dict, actor: str = "system") -> int` — Append one event, return its per-stream version. Atomic: multiple writers see no dupes or gaps (tests line 90–108).
-- `read(stream: str) -> list` — All events in a stream, ascending by version. Returns list of dicts with `{"id", "ts", "actor", "stream", "type", "payload", "version"}`.
-- `read_all() -> list` — All events across all streams, ascending by global id.
-- `save_snapshot(stream: str, event_version: int, projection: dict) -> None` — Persist a materialized projection at a specific version (line 130–153).
-- `read_snapshot(stream: str) -> tuple | None` — Read the most recent snapshot; returns `(event_version, projection_dict, checksum)` or None (line 155–197).
-
-**Concurrency model**:
-- Multiple writers: `BEGIN IMMEDIATE` locks the write lock up front, so read-max-version-then-insert is atomic (line 80).
-- Multiple readers: SQLite WAL mode allows readers to run concurrently with writers on separate .db-wal shadow files (no blocking).
-- Process/thread-safe: each `append()` call opens its own connection; `busy_timeout=5000` (5 seconds) waits if the DB is locked (line 32–94).
-- Tested with two threads, each with its own EventStore instance, appending 100 events concurrently with no dupes (tests line 90–108).
-
-### 2. Projections (Fold Events into State)
-
-**File**: `state_store/projections.py`
-
-**Functions**:
-- `_fold_events(events, order=None, items=None) -> (order, items)` — Fold events into an accumulated state tuple. Mutates order + items in place. Helper used by both full and snapshot-aware projections (line 25–71).
-
-- `project_tracker(events: list) -> dict` — Original full-replay projection: fold all events → `{"version": 1, "items": [items in first-seen order]}`. Defines tracker event schema:
-  - `item_created` (payload = full item dict): establishes item, kept in first-seen order
-  - `item_updated` (payload = `{"id": ..., ...partial fields}`): merges partial fields onto existing item
-  - `item_archived` (payload = `{"id": ...}`): sets `status` to `"archived"`, optionally merges `completed_at`
-  - Unknown event types: ignored (line 74–81).
-
-- `project_tracker_with_snapshot(store, stream: str, events: list) -> dict` — Snapshot-aware projection: load latest snapshot; fold only tail events (after snapshot version) for O(n) tail-replay. Falls back to full replay if snapshot is missing or corrupt (line 84–114).
-
-- `save_snapshot(store, stream: str, event_version: int, projection: dict) -> None` — Wrapper over `store.save_snapshot()` (line 117–126).
-
-**Event schema for tracker**:
-```json
-{
-  "type": "item_created",
-  "payload": {"id": "abc", "title": "...", "lane": "proposed", "status": "todo", ...}
-}
-{
-  "type": "item_updated",
-  "payload": {"id": "abc", "lane": "in-progress"}
-}
-{
-  "type": "item_archived",
-  "payload": {"id": "abc", "completed_at": "2026-07-17T...Z"}
-}
-```
-
-Tolerance: unknown ids on update/archive are ignored (no error); unknown event types are skipped (line 62–70).
-
-### 3. Facade API (Single Seam for Backend Swaps)
-
-**File**: `state_store/api.py`
-
-**Class**: `StateAPI(db_path)`
-
-**Public API**:
-- `append(stream: str, event_type: str, payload: dict, actor: str = "system") -> int` — Append event, return version.
-- `get(stream: str) -> list` — Read all events in a stream.
-- `project(view: str) -> dict` — Fold the named stream through its projector into current state. Raises `ValueError` if projector not registered (line 15–35).
-
-**Backend swaps**: The backend (SQLite now, Postgres later) is abstracted here. Callers **never** touch `EventStore` directly; they use `StateAPI` only. On cutover to Postgres, only `api.py` changes; call sites stay the same.
-
----
-
-## New State Streams (Beyond Tracker)
-
-The tracker stream is the first proof of concept. The event log supports **arbitrary streams**; new streams are registered by adding a projector to `_PROJECTORS` in `state_store/api.py` (line 12).
-
-### Proposed: `orchestrator_status` stream
-
-**Purpose**: Record orchestrator phase, NEXT STEPS, decisions, and audit results in real-time without git writes.
-
-**Events**:
-```json
-{
-  "type": "phase_changed",
-  "payload": {"phase": "wave-rc.3", "reason": "stable release shipped"}
-}
-{
-  "type": "next_steps_updated",
-  "payload": {"steps": ["reconcile state_store SI", "add orchestrator_status stream", ...]}
-}
-{
-  "type": "decision_locked",
-  "payload": {"key": "model_dispatch_core", "value": "out-of-repo (structural)", "justification": "..."}
-}
-{
-  "type": "audit_findings_recorded",
-  "payload": {"level": "wave-rc.2", "findings_count": 3, "summary": "..."}
-}
-```
-
-**Projection** (pseudo-code):
-```python
-def project_orchestrator_status(events):
-    status = {
-        "phase": None,
-        "decisions": {},
-        "next_steps": [],
-        "latest_audit": None,
-    }
-    for ev in events:
-        if ev["type"] == "phase_changed":
+For implementation details, see `state_store/` source code and inline documentation.
             status["phase"] = ev["payload"]["phase"]
         elif ev["type"] == "decision_locked":
             key = ev["payload"]["key"]
