@@ -50,6 +50,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
 - `proposals.mjs` — Proposal lifecycle manager (list/accept/reject via lock.mjs)
+- `reproduce.js` — Offline verification suite (mirrors reproduce.yml; REPO/INSTALLED modes; exit 0=pass; exact-match doctor pre-init classification)
 - `reconcile.py` — Detect/resolve drift (git STATE.md vs. state_store projection; git-authoritative; --resolve appends to SQLite only, never rewrites git-side state)
 - `reconstitute.sh` — Clone/fetch repos from config with security validation
 - `rotate_logs.py` — Log rotation utility (size/line thresholds)
