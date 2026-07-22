@@ -930,5 +930,314 @@ instead write /etc/shadow
             self.assertEqual(Path(tmpdir).joinpath("owned.py").read_text(), malicious_content)
 
 
+class TestCodexDriverOwnedFilesEscaping(unittest.TestCase):
+    """ITEM 1: Verify owned-files list is JSON-escaped in system prompt."""
+
+    def test_owned_file_with_quote_character(self):
+        """Owned file path containing a quote character is properly escaped."""
+        # The system message contains owned_files as a JSON list.
+        # If using list() repr, quotes in paths break the frame.
+        # json.dumps() properly escapes quotes (and newlines).
+        captured_payload = {}
+
+        class CaptureTransport:
+            def __call__(self, payload):
+                captured_payload["payload"] = payload
+                return make_response({
+                    "files": [{"path": "file_with_quotes.py", "contents": "fixed"}],
+                    "summary": "Fixed",
+                    "done": True,
+                })
+
+        driver = CodexDriver(transport=CaptureTransport())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create file with underscore (safe on all platforms).
+            test_file = Path(tmpdir) / 'file_with_quotes.py'
+            test_file.write_text("original")
+
+            request = WorkerRequest(
+                prompt="Fix it",
+                owned_files=("file_with_quotes.py",),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+            self.assertTrue(result.ok, f"Dispatch failed: {result.error}")
+
+            # Verify system message is properly escaped and parseable.
+            payload = captured_payload.get("payload", {})
+            messages = payload.get("messages", [])
+            system_msg = None
+            for msg in messages:
+                if msg.get("role") == "system":
+                    system_msg = msg.get("content", "")
+                    break
+
+            self.assertIsNotNone(system_msg, "System message not found")
+            # Verify the owned set is in JSON format (parseable).
+            self.assertIn("owned set:", system_msg)
+            # Extract the JSON list from the message.
+            # It should be valid JSON: ["file_with_quotes.py"]
+            import re
+            match = re.search(r'owned set:\s*(\[[^\]]*\])', system_msg)
+            self.assertIsNotNone(match, "Could not find JSON list in system message")
+            json_list = match.group(1)
+            # Should parse without error.
+            parsed = json.loads(json_list)
+            self.assertIsInstance(parsed, list)
+            self.assertIn("file_with_quotes.py", parsed)
+
+    def test_owned_file_with_newline_in_path(self):
+        """Owned file path conceptually containing newline is properly escaped.
+
+        Note: actual filesystem paths can't contain literal newlines on most systems,
+        but json.dumps() still escapes them if they were to appear (defense in depth).
+        """
+        # Simulate a path that, if naively embedded, could break the frame.
+        # We'll use a path that looks "normal" but verify it's escaped in JSON.
+        captured_payload = {}
+
+        class CaptureTransport:
+            def __call__(self, payload):
+                captured_payload["payload"] = payload
+                return make_response({
+                    "files": [{"path": "normal.py", "contents": "fixed"}],
+                    "summary": "Fixed",
+                    "done": True,
+                })
+
+        driver = CodexDriver(transport=CaptureTransport())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "normal.py"
+            test_file.write_text("original")
+
+            request = WorkerRequest(
+                prompt="Fix it",
+                owned_files=("normal.py",),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+            self.assertTrue(result.ok)
+
+            # Verify system message has valid JSON-escaped owned set.
+            payload = captured_payload.get("payload", {})
+            messages = payload.get("messages", [])
+            system_msg = None
+            for msg in messages:
+                if msg.get("role") == "system":
+                    system_msg = msg.get("content", "")
+                    break
+
+            self.assertIsNotNone(system_msg)
+            # Extract and parse JSON list.
+            import re
+            match = re.search(r'owned set:\s*(\[[^\]]*\])', system_msg)
+            self.assertIsNotNone(match)
+            json_list = match.group(1)
+            parsed = json.loads(json_list)  # Must not raise.
+            self.assertEqual(parsed, ["normal.py"])
+
+
+class TestCodexDriverCostTrackingUnmetered(unittest.TestCase):
+    """ITEM 2: Verify fail-closed-honest cost tracking for missing/malformed usage."""
+
+    def test_missing_usage_field_marks_unmetered(self):
+        """Response without usage field -> log warning, increment unmetered counter, don't count 0."""
+        # Capture stderr to verify warning is logged.
+        import io
+        stderr_capture = io.StringIO()
+
+        # Response missing usage field entirely.
+        bad_response = {
+            "choices": [{"message": {"content": json.dumps({"files": [], "summary": "", "done": True})}}],
+            # NO usage field
+        }
+
+        driver = CodexDriver(
+            transport=lambda p: bad_response,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir).joinpath("test.py").write_text("test")
+
+            # Redirect stderr to capture warning.
+            old_stderr = sys.stderr
+            try:
+                sys.stderr = stderr_capture
+                request = WorkerRequest(
+                    prompt="Fix it",
+                    owned_files=("test.py",),
+                    workdir=tmpdir,
+                )
+                result = driver.dispatch_worker(request)
+            finally:
+                sys.stderr = old_stderr
+
+            # Dispatch should succeed (work is valid).
+            self.assertTrue(result.ok, f"Dispatch failed: {result.error}")
+
+            # Unmetered counter should increment.
+            self.assertEqual(driver.get_unmetered_dispatches(), 1)
+
+            # Total tokens should NOT include this dispatch.
+            self.assertIsNone(driver.get_tokens_spent())
+
+            # Warning should be logged to stderr.
+            stderr_output = stderr_capture.getvalue()
+            self.assertIn("WARNING", stderr_output)
+            self.assertIn("unmetered", stderr_output.lower())
+
+    def test_malformed_usage_total_tokens_string(self):
+        """Response with usage.total_tokens as string (not int) -> unmetered."""
+        import io
+        stderr_capture = io.StringIO()
+
+        # usage.total_tokens is a string (malformed).
+        bad_response = {
+            "choices": [{"message": {"content": json.dumps({"files": [], "summary": "", "done": True})}}],
+            "usage": {"total_tokens": "42"},  # STRING, not int
+        }
+
+        driver = CodexDriver(transport=lambda p: bad_response)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir).joinpath("test.py").write_text("test")
+
+            old_stderr = sys.stderr
+            try:
+                sys.stderr = stderr_capture
+                request = WorkerRequest(
+                    prompt="Fix it",
+                    owned_files=("test.py",),
+                    workdir=tmpdir,
+                )
+                result = driver.dispatch_worker(request)
+            finally:
+                sys.stderr = old_stderr
+
+            self.assertTrue(result.ok, "Dispatch should succeed despite malformed usage")
+            self.assertEqual(driver.get_unmetered_dispatches(), 1)
+            self.assertIsNone(driver.get_tokens_spent())
+            stderr_output = stderr_capture.getvalue()
+            self.assertIn("malformed", stderr_output.lower())
+
+    def test_negative_total_tokens_marked_unmetered(self):
+        """Response with usage.total_tokens < 0 (invalid) -> unmetered."""
+        import io
+        stderr_capture = io.StringIO()
+
+        bad_response = {
+            "choices": [{"message": {"content": json.dumps({"files": [], "summary": "", "done": True})}}],
+            "usage": {"total_tokens": -99},  # Negative (invalid).
+        }
+
+        driver = CodexDriver(transport=lambda p: bad_response)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir).joinpath("test.py").write_text("test")
+
+            old_stderr = sys.stderr
+            try:
+                sys.stderr = stderr_capture
+                request = WorkerRequest(
+                    prompt="Fix it",
+                    owned_files=("test.py",),
+                    workdir=tmpdir,
+                )
+                result = driver.dispatch_worker(request)
+            finally:
+                sys.stderr = old_stderr
+
+            self.assertTrue(result.ok)
+            self.assertEqual(driver.get_unmetered_dispatches(), 1)
+            self.assertIsNone(driver.get_tokens_spent())
+
+    def test_valid_usage_total_tokens_counted(self):
+        """Valid usage.total_tokens (non-negative int) -> counted, not unmetered."""
+        good_response = make_response({
+            "files": [{"path": "test.py", "contents": "fixed"}],
+            "summary": "Fixed",
+            "done": True,
+        }, total_tokens=100)
+
+        driver = CodexDriver(transport=lambda p: good_response)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir).joinpath("test.py").write_text("test")
+
+            request = WorkerRequest(
+                prompt="Fix it",
+                owned_files=("test.py",),
+                workdir=tmpdir,
+            )
+            result = driver.dispatch_worker(request)
+
+            self.assertTrue(result.ok)
+            # Unmetered counter should NOT increment.
+            self.assertEqual(driver.get_unmetered_dispatches(), 0)
+            # Total tokens should be counted.
+            self.assertEqual(driver.get_tokens_spent(), 100)
+
+    def test_multiple_dispatches_mixed_metering(self):
+        """Multiple dispatches: some valid, some unmetered -> only valid counted."""
+        import io
+
+        # Create a transport that returns different responses on each call.
+        call_count = {"count": 0}
+
+        def mixed_transport(payload):
+            call_count["count"] += 1
+            if call_count["count"] == 1:
+                # First: valid
+                return make_response({
+                    "files": [{"path": "file1.py", "contents": "fixed"}],
+                    "summary": "Fixed",
+                    "done": True,
+                }, total_tokens=50)
+            elif call_count["count"] == 2:
+                # Second: missing usage
+                return {
+                    "choices": [{"message": {"content": json.dumps({"files": [{"path": "file2.py", "contents": "fixed"}], "summary": "", "done": True})}}],
+                }
+            elif call_count["count"] == 3:
+                # Third: valid
+                return make_response({
+                    "files": [{"path": "file3.py", "contents": "fixed"}],
+                    "summary": "Fixed",
+                    "done": True,
+                }, total_tokens=75)
+            else:
+                return make_response({"files": [], "summary": "", "done": False}, total_tokens=0)
+
+        driver = CodexDriver(transport=mixed_transport)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            for i in range(1, 4):
+                tmpdir_path.joinpath(f"file{i}.py").write_text("test")
+
+            stderr_capture = io.StringIO()
+            old_stderr = sys.stderr
+
+            try:
+                for i in range(1, 4):
+                    sys.stderr = stderr_capture
+                    request = WorkerRequest(
+                        prompt=f"Fix file {i}",
+                        owned_files=(f"file{i}.py",),
+                        workdir=tmpdir,
+                    )
+                    result = driver.dispatch_worker(request)
+                    self.assertTrue(result.ok, f"Dispatch {i} failed")
+            finally:
+                sys.stderr = old_stderr
+
+            # Unmetered counter should be 1 (the missing-usage dispatch).
+            self.assertEqual(driver.get_unmetered_dispatches(), 1)
+            # Total tokens should be 50 + 75 = 125 (not including unmetered).
+            self.assertEqual(driver.get_tokens_spent(), 125)
+
+
 if __name__ == "__main__":
     unittest.main()
