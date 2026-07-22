@@ -31,6 +31,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -39,6 +40,38 @@ const CLI = path.join(
 
 // Per-test-file fixture cache: key = dirName, value = result
 const fixtureCache = new Map();
+
+/**
+ * Compute a content manifest for key scaffold files.
+ * Returns a map of relPath -> { size, mtime, hash } for files < 64KB.
+ * Used to detect mutations of the shared fixture.
+ *
+ * @param {string} targetDir - The scaffold target directory
+ * @returns {object} Map of relPath -> { size, mtime, hash }
+ */
+function computeFixtureManifest(targetDir) {
+  const manifest = {};
+  const keyFiles = ['aesop.config.json', 'CLAUDE.md'];
+
+  for (const filename of keyFiles) {
+    const filePath = path.join(targetDir, filename);
+    if (fs.existsSync(filePath)) {
+      const stat = fs.statSync(filePath);
+      const content = fs.readFileSync(filePath);
+
+      if (stat.size < 64 * 1024) {
+        const hash = crypto.createHash('sha256').update(content).digest('hex');
+        manifest[filename] = {
+          size: stat.size,
+          mtime: stat.mtime.getTime(),
+          hash
+        };
+      }
+    }
+  }
+
+  return manifest;
+}
 
 /**
  * Run scaffold once per test file, cache results, return paths.
@@ -117,7 +150,9 @@ export function scaffoldOnce(dirName, opts = {}) {
     claudePath: path.join(targetDir, 'CLAUDE.md'),
     statePath: path.join(targetDir, 'state'),
     hookPath: path.join(targetDir, '.git', 'hooks', 'pre-push'),
-    result
+    result,
+    // Compute manifest for mutation detection
+    manifest: computeFixtureManifest(targetDir)
   };
 
   fixtureCache.set(dirName, fixture);
@@ -134,6 +169,45 @@ export function getFixture(dirName) {
     throw new Error(`Fixture "${dirName}" not scaffolded yet. Call scaffoldOnce first.`);
   }
   return fixture;
+}
+
+/**
+ * Assert that a fixture has not been mutated since creation.
+ * Throws descriptively if any key files were changed.
+ * Call this before cleanupFixtures() to catch test mutations.
+ *
+ * @param {object} fixture - The fixture object returned from scaffoldOnce
+ * @throws {Error} If fixture files were modified
+ */
+export function assertFixturePristine(fixture) {
+  if (!fixture.manifest) {
+    return; // No manifest recorded, skip check
+  }
+
+  const changedFiles = [];
+  const currentManifest = computeFixtureManifest(fixture.targetDir);
+
+  // Check for changed or deleted files
+  for (const [relPath, originalEntry] of Object.entries(fixture.manifest)) {
+    const currentEntry = currentManifest[relPath];
+
+    if (!currentEntry) {
+      changedFiles.push(`${relPath}: DELETED`);
+    } else if (currentEntry.hash !== originalEntry.hash) {
+      changedFiles.push(`${relPath}: MODIFIED (size ${originalEntry.size} -> ${currentEntry.size})`);
+    }
+  }
+
+  // Check for newly added files
+  for (const relPath of Object.keys(currentManifest)) {
+    if (!fixture.manifest[relPath]) {
+      changedFiles.push(`${relPath}: ADDED`);
+    }
+  }
+
+  if (changedFiles.length > 0) {
+    throw new Error(`Shared fixture was mutated:\n  ${changedFiles.join('\n  ')}`);
+  }
 }
 
 /**
