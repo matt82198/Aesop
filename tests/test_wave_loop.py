@@ -890,5 +890,167 @@ class TestAdversarialReviewHonesty(unittest.TestCase):
             self.assertEqual(item.get("adversarial_review"), "deferred")
 
 
+class InstanceIdCapturingDriver(AgentDriver):
+    """FakeDriver that captures instance_id values passed to coordination.try_claim."""
+
+    def __init__(self):
+        self.dispatch_count = 0
+        self._workers = {}
+        self.instance_ids_captured = []  # Capture instance_id values
+
+    def probe_capabilities(self) -> DriverCapabilities:
+        return DriverCapabilities(
+            name="instance-id-driver",
+            parallel_dispatch=False,
+            worker_filesystem_access=False,
+            worker_shell_access=False,
+            structured_output=False,
+            worktree_isolation=False,
+            native_cost_tracking=False,
+            native_stall_detection=False,
+            tool_use_accuracy=0.92,
+            recommended_verification_tier=2,
+            available_models=("fake-model",),
+            notes="Driver for instance_id testing",
+        )
+
+    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
+        self.dispatch_count += 1
+        worker_id = f"worker-{self.dispatch_count}"
+        self._workers[worker_id] = {"status": WORKER_DONE}
+
+        # Write files to simulate success.
+        workdir = Path(request.workdir) if request.workdir else Path(".")
+        files_written = []
+        try:
+            for f in request.owned_files:
+                fpath = workdir / f
+                fpath.parent.mkdir(parents=True, exist_ok=True)
+                fpath.write_text(f"# Fixed\n")
+                files_written.append(f)
+        except Exception:
+            pass
+
+        return WorkerResult(
+            worker_id=worker_id,
+            status=WORKER_DONE,
+            ok=True,
+            files_written=tuple(files_written),
+            tokens_spent=100,
+        )
+
+    def worker_status(self, worker_id: str) -> ad.WorkerStatus:
+        if worker_id in self._workers:
+            return ad.WorkerStatus(
+                worker_id=worker_id,
+                state=self._workers[worker_id]["status"],
+            )
+        return ad.WorkerStatus(worker_id=worker_id, state=ad.WORKER_UNKNOWN)
+
+    def run_command(self, command: str, cwd=None, shell=None) -> CommandResult:
+        # Test commands always pass.
+        if command.startswith("python"):
+            return CommandResult(exit_code=0, stdout="OK")
+        if command.startswith("git"):
+            return CommandResult(exit_code=0, stdout="OK")
+        return CommandResult(exit_code=0, stdout="OK")
+
+    def resolve_model(self, role: str) -> str:
+        return "fake-model"
+
+    def get_tokens_spent(self) -> int:
+        return 0
+
+
+class TestInstanceIdUniqueness(unittest.TestCase):
+    """Test that uuid instance_id is unique and correctly formatted."""
+
+    def test_instance_id_format_and_uniqueness(self):
+        """Instance_id should match wave-<uuid4> format and be unique across calls."""
+        import re
+
+        # Monkeypatch coordination.try_claim to capture instance_ids.
+        try:
+            STATE_STORE_DIR = Path(__file__).resolve().parent.parent / "state_store"
+            if str(STATE_STORE_DIR) not in sys.path:
+                sys.path.insert(0, str(STATE_STORE_DIR))
+            import coordination
+        except ImportError:
+            self.skipTest("coordination module not available")
+
+        captured_instance_ids = []
+        original_try_claim = coordination.try_claim
+
+        def mock_try_claim(event_store, resource=None, instance_id=None):
+            # Capture the instance_id and call original.
+            if instance_id is not None:
+                captured_instance_ids.append(instance_id)
+            return True  # Always succeed so build continues
+
+        coordination.try_claim = mock_try_claim
+
+        try:
+            driver = InstanceIdCapturingDriver()
+
+            manifest = {
+                "items": [
+                    {
+                        "slug": "item-1",
+                        "ownsFiles": ["file1.py"],
+                        "prompt": "Fix 1",
+                        "testCmd": "python test.py",
+                        "workDir": None,
+                    },
+                ]
+            }
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+                (tmpdir_path / "file1.py").write_text("# stub\n")
+                manifest["items"][0]["workDir"] = str(tmpdir_path)
+
+                # First invocation.
+                result1 = run_wave(driver, manifest, state_dir=tmpdir)
+                self.assertTrue(result1["preflight_ok"])
+
+                # Verify instance_id was captured and has correct format.
+                self.assertGreater(len(captured_instance_ids), 0, "instance_id should be captured")
+                instance_id_1 = captured_instance_ids[0]
+
+                # Check format: wave-<uuid>
+                wave_uuid_pattern = r"^wave-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                self.assertIsNotNone(
+                    re.match(wave_uuid_pattern, instance_id_1),
+                    f"instance_id '{instance_id_1}' does not match wave-<uuid4> format",
+                )
+
+                # Clear for second invocation.
+                captured_instance_ids.clear()
+
+                # Second invocation (new wave, should get a different instance_id).
+                result2 = run_wave(driver, manifest, state_dir=tmpdir)
+                self.assertTrue(result2["preflight_ok"])
+
+                # Verify second instance_id is captured and different.
+                self.assertGreater(len(captured_instance_ids), 0, "instance_id should be captured on second call")
+                instance_id_2 = captured_instance_ids[0]
+
+                # Verify format again.
+                self.assertIsNotNone(
+                    re.match(wave_uuid_pattern, instance_id_2),
+                    f"instance_id '{instance_id_2}' does not match wave-<uuid4> format",
+                )
+
+                # Verify uniqueness: the two UUIDs should be different.
+                self.assertNotEqual(
+                    instance_id_1,
+                    instance_id_2,
+                    "Each wave invocation should have a unique instance_id",
+                )
+
+        finally:
+            coordination.try_claim = original_try_claim
+
+
 if __name__ == "__main__":
     unittest.main()

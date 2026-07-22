@@ -35,6 +35,7 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 import concurrent.futures
 import json
 import os
+import posixpath
 import sys
 import time
 import uuid
@@ -145,8 +146,10 @@ def run_wave(
         slug = item.get("slug", "unknown")
         owned_files = item.get("ownsFiles", [])
         for f in owned_files:
-            # Normalize path: handle separators, ./, .., and case on case-insensitive platforms
-            normalized = os.path.normcase(os.path.normpath(f))
+            # Platform-independent path normalization: handle separators and case uniformly.
+            # Replace all backslashes with forward slashes, normalize with posixpath,
+            # and convert to lowercase for case-insensitive comparison on all platforms.
+            normalized = posixpath.normpath(f.replace("\\", "/")).lower()
             if normalized in owner_map:
                 conflicts.append(
                     {
