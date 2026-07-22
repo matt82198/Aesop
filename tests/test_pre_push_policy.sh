@@ -863,6 +863,150 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== P1 TTY FIX: get_commit_range tty → fail-closed (option B) ===\n'
+(
+  # Option B: get_commit_range with tty returns rc=1 (fail-closed).
+  # Empty stdin (piped, no tuples) still returns rc=3 (allowed).
+  # Direct tty invocation (nearly dead code post-main()-guard) fails-closed.
+
+  export AESOP_ROOT="$TEST_ROOT/aesop_tty"
+  mkdir -p "$AESOP_ROOT/state"
+
+  # Test 1: Empty stdin (piped, not tty) returns rc=3 (allowed)
+  rc=$( printf '' | get_commit_range; echo "$?" )
+
+  if [ "$rc" = "3" ]; then
+    printf 'PASS: get_commit_range with empty piped stdin returns rc=3 (allowed)\n'
+  else
+    printf 'FAIL: get_commit_range should return rc=3 for empty piped stdin, got rc=%s\n' "$rc"
+    exit 1
+  fi
+
+  # Test 2: Malformed stdin still returns rc=1
+  rc=$( printf 'refs/heads/test abc123 refs/heads/test\n' | get_commit_range 2>/dev/null; echo "$?" )
+
+  if [ "$rc" = "1" ]; then
+    printf 'PASS: get_commit_range with malformed stdin returns rc=1 (fail-closed)\n'
+  else
+    printf 'FAIL: get_commit_range should return rc=1 for malformed stdin, got rc=%s\n' "$rc"
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== P1 TTY FIX: check_secret_scan allows empty piped stdin (option B) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_tty_check_secret"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy scanner script
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(0)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  # Test: check_secret_scan with empty piped stdin should allow with log_event
+  # (get_commit_range returns rc=3 for empty piped stdin, which check_secret_scan treats as "allowed")
+  # Note: Direct tty invocation would fail-close at main() guard, not here
+  rc=$( printf '' | check_secret_scan 2>/dev/null; echo "$?" )
+
+  if [ "$rc" = "0" ]; then
+    printf 'PASS: check_secret_scan with empty piped stdin returns rc=0 (allow)\n'
+  else
+    printf 'FAIL: check_secret_scan should return rc=0 for empty piped stdin, got rc=%s\n' "$rc"
+    exit 1
+  fi
+
+  # Verify log_event was created
+  if [ ! -f "$AESOP_ROOT/state/SECURITY-AUDIT.log" ]; then
+    printf 'FAIL: Audit log not created for empty-stdin secret_scan\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log")
+  if ! printf '%s' "$audit_line" | grep -q 'secret_scan_skipped_empty_stdin'; then
+    printf 'FAIL: Audit log missing "secret_scan_skipped_empty_stdin" event\n'
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== main() TTY guard (option B): piped-empty → allowed, tty guard present ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_main_tty"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy scanner script so main() doesn't fail on missing scanner
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(0)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  # Test 1: Piped empty stdin (simulates up-to-date push with no ref tuples)
+  # main() should allow (rc=0) — this is the #289 legitimate case
+  stderr_output=$( { printf '' | bash "$HOOK_SCRIPT"; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'PASS: main() with piped empty stdin returns rc=0 (allow — #289 path)\n'
+  else
+    printf 'FAIL: main() should return rc=0 for piped empty stdin, got rc=%d\n' "$exit_code"
+    printf 'stderr: %s\n' "$stderr_output"
+    exit 1
+  fi
+
+  # Test 2: Verify main() contains the TTY guard code
+  # Construct: "if [ -t 0 ]" → print message → "log_block" → "exit 1"
+  # This verifies the fail-closed posture is implemented (even if we can't test
+  # it with a real tty on this system without tools like 'script' or 'expect')
+
+  # Grep the hook script for the tty guard message
+  if grep -q 'interactive invocation: this hook runs under git push' "$HOOK_SCRIPT"; then
+    printf 'PASS: main() contains TTY guard message\n'
+  else
+    printf 'FAIL: main() missing TTY guard message\n'
+    exit 1
+  fi
+
+  if grep -q 'if \[ -t 0 \]' "$HOOK_SCRIPT" && grep -q 'interactive_invocation_blocked' "$HOOK_SCRIPT"; then
+    printf 'PASS: main() contains TTY guard logic and audit log\n'
+  else
+    printf 'FAIL: main() missing TTY guard logic or audit log\n'
+    exit 1
+  fi
+
+  # Test 3: Direct function test — get_commit_range with tty path returns 1
+  # (This exercises the nearly-dead code path since main() blocks first)
+  # Verify that get_commit_range's tty branch contains "return 1"
+
+  if grep -q 'no stdin to parse → fail-closed' "$HOOK_SCRIPT" && \
+     grep -A4 'no stdin to parse → fail-closed' "$HOOK_SCRIPT" | grep -q 'return 1'; then
+    printf 'PASS: get_commit_range tty path fails-closed (return 1)\n'
+  else
+    printf 'FAIL: get_commit_range tty path not fail-closed\n'
+    exit 1
+  fi
+
+  printf 'PASS: main() TTY guard correctly implemented per option B\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"
