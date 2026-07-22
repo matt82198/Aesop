@@ -5,9 +5,14 @@ This module provides get_cost_summary() which parses the outcomes ledger
 markdown table and returns per-model, per-day, and overall cost/token aggregations
 with optional pricing estimates.
 
-Ledger format (markdown table):
-  | ISO timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict |
-  | 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+Ledger format (markdown table, supports both 7-column and 9-column):
+  Legacy 7-column:
+    | ISO timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict |
+    | 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK |
+
+  Extended 9-column (phase/wave optional):
+    | ISO timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict | phase | wave |
+    | 2026-07-11T22:08:17 | Agent | claude-haiku-4-5-20251001 | 0 | 8 | 186 | OK | build | 7 |
 
 CostSummary JSON shape (returned by get_cost_summary()):
   {
