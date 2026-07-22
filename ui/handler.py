@@ -711,20 +711,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
         except Exception as e:
             if _is_client_disconnect_error(e):
-                # Disconnect: silent exit (client already gone)
+                return  # client gone: nothing to send or log
+            print(f"[serve_data] Uncaught exception: {e}", file=sys.stderr)
+            try:
+                # Best-effort 500 response
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+            except Exception:
+                # Sending to a dead client must not cascade
                 pass
-            else:
-                # Loud log for unexpected errors
-                print(f"[serve_data] Uncaught exception: {e}", file=sys.stderr)
-                try:
-                    # Best-effort 500 response
-                    self.send_response(500)
-                    self.send_header("Content-Type", "application/json; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
-                except Exception:
-                    # Sending to a dead client must not cascade
-                    pass
 
     def serve_tracker(self):
         """Serve tracker items as JSON via GET /api/tracker."""

@@ -33,10 +33,13 @@ before(() => {
 });
 
 after(() => {
-  // Assert fixture is pristine before cleanup (detects test mutations)
-  assertFixturePristine(wizardFixture);
-  // Clean up temp directory
-  cleanupFixtures();
+  // Assert fixture is pristine before cleanup (detects test mutations).
+  // try/finally: a mutation-assertion throw must never leak the temp dir.
+  try {
+    assertFixturePristine(wizardFixture);
+  } finally {
+    cleanupFixtures();
+  }
 });
 
 function runCli(targetDir, args = [], stdin = null) {
