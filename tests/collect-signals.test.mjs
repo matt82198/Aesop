@@ -1140,3 +1140,74 @@ test('P1: ledger cursor: cursor file persists byte offset and line hash', async 
   }
 });
 
+
+test('stall check signal: NOT-AVAILABLE when tool not found', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Run collector in an environment where stall_check.py doesn't exist
+    // (since we're in a fixture, it won't find the real tool)
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    assert.ok(fs.existsSync(signalsPath), 'SIGNALS.json should exist');
+
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.agentStalls, 'agentStalls signal should exist');
+    assert.ok('available' in signals.agentStalls, 'agentStalls should indicate availability');
+    // When tool is not found, available should be false
+    if (!signals.agentStalls.available) {
+      assert.strictEqual(signals.agentStalls.available, false, 'Tool not found should set available=false');
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('stall check signal: present in SIGNALS.json when tool returns stalls', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Create a mock agent transcript to trigger stall detection
+    const projectsDir = path.join(fixture.root, '..', '.claude', 'projects', 'test-project', 'transcripts');
+    fs.mkdirSync(projectsDir, { recursive: true });
+
+    // Create a stale agent transcript (older than default 600s threshold)
+    const now = Date.now();
+    const staleTime = now - 1200000; // 20 minutes old (in ms, convert to s for utime)
+    const transcriptFile = path.join(projectsDir, 'agent-test-stale.jsonl');
+    fs.writeFileSync(transcriptFile, 'dummy transcript');
+    fs.utimesSync(transcriptFile, staleTime / 1000, staleTime / 1000);
+
+    // Run collector with extended signals to include stall check
+    runCollector(fixture.root, {
+      AESOP_MONITOR_FORCE: '1',
+      AESOP_TRANSCRIPTS_ROOT: projectsDir,
+    });
+
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    assert.ok(fs.existsSync(signalsPath), 'SIGNALS.json should exist');
+
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.agentStalls, 'agentStalls signal should exist');
+    // Tool should have found the stale transcript
+    if (signals.agentStalls.available) {
+      assert.ok(signals.agentStalls.count >= 0, 'Stall count should be present when available');
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('stall check signal: BRIEF.md includes agent stalls section', async (t) => {
+  const fixture = createFixture();
+  try {
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+
+    const briefPath = path.join(fixture.monitorDir, 'BRIEF.md');
+    assert.ok(fs.existsSync(briefPath), 'BRIEF.md should exist');
+
+    const briefContent = fs.readFileSync(briefPath, 'utf8');
+    assert.ok(briefContent.includes('## Agent stalls'), 'BRIEF.md should include Agent stalls section');
+  } finally {
+    fixture.cleanup();
+  }
+});

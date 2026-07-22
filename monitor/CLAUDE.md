@@ -33,7 +33,7 @@ Each cycle:
 
 ## Signal Contract
 
-**Signal keys collected** (11 total): heartbeats (watchdog, monitor, other loops), git (branches, unpushed, dirty), memory (stale files >30d), logs (rotation triggers), junk (script sprawl), strayRepo (scripts outside ~/scripts), alerts (SECURITY-ALERTS.log), respawnWatch (agent respawn loops), unreviewedPrompts (new spawns), isolationViolations (FIXED GOAL drift), and others per governance.
+**Signal keys collected** (12 total): heartbeats (watchdog, monitor, other loops), git (branches, unpushed, dirty), memory (stale files >30d), logs (rotation triggers), junk (script sprawl), strayRepo (scripts outside ~/scripts), alerts (SECURITY-ALERTS.log), respawnWatch (agent respawn loops), unreviewedPrompts (new spawns), isolationViolations (FIXED GOAL drift), agentStalls (silent-hang detection via stall_check.py), and others per governance.
 
 **Output formats**:
 - **BRIEF.md**: Human-readable notes, status lines, warnings; overwritten each cycle.
