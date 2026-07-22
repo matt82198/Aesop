@@ -233,6 +233,27 @@ class FakeDriverForShip(AgentDriver):
 class TestPerRepoShip(unittest.TestCase):
     """Tests for per-repo ship phase."""
 
+    def setUp(self):
+        """Reset fixture repos to clean state before each test.
+
+        Removes uncommitted changes and extra files to prevent test cross-contamination.
+        """
+        for repo_path in [_FIXTURE_REPO_A, _FIXTURE_REPO_B]:
+            # Reset to initial commit, discarding any test changes
+            subprocess.run(
+                "git reset --hard HEAD",
+                cwd=str(repo_path),
+                shell=True,
+                capture_output=True,
+            )
+            # Clean up any extra files
+            subprocess.run(
+                "git clean -fd",
+                cwd=str(repo_path),
+                shell=True,
+                capture_output=True,
+            )
+
     def test_two_repo_manifest_two_commits(self):
         """Two verified items in different repos produce TWO separate commits."""
         driver = FakeDriverForShip()
