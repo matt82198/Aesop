@@ -397,5 +397,46 @@ class TestOfflineBenchmark(unittest.TestCase):
                 self.assertFalse(score.valid_json_first_try)
 
 
+
+class TestLiveBenchmarkPipeline(unittest.TestCase):
+    """Live mode must score the transport's RAW response (regression for the
+    2026-07-22 uniform-33% run, where CodexDriver environment failures were
+    scored as model inaccuracy and no API call was ever made)."""
+
+    def test_live_scores_injected_transport_response(self):
+        from accuracy_harness import _build_test_tasks, run_live_benchmark, FakeTransport
+
+        tasks = _build_test_tasks()[:3]
+        calls = []
+
+        def fake_live_transport(payload):
+            calls.append(payload)
+            prompt = payload["messages"][1]["content"]
+            task = next(t for t in tasks if t.prompt == prompt)
+            # Delegate to the offline FakeTransport for a correct canned answer
+            return FakeTransport(task.id)(payload)
+
+        scores, overall = run_live_benchmark(tasks, transport=fake_live_transport)
+        # Transport was called once per task with the SHARED payload shape
+        self.assertEqual(len(calls), len(tasks))
+        for payload in calls:
+            self.assertEqual(len(payload["messages"]), 2)
+            self.assertEqual(payload["messages"][0]["role"], "system")
+        # Correct canned answers must score perfect composite (proves the raw
+        # response reaches the scorer, not a driver-mediated empty result)
+        self.assertEqual(overall, 1.0, msg=f"scores: {[(s.task_id, s.composite_accuracy) for s in scores]}")
+
+    def test_live_empty_response_scores_low_not_crash(self):
+        from accuracy_harness import _build_test_tasks, run_live_benchmark
+
+        tasks = _build_test_tasks()[:2]
+
+        def empty_transport(payload):
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+        scores, overall = run_live_benchmark(tasks, transport=empty_transport)
+        self.assertLess(overall, 0.5)
+        self.assertTrue(all(s.valid_json_first_try for s in scores))
+
 if __name__ == "__main__":
     unittest.main()
