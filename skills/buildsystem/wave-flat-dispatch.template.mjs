@@ -54,6 +54,9 @@
 //                                              // Returns {holds:boolean, breakingScenario:string} per item;
 //                                              // items where holds=false are collected as contractFindings.
 //                                              // Defaults to true (enable by default). Set false to disable.
+//                                              // ADVISORY: contractFindings never affect mergeReady (which gates
+//                                              // on integration green only) — the ORCHESTRATOR owns merge/escalation
+//                                              // decisions based on the findings it receives in Report.
 //                                              // Resolved by driver/verification_policy.py and passed via manifest.
 //   adversarialReviewMode: 'blocking' | 'concurrent-note' | null  // optional (LEVER 2, wall-clock)
 //                                       // 'blocking' (default): run the refutation INLINE before return (current behavior).
