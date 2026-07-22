@@ -500,6 +500,7 @@ def get_staged_files(repo_path):
             cwd=repo_path,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=10,
         )
     except Exception as e:
@@ -527,6 +528,7 @@ def get_range_files(repo_path, commit_range):
             cwd=repo_path,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=10,
         )
     except Exception as e:
@@ -555,6 +557,8 @@ def get_history_files(repo_path):
             cwd=repo_path,
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=60,
         )
     except Exception as e:
@@ -602,14 +606,14 @@ def _git_committable_set(dir_path):
     try:
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(dir_path), capture_output=True, text=True, timeout=10,
+            cwd=str(dir_path), capture_output=True, text=True, encoding='utf-8', timeout=10,
         )
         if top.returncode != 0:
             return None
         toplevel = Path(top.stdout.strip())
         listing = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-            cwd=str(toplevel), capture_output=True, text=True, timeout=60,
+            cwd=str(toplevel), capture_output=True, text=True, encoding='utf-8', timeout=60,
         )
         if listing.returncode != 0:
             return None

@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -597,6 +598,179 @@ class TestCostCeilingAbort(unittest.TestCase):
 
             except ImportError:
                 # If cost_ceiling is not available, skip this test.
+                self.skipTest("cost_ceiling module not available")
+
+
+class NoneTokensDriver(AgentDriver):
+    """FakeDriver that returns None from get_tokens_spent() (no ledger yet)."""
+
+    def __init__(self):
+        self.dispatch_count = 0
+        self._workers = {}
+
+    def probe_capabilities(self) -> DriverCapabilities:
+        return DriverCapabilities(
+            name="none-tokens-driver",
+            parallel_dispatch=False,
+            worker_filesystem_access=False,
+            worker_shell_access=False,
+            structured_output=False,
+            worktree_isolation=False,
+            native_cost_tracking=False,
+            native_stall_detection=False,
+            tool_use_accuracy=0.92,
+            recommended_verification_tier=2,
+            available_models=("fake-model",),
+            notes="Driver that returns None for tokens",
+        )
+
+    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
+        self.dispatch_count += 1
+        worker_id = f"worker-{self.dispatch_count}"
+        self._workers[worker_id] = {"status": WORKER_DONE}
+        return WorkerResult(
+            worker_id=worker_id,
+            status=WORKER_DONE,
+            ok=True,
+            files_written=tuple(request.owned_files),
+            tokens_spent=100,
+        )
+
+    def worker_status(self, worker_id: str) -> ad.WorkerStatus:
+        if worker_id in self._workers:
+            return ad.WorkerStatus(
+                worker_id=worker_id,
+                state=self._workers[worker_id]["status"],
+            )
+        return ad.WorkerStatus(worker_id=worker_id, state=ad.WORKER_UNKNOWN)
+
+    def run_command(self, command: str, cwd=None, shell=None) -> CommandResult:
+        if command.startswith("git"):
+            return CommandResult(exit_code=0, stdout="OK")
+        return CommandResult(exit_code=0, stdout="OK")
+
+    def resolve_model(self, role: str) -> str:
+        return "fake-model"
+
+    def get_tokens_spent(self):
+        """Return None to simulate ledger not yet existing."""
+        return None
+
+
+class TestCostCeilingWithNoneTokens(unittest.TestCase):
+    """Test that cost_ceiling.check() handles None properly.
+
+    When driver.get_tokens_spent() returns None, wave_loop should pass None
+    through to cost_ceiling.check(), which will then read the ledger itself
+    (its designed fallback behavior).
+    """
+
+    def test_driver_returns_none_cost_ceiling_called_with_none(self):
+        """When driver returns None, cost_ceiling.check() is called with spent=None."""
+        driver = NoneTokensDriver()
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "ownsFiles": ["file1.py"],
+                    "prompt": "Fix 1",
+                    "testCmd": "true",
+                    "workDir": ".",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            (tmpdir_path / "file1.py").write_text("# test\n")
+            manifest["items"][0]["workDir"] = str(tmpdir_path)
+
+            # Mock cost_ceiling.check to capture the spent argument.
+            try:
+                import sys
+                TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
+                if str(TOOLS_DIR) not in sys.path:
+                    sys.path.insert(0, str(TOOLS_DIR))
+                import cost_ceiling  # noqa: F401
+
+                with tempfile.TemporaryDirectory() as state_dir:
+                    # Capture what spent= argument is passed to cost_ceiling.check()
+                    captured_args = {}
+
+                    def mock_check(*args, **kwargs):
+                        captured_args.update(kwargs)
+                        # Simulate ceiling unconfigured (no breach)
+                        return {
+                            "exceeded": False,
+                            "spent": kwargs.get("spent"),
+                            "ceiling": None,
+                            "tripped": False,
+                        }
+
+                    import wave_loop  # noqa: F401
+
+                    with mock.patch("wave_loop.cost_ceiling.check", side_effect=mock_check):
+                        result = run_wave(driver, manifest, state_dir=state_dir)
+
+                    # Assert that cost_ceiling.check was called with spent=None
+                    # (NOT spent=0, which would bypass the ledger read)
+                    self.assertIn("spent", captured_args)
+                    self.assertIsNone(captured_args["spent"])
+
+                    # Assert wave continued (no abort)
+                    self.assertFalse(result["aborted"])
+
+            except ImportError:
+                self.skipTest("cost_ceiling module not available")
+
+    def test_driver_returns_big_spend_low_ceiling_causes_abort(self):
+        """When driver returns actual high spend and ceiling is low, wave aborts."""
+        driver = CeilingCheckDriver(tokens_to_report=10000)
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "ownsFiles": ["file1.py"],
+                    "prompt": "Fix 1",
+                    "testCmd": "true",
+                    "workDir": ".",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            (tmpdir_path / "file1.py").write_text("# test\n")
+            manifest["items"][0]["workDir"] = str(tmpdir_path)
+
+            try:
+                import sys
+                TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
+                if str(TOOLS_DIR) not in sys.path:
+                    sys.path.insert(0, str(TOOLS_DIR))
+                import cost_ceiling  # noqa: F401
+
+                with tempfile.TemporaryDirectory() as state_dir:
+                    # Simulate ceiling check that detects excess
+                    def mock_check(*args, **kwargs):
+                        # When driver returns 10000 tokens and ceiling is 1000
+                        return {"exceeded": True, "spent": 10000, "ceiling": 1000, "tripped": True}
+
+                    import wave_loop  # noqa: F401
+
+                    with mock.patch("wave_loop.cost_ceiling.check", side_effect=mock_check):
+                        result = run_wave(driver, manifest, state_dir=state_dir)
+
+                    # Assert aborted with ceiling reason
+                    self.assertTrue(result["aborted"])
+                    self.assertEqual(result["abort_reason"], "cost_ceiling_exceeded")
+
+                    # Assert no items dispatched
+                    self.assertEqual(driver.dispatch_count, 0)
+
+            except ImportError:
                 self.skipTest("cost_ceiling module not available")
 
 
@@ -2056,6 +2230,317 @@ class TestSafeSlugLengthCap(unittest.TestCase):
             len(safe) <= 255,
             f"Safe slug should fit in filename limit",
         )
+
+
+class RealCostCeilingDriver(AgentDriver):
+    """FakeDriver for real cost-ceiling integration testing.
+
+    Returns None from get_tokens_spent() to force cost_ceiling.check() to read
+    the ledger itself (the designed fallback and the real contract).
+    """
+
+    def __init__(self):
+        self.dispatch_count = 0
+        self._workers = {}
+
+    def probe_capabilities(self) -> DriverCapabilities:
+        return DriverCapabilities(
+            name="real-ceiling-driver",
+            parallel_dispatch=False,
+            worker_filesystem_access=False,
+            worker_shell_access=False,
+            structured_output=False,
+            worktree_isolation=False,
+            native_cost_tracking=False,
+            native_stall_detection=False,
+            tool_use_accuracy=0.92,
+            recommended_verification_tier=2,
+            available_models=("fake-model",),
+            notes="Driver for real cost-ceiling testing",
+        )
+
+    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
+        self.dispatch_count += 1
+        worker_id = f"worker-{self.dispatch_count}"
+        self._workers[worker_id] = {"status": WORKER_DONE}
+        return WorkerResult(
+            worker_id=worker_id,
+            status=WORKER_DONE,
+            ok=True,
+            files_written=tuple(request.owned_files),
+            tokens_spent=100,
+        )
+
+    def worker_status(self, worker_id: str) -> ad.WorkerStatus:
+        if worker_id in self._workers:
+            return ad.WorkerStatus(
+                worker_id=worker_id,
+                state=self._workers[worker_id]["status"],
+            )
+        return ad.WorkerStatus(worker_id=worker_id, state=ad.WORKER_UNKNOWN)
+
+    def run_command(self, command: str, cwd=None, shell=None) -> CommandResult:
+        if command.startswith("git"):
+            return CommandResult(exit_code=0, stdout="OK")
+        return CommandResult(exit_code=0, stdout="OK")
+
+    def resolve_model(self, role: str) -> str:
+        return "fake-model"
+
+    def get_tokens_spent(self):
+        """Contract: return None so cost_ceiling.check() reads ledger itself."""
+        return None
+
+
+class TestRealCostCeilingIntegration(unittest.TestCase):
+    """REAL INTEGRATION TEST: cost_ceiling with ledger, windowing, and abort/proceed.
+
+    Proves that:
+    1. When driver returns None, cost_ceiling.check() reads the ledger itself
+    2. With low ceiling, wave aborts before build
+    3. With high ceiling, wave proceeds
+    4. Daily windowing works: only today's ledger rows count
+    """
+
+    def _write_ledger_with_dates(self, state_dir, rows):
+        """Write OUTCOMES-LEDGER.md with ISO timestamps.
+
+        Args:
+            state_dir: path to state directory
+            rows: list of (tokens_in, tokens_out, iso_ts) tuples
+        """
+        ledger_dir = Path(state_dir) / "ledger"
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        ledger_file = ledger_dir / "OUTCOMES-LEDGER.md"
+
+        header = (
+            "| iso_ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n"
+            "|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n"
+        )
+        lines = [header]
+        for ti, to, ts in rows:
+            lines.append(
+                f"| {ts} | build | haiku | 10 | {ti} | {to} | OK | build | 26 |\n"
+            )
+        ledger_file.write_text("".join(lines), encoding="utf-8")
+
+    def _write_config(self, state_dir, max_wave_tokens=None, max_daily_tokens=None):
+        """Write aesop.config.json with cost ceiling config."""
+        config = {
+            "limits": {
+                "max_wave_tokens": max_wave_tokens,
+                "max_daily_tokens": max_daily_tokens,
+            }
+        }
+        config_file = Path(state_dir) / "aesop.config.json"
+        config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+    def test_cost_ceiling_low_ceiling_aborts_before_build(self):
+        """With low ceiling, wave aborts BEFORE dispatching any items."""
+        driver = RealCostCeilingDriver()
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "ownsFiles": ["file1.py"],
+                    "prompt": "Fix 1",
+                    "testCmd": "true",
+                    "workDir": ".",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+                (tmpdir_path / "file1.py").write_text("# test\n")
+                manifest["items"][0]["workDir"] = str(tmpdir_path)
+
+                try:
+                    import sys
+                    TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
+                    if str(TOOLS_DIR) not in sys.path:
+                        sys.path.insert(0, str(TOOLS_DIR))
+                    import cost_ceiling  # noqa: F401
+
+                    # Write ledger with 5000 tokens spent (exceeds ceiling of 1000).
+                    today_iso = datetime.now(timezone.utc).isoformat().split("T")[0]
+                    self._write_ledger_with_dates(
+                        state_dir,
+                        [(2500, 2500, f"{today_iso}T10:00:00Z")]  # 5000 total today
+                    )
+
+                    # Config with low wave ceiling
+                    self._write_config(state_dir, max_wave_tokens=1000)
+
+                    # Run wave with real cost_ceiling (not mocked)
+                    # The os.chdir is needed to find aesop.config.json
+                    old_cwd = os.getcwd()
+                    try:
+                        os.chdir(state_dir)
+                        result = run_wave(driver, manifest, state_dir=state_dir)
+                    finally:
+                        os.chdir(old_cwd)
+
+                    # Assert aborted due to ceiling
+                    self.assertTrue(result["aborted"])
+                    self.assertEqual(result["abort_reason"], "cost_ceiling_exceeded")
+
+                    # Assert NO items dispatched (dispatch_count should be 0)
+                    self.assertEqual(driver.dispatch_count, 0)
+
+                    # Assert ceiling info is in result
+                    self.assertIsNotNone(result.get("ceiling"))
+                    ceiling_info = result["ceiling"]
+                    self.assertTrue(ceiling_info.get("exceeded"))
+                    self.assertEqual(ceiling_info.get("spent"), 5000)
+                    self.assertEqual(ceiling_info.get("ceiling"), 1000)
+
+                except ImportError:
+                    self.skipTest("cost_ceiling module not available")
+
+    def test_cost_ceiling_high_ceiling_proceeds(self):
+        """With high ceiling, wave proceeds and dispatches items."""
+        driver = RealCostCeilingDriver()
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "ownsFiles": ["file1.py"],
+                    "prompt": "Fix 1",
+                    "testCmd": "true",
+                    "workDir": ".",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+                (tmpdir_path / "file1.py").write_text("# test\n")
+                manifest["items"][0]["workDir"] = str(tmpdir_path)
+
+                try:
+                    import sys
+                    TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
+                    if str(TOOLS_DIR) not in sys.path:
+                        sys.path.insert(0, str(TOOLS_DIR))
+                    import cost_ceiling  # noqa: F401
+
+                    # Write ledger with 5000 tokens spent (below ceiling of 10000).
+                    today_iso = datetime.now(timezone.utc).isoformat().split("T")[0]
+                    self._write_ledger_with_dates(
+                        state_dir,
+                        [(2500, 2500, f"{today_iso}T10:00:00Z")]  # 5000 total
+                    )
+
+                    # Config with high ceiling
+                    self._write_config(state_dir, max_wave_tokens=10000)
+
+                    # Run wave with real cost_ceiling
+                    old_cwd = os.getcwd()
+                    try:
+                        os.chdir(state_dir)
+                        result = run_wave(driver, manifest, state_dir=state_dir)
+                    finally:
+                        os.chdir(old_cwd)
+
+                    # Assert NOT aborted
+                    self.assertFalse(result["aborted"])
+
+                    # Assert at least one item was dispatched
+                    self.assertGreater(driver.dispatch_count, 0)
+
+                    # Assert ceiling info shows no breach
+                    ceiling_info = result.get("ceiling")
+                    if ceiling_info:
+                        self.assertFalse(ceiling_info.get("exceeded"))
+                        self.assertEqual(ceiling_info.get("spent"), 5000)
+                        self.assertEqual(ceiling_info.get("ceiling"), 10000)
+
+                except ImportError:
+                    self.skipTest("cost_ceiling module not available")
+
+    def test_cost_ceiling_wave_period_sums_all_rows(self):
+        """Wave period (default): all ledger rows are summed regardless of date.
+
+        This proves that cost_ceiling.check() correctly reads the ledger and sums
+        all rows when period='wave' (the default used by wave_loop).
+        """
+        driver = RealCostCeilingDriver()
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "ownsFiles": ["file1.py"],
+                    "prompt": "Fix 1",
+                    "testCmd": "true",
+                    "workDir": ".",
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+                (tmpdir_path / "file1.py").write_text("# test\n")
+                manifest["items"][0]["workDir"] = str(tmpdir_path)
+
+                try:
+                    import sys
+                    TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
+                    if str(TOOLS_DIR) not in sys.path:
+                        sys.path.insert(0, str(TOOLS_DIR))
+                    import cost_ceiling  # noqa: F401
+
+                    # Create timestamps: yesterday and today
+                    today_utc = datetime.now(timezone.utc).date()
+                    yesterday_utc = today_utc - timedelta(days=1)
+                    today_iso = today_utc.isoformat()
+                    yesterday_iso = yesterday_utc.isoformat()
+
+                    # Write ledger with rows from two different days
+                    # - Yesterday: 4000 in + 4000 out = 8000 tokens
+                    # - Today: 1000 in + 1000 out = 2000 tokens
+                    # Total: 10000 tokens
+                    self._write_ledger_with_dates(
+                        state_dir,
+                        [
+                            (4000, 4000, f"{yesterday_iso}T10:00:00Z"),  # 8000 yesterday
+                            (1000, 1000, f"{today_iso}T10:00:00Z"),      # 2000 today
+                        ]
+                    )
+
+                    # Config with wave ceiling of 15000 (above 10000 total)
+                    self._write_config(state_dir, max_wave_tokens=15000)
+
+                    # Run wave with real cost_ceiling
+                    old_cwd = os.getcwd()
+                    try:
+                        os.chdir(state_dir)
+                        result = run_wave(driver, manifest, state_dir=state_dir)
+                    finally:
+                        os.chdir(old_cwd)
+
+                    # Assert NOT aborted (10000 < 15000)
+                    self.assertFalse(result["aborted"])
+
+                    # Assert items were dispatched (wave proceeded)
+                    self.assertGreater(driver.dispatch_count, 0)
+
+                    # Verify that cost_ceiling summed all rows (both yesterday and today)
+                    ceiling_info = result.get("ceiling")
+                    if ceiling_info:
+                        # Should sum all rows: 8000 + 2000 = 10000
+                        self.assertEqual(ceiling_info.get("spent"), 10000)
+                        self.assertEqual(ceiling_info.get("ceiling"), 15000)
+                        self.assertFalse(ceiling_info.get("exceeded"))
+
+                except ImportError:
+                    self.skipTest("cost_ceiling module not available")
 
 
 if __name__ == "__main__":

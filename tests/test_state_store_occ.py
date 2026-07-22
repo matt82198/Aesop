@@ -207,6 +207,65 @@ def _worker_simultaneous_occ_attempt(args):
         }
 
 
+def _worker_occ_with_barrier_retry(args):
+    """Worker: read version, barrier sync on each iteration, attempt append with OCC.
+
+    Uses a Manager.Barrier per iteration to force ALL workers to read, sync,
+    and attempt append(expected_version=N) simultaneously. This GUARANTEES
+    OCC conflicts occur on each round, making the conflict assertion deterministic.
+
+    Args:
+        args: (db_path, stream, worker_id, iterations, barrier)
+
+    Returns:
+        dict with worker_id, successes (list of versions), conflicts (count),
+        and any error message
+    """
+    db_path, stream, worker_id, iterations, barrier = args
+    try:
+        store = EventStore(db_path)
+        successes = []
+        conflicts = 0
+
+        for i in range(iterations):
+            # Read current version
+            events = store.read(stream)
+            current_version = len(events)
+
+            # CRITICAL: Block on barrier until ALL workers have read.
+            # This ensures simultaneous append attempts.
+            barrier.wait()
+
+            # All workers now attempt append(expected_version=N) in close temporal proximity.
+            # Exactly one can succeed; the rest hit ConcurrencyConflict.
+            try:
+                payload = {"worker_id": worker_id, "iteration": i}
+                version = store.append(
+                    stream,
+                    "test_event",
+                    payload,
+                    actor=f"worker_{worker_id}",
+                    expected_version=current_version,
+                )
+                successes.append(version)
+            except ConcurrencyConflict:
+                conflicts += 1
+
+        return {
+            "worker_id": worker_id,
+            "successes": successes,
+            "conflicts": conflicts,
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "worker_id": worker_id,
+            "successes": [],
+            "conflicts": 0,
+            "error": str(e),
+        }
+
+
 class OCCTest(unittest.TestCase):
     """OCC tests for state_store."""
 
@@ -432,52 +491,66 @@ class OCCTest(unittest.TestCase):
                         "Versions should be gapless: [1, 2]")
 
     def test_multiprocess_occ_conflict_retry_convergence(self):
-        """Multi-process: one worker gets conflict, retries with new version, succeeds.
+        """Multi-process: DETERMINISTIC conflict generation with barrier-synced retries.
 
-        Simulates a scenario where multiple workers try append with OCC, some conflict,
-        but eventually converge to all appending successfully via retry.
+        Uses a Manager.Barrier to force ALL workers to read, sync, and attempt
+        append(expected_version=N) simultaneously on each iteration. This GUARANTEES
+        OCC conflicts occur every round (num_workers - 1 per round), not probabilistically.
+
+        Load-bearing assertion: total_conflicts must be > 0 (deterministically true
+        because we force contention via barriers). Each iteration: exactly one succeeds,
+        the rest conflict.
         """
         stream = "test_stream"
         num_workers = 3
         iterations_per_worker = 5
 
-        # Spawn workers that retry on conflict
-        with Pool(processes=num_workers) as pool:
-            async_results = [
-                pool.apply_async(
-                    _worker_append_with_occ,
-                    ((self.db_path, stream, worker_id, iterations_per_worker),),
-                )
-                for worker_id in range(num_workers)
-            ]
+        # Create a Manager-based Barrier for interprocess synchronization.
+        # Each iteration, all workers sync before attempting append.
+        with Manager() as manager:
+            barrier = manager.Barrier(num_workers)
 
-            # Collect results with timeout
-            results = []
-            for async_result in async_results:
-                try:
-                    result = async_result.get(timeout=30)
-                    results.append(result)
-                    self.assertIsNone(result["error"],
-                                    f"Worker {result['worker_id']} error: {result['error']}")
-                except Exception as e:
-                    self.fail(f"Worker failed or timed out: {e}")
+            # Spawn workers using barrier-synchronized OCC attempts
+            with Pool(processes=num_workers) as pool:
+                async_results = [
+                    pool.apply_async(
+                        _worker_occ_with_barrier_retry,
+                        ((self.db_path, stream, worker_id, iterations_per_worker, barrier),),
+                    )
+                    for worker_id in range(num_workers)
+                ]
+
+                # Collect results with timeout
+                results = []
+                for async_result in async_results:
+                    try:
+                        result = async_result.get(timeout=30)
+                        results.append(result)
+                        self.assertIsNone(result["error"],
+                                        f"Worker {result['worker_id']} error: {result['error']}")
+                    except Exception as e:
+                        self.fail(f"Worker failed or timed out: {e}")
 
         # Verify that we have appends and conflicts
         total_successes = sum(len(r["successes"]) for r in results)
         total_conflicts = sum(r["conflicts"] for r in results)
 
-        # Due to concurrency, some should have succeeded and some should have had conflicts
+        # DETERMINISTIC: With barrier synchronization, we guarantee contention.
+        # Each of N iterations: exactly 1 success + (num_workers - 1) conflicts.
         self.assertGreater(total_successes, 0,
                           "At least some appends should succeed")
-        # We may have conflicts due to concurrent attempts
+        # With barrier-synchronized contention, conflicts are GUARANTEED, not probabilistic.
         self.assertGreater(total_conflicts, 0,
-                          "Should have some conflicts from concurrent OCC attempts")
+                          "Should have conflicts from GUARANTEED barrier-synchronized contention")
 
-        # But the sum of attempts should match successes + conflicts
+        # Each iteration: 1 success + (N-1) conflicts = N total outcomes per iteration
+        # Total iterations = iterations_per_worker (all workers do the same number)
         total_attempts = num_workers * iterations_per_worker
         total_outcomes = total_successes + total_conflicts
-        self.assertLessEqual(total_outcomes, total_attempts,
-                           "Total outcomes should not exceed attempts")
+        # With barrier sync, we expect exactly: iterations_per_worker successes
+        # and (num_workers - 1) * iterations_per_worker conflicts
+        self.assertEqual(total_outcomes, total_attempts,
+                        "Total outcomes should equal total attempts with deterministic barriers")
 
         # Verify that all successful appends landed (no lost updates)
         store = EventStore(self.db_path)

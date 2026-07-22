@@ -22,25 +22,23 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `stable-0.1.1-on-main` (2026-07-18, current)
-**0.1.1 on main** (npm publish USER-GATED: `gh release create v0.1.1 --notes-file RELEASE-NOTES.md`);
-0.1.0 live on npm @latest. This session shipped rc.2->rc.8 + integration train, then the two pillars:
-- **Scope-minification** (PR #196, user #1): one CLAUDE.md per Haiku task, root = pure map, adversarially lossless-verified.
-- **Center-verification** (PR #202): the answer to the "over-engineered shell, hoped-for center" critique —
-  adversarialReview template phase (break-it-vs-spec per shipped item), mutation_test.py (flags tautological
-  tests), defect_escape.py (first-try-green as telemetry), hidden-case coding bench. MEASURED: first-try-green 43%,
-  0 logic bugs caught by authoring-Haiku's own tests, 6 P1 shipped green -> "green = assembles+passes-own-tests, NOT correct".
-Also this session: accumulated rc.4-rc.8 audit (adversarial-verified), first-hour adopter fixes, dispatch-visibility
-panel, claudemd_lint + portability CI gates, durable scheduled-task monitor (root-caused the always-dying loop),
-ci_merge_wait STALE-bug fix. Org waves: GitHub/portfolio/Medium all current.
+## Phase: `hardened-0.2.0-ready` (2026-07-22, current)
+**Hardening loop CLOSED at main @ 157e157**: 5 audit passes (defect + analyst-critique + adversarial +
+catalog-expert lenses, all findings adversarially verified), 4 fix rounds, 4 trains — convergence
+52->23->17->5->zero-code-defects. Backlog cleared 25/25 the same session (~75 PRs total). Release
+artifacts current and honest (ceiling semantics, security section). Review layer measurably load-bearing:
+caught a ceiling-windowing showstopper, refuted 3 false review claims, forced 8 fix-forwards.
 
 ## NEXT STEPS
-- Flip `adversarialReview: true` as the standing dispatch default (dogfood it on the next wave).
-- Adversarial-found P2s queued (plans/audit-rc4-rc8-backlog.md): fleet_ledger timestamp-injection, wave_preflight/common.py
-  future-date fresh-forever, test-hygiene root cause (tests writing mangled cwd paths).
-- Multi-tool portability (spike, plans/spike-multitool-portability.md): 5-op AgentDriver; open-models REQUIRE the
-  verification layer first. 0.2.0 initiative.
-- npm publish 0.1.1 (USER-GATED).
+- USER-GATED: cut 0.2.0 — `gh release create v0.2.0 --notes-file RELEASE-NOTES.md` (publish.yml OIDC -> npm).
+- USER DECISION: PR #293 hook TTY semantics — A (allow-on-tty, as implemented) vs B (keep fail-closed, recommended).
+- Next investments (ranked, from loop's forward-look — pick direction): state consolidation (SQLite-source +
+  git-audit); cross-repo AgentDriver phase-1 spike (plans/aesop-cross-repo-orchestration.md); mutation sandbox
+  validation; live cost observability; adopter porting guide. Continuous-loop pilot plan at
+  plans/aesop-continuous-wave-loop.md.
+- Tracked defers: state fragmentation, StateAPI boundary, proof-harness consolidation, MAX_PATH deep-state note,
+  bench validation of tool_use_accuracy (wave-27 release gate candidate), tripwire root-stray widening,
+  codex max_tokens bound, falsifiability script pytest-discovery footnote.
 
 ## Phase history (collapsed)
 - `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/

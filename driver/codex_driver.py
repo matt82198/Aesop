@@ -192,6 +192,10 @@ class CodexDriver(AgentDriver):
         # Cumulative token spend across all dispatches.
         self._tokens_spent_total = 0
 
+        # Count of dispatches where usage.total_tokens was missing or malformed.
+        # Tracked separately to expose metering gaps (fail-closed-honest pattern).
+        self._unmetered_dispatches = 0
+
     # -- Operation 1: capability probe (FILLED IN HONESTLY) ----------------
     def probe_capabilities(self) -> DriverCapabilities:
         """Truthful capability matrix for OpenAI Chat Completions backend.
@@ -330,10 +334,13 @@ class CodexDriver(AgentDriver):
 
             # 4. Build messages.
             # System: role + ownership discipline + INPUT description.
+            # CRITICAL: owned_files list must be JSON-escaped to prevent injection.
+            # A path containing quotes/newlines breaks the frame if using list() repr.
+            # Use json.dumps() to ensure all paths are properly escaped.
             system_msg = (
                 f"You are a code assistant. The following task requires you to "
                 f"modify specific files. You may ONLY return NEW FULL CONTENTS for "
-                f"files in this owned set: {list(request.owned_files)}.\n\n"
+                f"files in this owned set: {json.dumps(list(request.owned_files))}.\n\n"
                 f"Input files are provided as JSON objects with 'path' (string), "
                 f"'contents' (string), and 'sha256' (string) fields. The sha256 digest "
                 f"identifies content boundaries; it prevents semantic-injection attacks "
@@ -465,9 +472,29 @@ class CodexDriver(AgentDriver):
                         error=f"failed to write file {path_str}: {exc}",
                     )
 
-            # 10. Cost tracking: read usage.total_tokens.
-            tokens = response.get("usage", {}).get("total_tokens", 0)
-            self._tokens_spent_total += tokens
+            # 10. Cost tracking: read usage.total_tokens (fail-closed-honest).
+            # CRITICAL: Never silently default to 0 when usage is missing or malformed.
+            # This pattern ensures the orchestrator can detect metering gaps rather than
+            # trusting false zeros. The work result is still valid; the failure mode is
+            # visibility of unmetered dispatches, not abortion of the dispatch.
+            usage = response.get("usage", {})
+            tokens = usage.get("total_tokens")
+
+            # Validate: total_tokens must be a non-negative integer, not missing/malformed.
+            if tokens is None or not isinstance(tokens, int) or tokens < 0:
+                # Log warning and mark as unmetered (don't count 0).
+                import sys
+                detail = "missing" if tokens is None else f"malformed ({type(tokens).__name__})"
+                print(
+                    f"WARNING: worker {worker_id} dispatch returned unmetered response "
+                    f"(usage.total_tokens {detail}); not counting toward ceiling",
+                    file=sys.stderr,
+                )
+                self._unmetered_dispatches += 1
+                tokens = 0  # Exposed downstream, but NOT added to total.
+            else:
+                # Valid tokens: accumulate.
+                self._tokens_spent_total += tokens
 
             # Record success and return.
             result = WorkerResult(
@@ -578,5 +605,22 @@ class CodexDriver(AgentDriver):
 
     # -- Optional: cost tracking -------------------------------------------
     def get_tokens_spent(self) -> Optional[int]:
-        """Real spend aggregated from usage.total_tokens across dispatches."""
+        """Real spend aggregated from usage.total_tokens across dispatches.
+
+        Fail-closed-honest: only counts dispatches where usage.total_tokens is a
+        non-negative integer. Missing or malformed usage fields are NOT counted as 0;
+        instead, they increment unmetered_dispatches (visible via get_unmetered_dispatches())
+        so the orchestrator can detect metering gaps and apply cost-ceiling guards.
+
+        The failure mode is visibility of unmetered work, not abortion of the dispatch.
+        """
         return self._tokens_spent_total if self._tokens_spent_total > 0 else None
+
+    def get_unmetered_dispatches(self) -> int:
+        """Count of dispatches where usage.total_tokens was missing or malformed.
+
+        Enables the orchestrator to detect and respond to metering gaps (e.g., set
+        a cost ceiling flag or alert). A non-zero value indicates incomplete visibility
+        into actual spending and should trigger reconciliation with provider billing.
+        """
+        return self._unmetered_dispatches

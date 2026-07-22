@@ -14,7 +14,10 @@ Covers the contract, not any live backend:
 
 stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
+import os
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -357,6 +360,21 @@ class TestVerificationThesisEncoded(unittest.TestCase):
             codex.recommended_verification_tier,
             claude.recommended_verification_tier,
         )
+
+
+class TestClaudeCodeDriverGetTokensSpent(unittest.TestCase):
+    """Test ClaudeCodeDriver.get_tokens_spent() contract: returns None.
+
+    The driver does not observe per-instance spend; cost enforcement is delivered
+    by cost_ceiling.check() performing its own windowed ledger fallback when
+    driver returns None.
+    """
+
+    def test_get_tokens_spent_returns_none(self):
+        """Contract: get_tokens_spent() always returns None."""
+        driver = ClaudeCodeDriver()
+        result = driver.get_tokens_spent()
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
