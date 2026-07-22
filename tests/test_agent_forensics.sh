@@ -33,6 +33,14 @@ fail() {
 # Build a base repo with behavior-controlling files. MUST be called from
 # inside a subshell that has already cd'd into a sandbox fixture directory.
 build_base_repo() {
+  # SELF-GUARD (incident 52d7be7): refuse to run inside an EXISTING repo —
+  # a fresh sandbox dir is not one; the live primary/worktree is. This makes
+  # caller-cd discipline unnecessary for safety.
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    printf 'FATAL: build_base_repo called inside an existing git repo (%s)
+' "$PWD" >&2
+    exit 1
+  fi
   git init -q
   git config user.email "test@example.com"
   git config user.name "Test User"

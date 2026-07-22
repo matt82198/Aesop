@@ -149,6 +149,13 @@ printf '\n=== Finding 5: json_escape missing control chars (\\n, \\r, \\t, C0) =
   export AESOP_ROOT="$TEST_ROOT/aesop_escape"
   mkdir -p "$AESOP_ROOT/state"
 
+  # HYGIENE (incident 52d7be7): identity mutation must NEVER touch the live
+  # repo config -- run this check inside an isolated fixture repo.
+  ESCAPE_REPO="$TEST_ROOT/aesop_escape_repo"
+  mkdir -p "$ESCAPE_REPO"
+  cd "$ESCAPE_REPO" || exit 1
+  git init -q
+  git config user.email "test@example.com"
   # Set user name with embedded newline (dangerous!)
   git config user.name $'Alice\nAdmin'
 

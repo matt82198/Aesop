@@ -33,14 +33,11 @@ class TestEodSweep(unittest.TestCase):
             shutil.rmtree(self.temp_dir, onerror=handle_remove_readonly)
 
     def _init_git_repo(self, repo_path):
-        """Initialize a git repository for testing."""
+        """Init a git fixture; LOUD (runner incident): every step rc-checked."""
         repo_path.mkdir(parents=True, exist_ok=True)
-
-        subprocess.run(
-            ["git", "init"],
-            cwd=str(repo_path),
-            capture_output=True
-        )
+        r = subprocess.run(["git", "init"], cwd=str(repo_path),
+                           capture_output=True, text=True)
+        assert r.returncode == 0, f"fixture git init failed: {r.stderr or r.stdout}"
         subprocess.run(
             ["git", "config", "user.name", "Test User"],
             cwd=str(repo_path),
@@ -59,11 +56,27 @@ class TestEodSweep(unittest.TestCase):
             cwd=str(repo_path),
             capture_output=True
         )
-        subprocess.run(
+        r = subprocess.run(
             ["git", "commit", "-m", "Initial commit"],
             cwd=str(repo_path),
-            capture_output=True
+            capture_output=True, text=True
         )
+        assert r.returncode == 0, f"fixture initial commit failed: {r.stderr or r.stdout}"
+
+    def _diag(self, result, repo=None):
+        """Forensics for runner-only failures (windows job red while local
+        green under every reproduced condition incl. full short-TMPDIR):
+        surface exactly what the tool and git saw."""
+        import subprocess as _sp
+        parts = ["rc=" + str(result.returncode),
+                 "STDOUT<<" + (result.stdout or "")[-800:] + ">>",
+                 "STDERR<<" + (result.stderr or "")[-400:] + ">>"]
+        if repo is not None:
+            st = _sp.run(["git", "status", "--porcelain"], cwd=str(repo),
+                         capture_output=True, text=True)
+            parts.append("git-status rc=" + str(st.returncode)
+                         + " out<<" + st.stdout[:200] + ">> err<<" + st.stderr[:200] + ">>")
+        return " | ".join(parts)
 
     def _run_eod_sweep(self, repos=None, readonly_repos=None, fix_push=False,
                        buildlog=None, timestamp=None, env_overrides=None):
@@ -71,11 +84,11 @@ class TestEodSweep(unittest.TestCase):
         cmd = [sys.executable, str(self.eod_script)]
 
         if repos:
-            repos_str = ":".join(str(r) for r in repos)
+            repos_str = os.pathsep.join(str(r) for r in repos)
             cmd.extend(["--repos", repos_str])
 
         if readonly_repos:
-            readonly_str = ":".join(str(r) for r in readonly_repos)
+            readonly_str = os.pathsep.join(str(r) for r in readonly_repos)
             cmd.extend(["--readonly-repos", readonly_str])
 
         if fix_push:
@@ -100,14 +113,15 @@ class TestEodSweep(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("EOD-SWEEP: SAFE", result.stdout)
 
-    def test_nonexistent_repo(self):
+    def test_nonexistent_repo_at_risk(self):
         """Test graceful degradation when repo doesn't exist."""
         nonexistent = Path(self.temp_dir) / "nonexistent"
 
         result = self._run_eod_sweep([nonexistent])
-        # Should report SAFE (non-existent repos are skipped)
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("EOD-SWEEP: SAFE", result.stdout)
+        # Should report SAFE (non-existent repos are reported AT-RISK (fail-closed))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("repo path does not exist", result.stdout, "explicit repo must FAIL CLOSED with a finding")
+        self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
 
     def test_clean_repo(self):
         """Test clean repository reports SAFE."""
@@ -127,7 +141,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "README.md").write_text("# Modified\n")
 
         result = self._run_eod_sweep([test_repo])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
         self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
         self.assertIn("dirty working tree", result.stdout)
 
@@ -140,7 +154,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "untracked.txt").write_text("content\n")
 
         result = self._run_eod_sweep([test_repo])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
         self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
         self.assertIn("untracked files", result.stdout)
 
@@ -193,7 +207,7 @@ class TestEodSweep(unittest.TestCase):
         (repo2 / "README.md").write_text("# Modified\n")
 
         result = self._run_eod_sweep([repo1, repo2])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
         self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
 
     def test_output_format_safe(self):
@@ -214,7 +228,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "untracked.txt").write_text("content\n")  # untracked
 
         result = self._run_eod_sweep([test_repo])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
         self.assertIn("AT-RISK", result.stdout)
         # Should mention findings count
         self.assertIn("findings", result.stdout)
@@ -236,7 +250,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "README.md").write_text("# Modified\n")
 
         result = self._run_eod_sweep([test_repo])
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
 
     def test_readonly_repos_not_modified(self):
         """Test that readonly-repos flag prevents modifications."""
@@ -251,15 +265,16 @@ class TestEodSweep(unittest.TestCase):
         # Should still work, just not auto-push readonly repos
         self.assertIn("EOD-SWEEP: SAFE", result.stdout)
 
-    def test_non_git_directory_skipped(self):
-        """Test that non-git directories are gracefully skipped."""
+    def test_non_git_directory_at_risk(self):
+        """Test that non-git directories are gracefully reported AT-RISK (fail-closed)."""
         plain_dir = Path(self.temp_dir) / "plain_dir"
         plain_dir.mkdir()
 
         result = self._run_eod_sweep([plain_dir])
-        # Should report SAFE (non-git repos are skipped)
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("EOD-SWEEP: SAFE", result.stdout)
+        # Should report SAFE (non-git repos are reported AT-RISK (fail-closed))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a git repository", result.stdout, "explicit repo must FAIL CLOSED with a finding")
+        self.assertIn("EOD-SWEEP: AT-RISK", result.stdout)
 
     # BUILDLOG tests
     def test_buildlog_append_on_safe(self):
@@ -287,7 +302,7 @@ class TestEodSweep(unittest.TestCase):
         (test_repo / "README.md").write_text("# Modified\n")
 
         result = self._run_eod_sweep([test_repo], buildlog=buildlog_path)
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 1, msg=self._diag(result, locals().get('test_repo') or locals().get('repo2') or locals().get('repo1')))
 
         # Verify BUILDLOG was created and contains the AT-RISK verdict
         self.assertTrue(buildlog_path.exists())

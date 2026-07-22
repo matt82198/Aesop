@@ -94,7 +94,14 @@ def build_manifest_item(driver: AgentDriver, item: Dict[str, Any]) -> Dict[str, 
     model = driver.resolve_model(ROLE_WORKER)
 
     # Resolve all four policy knobs from the backend's verification tier.
-    policy = verification_policy(caps)
+    # Wrap to provide driver name in error.
+    try:
+        policy = verification_policy(caps)
+    except ValueError as e:
+        raise ValueError(
+            f"Unsupported verification tier {caps.recommended_verification_tier} "
+            f"from driver '{driver.name}': {e}"
+        )
 
     # Copy the input item and enrich with model, tier, and all four policy knobs.
     # Preserve all original fields including the optional `repo` field.

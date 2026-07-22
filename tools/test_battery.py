@@ -6,6 +6,10 @@ ui vitest+tsc) as concurrent subprocesses with per-harness rc capture, stdin
 closed (the hook suite hangs on never-EOF stdin), and an explicit summary
 table. Exit 0 only when every harness exits 0.
 
+Per-harness timeout (AESOP_BATTERY_HARNESS_TIMEOUT_S, default 1800s = 30min):
+on expiry, the process tree is killed and rc=124 is recorded with a TIMEOUT
+note. Applies in both serial and parallel modes.
+
 Usage:
   python tools/test_battery.py [--serial] [--skip ui|sh|node|py ...] [--json]
 
@@ -16,6 +20,8 @@ parallel runs prove load-fragile on a box). Logs land in the state scratch dir
 import argparse
 import json
 import os
+import platform
+import signal
 import subprocess
 import sys
 import tempfile
@@ -30,6 +36,58 @@ HARNESSES = {
     "sh": ["npm", "run", "test:sh"],
     "ui": None,  # composite: tsc + vitest, run via _ui_command
 }
+
+
+def _get_harness_timeout():
+    """Get per-harness timeout in seconds (env AESOP_BATTERY_HARNESS_TIMEOUT_S, default 1800)."""
+    timeout_s = os.environ.get("AESOP_BATTERY_HARNESS_TIMEOUT_S", "1800")
+    try:
+        return int(timeout_s)
+    except ValueError:
+        return 1800
+
+
+def _kill_process_tree(proc):
+    """Kill process and all children (Windows: taskkill /T /F, others: SIGKILL)."""
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=5,
+            )
+        else:
+            # Unix: SIGKILL via os.killpg (process group)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                # Process already gone or not in a group; try direct kill
+                try:
+                    os.kill(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+    except Exception:
+        # Ignore kill errors; process may already be dead
+        pass
+
+
+def _wait_with_timeout(proc, timeout_s):
+    """Wait for process with timeout; return (rc, timed_out).
+
+    On timeout, kills the process tree and returns (124, True).
+    Otherwise returns (proc.returncode, False).
+    """
+    try:
+        proc.wait(timeout=timeout_s)
+        return proc.returncode, False
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(proc)
+        # Wait a moment for kill to take effect, then force reap
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        return 124, True
 
 
 def _ui_command():
@@ -71,22 +129,30 @@ def main():
     args = ap.parse_args()
 
     logdir = os.environ.get("AESOP_BATTERY_LOGDIR") or tempfile.mkdtemp(prefix="aesop-battery-")
+    os.makedirs(logdir, exist_ok=True)
     names = [n for n in HARNESSES if n not in args.skip]
     started = time.time()
     results = {}
+    timeout_s = _get_harness_timeout()
 
     if args.serial:
         for n in names:
             name, proc, f, log = run_harness(n, logdir, parallel=False)
-            rc = proc.wait()
+            rc, timed_out = _wait_with_timeout(proc, timeout_s)
             f.close()
-            results[name] = {"rc": rc, "log": str(log)}
+            result = {"rc": rc, "log": str(log)}
+            if timed_out:
+                result["note"] = "TIMEOUT"
+            results[name] = result
     else:
         procs = [run_harness(n, logdir) for n in names]
         for name, proc, f, log in procs:
-            rc = proc.wait()
+            rc, timed_out = _wait_with_timeout(proc, timeout_s)
             f.close()
-            results[name] = {"rc": rc, "log": str(log)}
+            result = {"rc": rc, "log": str(log)}
+            if timed_out:
+                result["note"] = "TIMEOUT"
+            results[name] = result
 
     wall = round(time.time() - started, 1)
     ok = all(r["rc"] == 0 for r in results.values())
@@ -97,7 +163,8 @@ def main():
         print(f"battery mode={'serial' if args.serial else 'parallel'} wall={wall}s")
         for n, r in results.items():
             verdict = "PASS" if r["rc"] == 0 else "FAIL"
-            print(f"  {n:5s} rc={r['rc']}  {verdict}  log={r['log']}")
+            note_str = f" {r['note']}" if "note" in r else ""
+            print(f"  {n:5s} rc={r['rc']}  {verdict}{note_str}  log={r['log']}")
         print("BATTERY:", "GREEN" if ok else "RED")
     sys.exit(0 if ok else 1)
 

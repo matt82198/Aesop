@@ -83,7 +83,7 @@ Optional (non-abstract): `get_tokens_spent()`.
 
 ## Phase 2 Codex Implementation Details
 
-Codex driver (Tier 2): injects file contents into prompt (no filesystem), calls OpenAI Chat Completions via injectable transport (FakeTransport in tests, default_openai_transport prod), validates JSON with bounded retry, enforces ownership. CRITICAL: Green = exit 0 only (not model's done:true). Verification policy: tier 2 -> {validate_all_json:True, spot_check_frac:0.50, repair_cap:2, require_adversarial_review:True}.
+Codex driver (Tier 2): injects file contents into prompt, calls OpenAI Chat Completions via injectable transport, validates JSON with bounded retry, enforces ownership. CRITICAL: Green = exit 0 only. Verification policy: tier 2 -> {validate_all_json:True, spot_check_frac:0.50, repair_cap:2, require_adversarial_review:True}. **P1 Security**: Default model map uses gpt-4o-mini (worker, supports json_schema); init-time guard rejects models lacking json_schema support unless `allow_unverified_models=True` (P1 gate: prevent gpt-3.5-turbo silent failures).
 
 ## Phase 3 Bridge Implementation Details
 
