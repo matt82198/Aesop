@@ -379,5 +379,25 @@ class TestWaveTemplatesValidateSubcommand(unittest.TestCase):
                 f"Item {item.get('slug', 'unknown')} missing workDir")
 
 
+
+class TestValidateOutputIntegrity(unittest.TestCase):
+    """Gate-1 pilot regression: a codex full-file replacement once coerced the
+    validate glyphs to 0x7F DEL control bytes (invisible in most terminals).
+    Output must round-trip clean: expected glyphs present, no control bytes."""
+
+    def test_validate_output_glyphs_and_no_control_bytes(self):
+        import subprocess, sys as _sys
+        r = subprocess.run(
+            [_sys.executable, str(Path(__file__).parent.parent / "tools" / "wave_templates.py"),
+             "validate", "--template", "saas"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env={**__import__("os").environ, "PYTHONUTF8": "1"},
+        )
+        combined = (r.stdout or "") + (r.stderr or "")
+        self.assertIn("✓", combined, "check glyph must survive in output")
+        allowed = {chr(13), chr(10), chr(9)}
+        bad = [c for c in combined if (ord(c) < 32 and c not in allowed) or ord(c) == 127]
+        self.assertFalse(bad, f"control bytes in validate output: {[hex(ord(c)) for c in bad]}")
+
 if __name__ == "__main__":
     unittest.main()

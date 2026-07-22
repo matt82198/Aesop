@@ -47,6 +47,12 @@ Run: `npm run test:py` or `python -m unittest discover -s tests`
 - **git config pollution**: Tests must never call `git config user.*` on the live repo. Scope all identity changes to temp fixture repos only (validated by test_test_hygiene.py AST scanner).
 - Violations cause Windows cleanup deadlock (deleted temp dirs leave poisoned cwd, later tests inherit it).
 
+### Platform-Conditioned Repro (Permanent, incident-proven 2x)
+- A fix for a windows-RUNNER-only failure is NOT done without reproducing the runner
+  condition locally (8.3 short paths via FSO ShortPath + short TMPDIR) or captured runner
+  evidence (forensic assertion messages). Local-green alone shipped two wrong fixes in one
+  day; the third attempt with mandated repro found the real cause in one round.
+
 ### Dummy Secrets (Never Literal)
 - Test secrets assembled at runtime via string concat (e.g., `"prefix" + "suffix"`) to evade `secret_scan.py`.
 - Never commit literal `dummy_key_123` or test credentials to any file.
