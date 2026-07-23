@@ -2,8 +2,10 @@
 """Shadow adjudication wave runner.
 
 Replays a corpus of ground-truth-labeled adjudication decisions through
-the OrchestratorDriver seam using a gpt-4o-mini challenger backend (OpenAI-compatible).
-Zero behavior change to any live system.
+the OrchestratorDriver seam using a configurable challenger backend
+(OpenAI-compatible; --model selects the ladder rung). Zero behavior change
+to any live system. Scorecards record the API-reported served model id as
+evidence of which brain actually answered.
 
 Blind adjudication: labels are NEVER included in challenger context packs.
 
@@ -116,6 +118,10 @@ class OpenAICompatibleDriver(AgentDriver):
         self.model = model
         self.tokens_spent = 0
         self.last_context_pack = None
+        # Evidence: the model id the API reports as having SERVED each call
+        # (response body "model" field). Recorded so every rung's scorecard can
+        # prove which brain actually answered, not just which was requested.
+        self.served_models: List[str] = []
 
     def probe_capabilities(self) -> DriverCapabilities:
         return DriverCapabilities(
@@ -172,22 +178,38 @@ Classify this finding."""
             else:
                 user_prompt = command
 
-            # Build the payload with temperature 0 for consistency.
+            # Build the payload with temperature 0 for consistency. Reasoning-family
+            # models (gpt-5.x) reject non-default temperature; on that specific 400
+            # we drop the key and remember (recorded in scorecard as a parity note).
             payload = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": user_prompt}],
-                "temperature": 0,
             }
+            if not getattr(self, "omit_temperature", False):
+                payload["temperature"] = 0
 
-            # Call the real transport.
-            response_data = default_openai_transport(
-                payload, timeout_s=self.timeout_s, base_url=self.base_url
-            )
+            try:
+                response_data = default_openai_transport(
+                    payload, timeout_s=self.timeout_s, base_url=self.base_url
+                )
+            except Exception as te:
+                if "temperature" in str(te) and "unsupported_value" in str(te).lower():
+                    self.omit_temperature = True
+                    payload.pop("temperature", None)
+                    response_data = default_openai_transport(
+                        payload, timeout_s=self.timeout_s, base_url=self.base_url
+                    )
+                else:
+                    raise
 
             # Track tokens if available.
             if isinstance(response_data, dict) and "usage" in response_data:
                 usage = response_data.get("usage", {})
                 self.tokens_spent += usage.get("total_tokens", 0)
+
+            # Record the served model id (evidence of which brain answered).
+            if isinstance(response_data, dict) and response_data.get("model"):
+                self.served_models.append(str(response_data["model"]))
 
             # Extract the completion text and try to parse as JSON decision.
             if isinstance(response_data, dict) and "choices" in response_data:
@@ -721,7 +743,15 @@ def main():
 
     # Compute stats.
     stats = compute_scorecard_stats(scorecard, corpus[: len(scorecard)])
+    stats["challenger_model_requested"] = args.model
     stats["challenger_model"] = args.model
+    # Served-model receipts: what the API says actually answered each call.
+    served = sorted(set(getattr(backend, "served_models", [])))
+    stats["served_models"] = served
+    stats["temperature_omitted"] = bool(getattr(backend, "omit_temperature", False))
+    print(f"Served models (API-reported): {served or 'NONE RECORDED (offline mode?)'}")
+    if stats["temperature_omitted"]:
+        print("PARITY NOTE: model rejected temperature=0; ran at API default (recorded in scorecard)")
 
     # Write outputs.
     results_dir = REPO_ROOT / "bench" / "results"
