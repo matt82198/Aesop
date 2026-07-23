@@ -283,6 +283,50 @@ To bypass during testing: `git push --no-verify` (not recommended for production
 
 ---
 
+## Windows: Register Daemons as Hidden Scheduled Tasks
+
+On Windows, the watchdog and refinement monitor daemons can run silently in the background without flashing a console window. Use the provided PowerShell installer:
+
+```powershell
+# Register watchdog daemon (every 5m)
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1
+
+# Register both watchdog and monitor daemons (monitor script is external, customize path as needed)
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 `
+  -MonitorCommand "bash '/c/path/to/your/monitor/run-monitor.sh' --once"
+
+# Customize intervals and task names
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 `
+  -TaskPrefix MyFleet `
+  -WatchdogIntervalMinutes 10 `
+  -MonitorIntervalMinutes 30 `
+  -MonitorCommand "bash '/c/path/to/your/monitor/run-monitor.sh' --once"
+
+# Uninstall tasks
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -Uninstall
+
+# Preview without registering (dry-run mode)
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -DryRun
+```
+
+**How it works**: The installer creates Scheduled Tasks that launch `wscript.exe` with a hidden VBScript launcher (`daemons/run-hidden.vbs`). This avoids the console window that appears when bash.exe is run directly as a Scheduled Task action.
+
+**Parameters**:
+- `-TaskPrefix AesopMyFleet` — Task names: `AesopMyFleetWatchdogDaemon`, `AesopMyFleetRefinementMonitor` (default: `Aesop`)
+- `-WatchdogIntervalMinutes N` — Watchdog cycle interval in minutes (default: 5)
+- `-MonitorIntervalMinutes N` — Monitor cycle interval in minutes (default: 20)
+- `-WatchdogCommand "bash '...' ..."` — Custom watchdog command (default: `run-watchdog.sh --once >> state/cron-watchdog.log`)
+- `-MonitorCommand "bash '...' ..."` — Custom monitor command; omit to skip registering the monitor task (default: empty)
+- `-Uninstall` — Remove all registered tasks
+- `-DryRun` — Preview task configuration without registering
+
+**Constraints**:
+- Commands (`-WatchdogCommand`, `-MonitorCommand`) must NOT contain double quotes (vbs launcher contract)
+- UNC paths (e.g., `\\server\share`) are not supported; use local Windows or POSIX paths only
+- `-DryRun` mode works even if `bash.exe` or run-hidden.vbs is missing (validation downgraded to warnings for preview)
+
+---
+
 ## Next Steps
 
 1. **Read [PORTING.md](PORTING.md)** — Step-by-step guide for adopting Aesop on a foreign repo (10 common failure modes)

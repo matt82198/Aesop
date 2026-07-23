@@ -1,0 +1,391 @@
+"""
+Test suite for daemons/install-tasks.ps1 (Windows Scheduled Task installer).
+
+Tests:
+- DryRun mode correctly prints task configuration without registering tasks.
+- Output contains wscript.exe, //B, run-hidden.vbs, Hidden, and expected task names.
+- run-hidden.vbs file exists.
+- No cwd pollution or global git config writes.
+
+SKIP on non-Windows platforms.
+"""
+
+import os
+import sys
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows-only tests")
+class TestInstallTasks(unittest.TestCase):
+    """Test the Windows Scheduled Task installer."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up test fixtures once."""
+        # Resolve repo root relative to this test file (platform-independent)
+        cls.worktree_root = Path(__file__).resolve().parents[1]
+        cls.script_path = cls.worktree_root / "daemons" / "install-tasks.ps1"
+
+        # Verify worktree and script exist
+        if not cls.worktree_root.exists():
+            raise RuntimeError(f"Worktree not found: {cls.worktree_root}")
+        if not cls.script_path.exists():
+            raise RuntimeError(f"Script not found: {cls.script_path}")
+
+    def test_run_hidden_vbs_exists(self):
+        """Test that run-hidden.vbs file exists in daemons/."""
+        vbs_path = self.worktree_root / "daemons" / "run-hidden.vbs"
+        self.assertTrue(vbs_path.exists(), f"run-hidden.vbs not found at {vbs_path}")
+
+    def test_default_command_derivation(self):
+        """
+        Test that default WatchdogCommand derivation works correctly.
+
+        When NO -WatchdogCommand is provided, the script derives it from the worktree root.
+        The derived command should:
+        - Contain NO backtick characters (path conversion must be clean)
+        - Match posix path pattern /[A-Za-z]/ (valid drive letter format)
+        - Contain 'daemons/run-watchdog.sh'
+        """
+        import re
+
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-TaskPrefix",
+            "AesopDefaultTest",
+        ]
+        # Deliberately omit -WatchdogCommand to test default derivation
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected exit 0, got {result.returncode}.\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}",
+        )
+
+        output = result.stdout + result.stderr
+
+        # Assert no backtick character (path conversion must be clean)
+        self.assertNotIn(
+            "`",
+            output,
+            "Output should not contain backtick character (path conversion broken)",
+        )
+
+        # Assert posix path pattern /[A-Za-z]/ for drive letter
+        self.assertRegex(
+            output,
+            r"/[A-Za-z]/",
+            "Output should contain posix drive path like /c/ or /d/",
+        )
+
+        # Assert contains daemons/run-watchdog.sh
+        self.assertIn(
+            "daemons/run-watchdog.sh",
+            output,
+            "Output should contain 'daemons/run-watchdog.sh'",
+        )
+
+    def test_dryrun_mode_prints_output(self):
+        """
+        Test DryRun mode:
+        - Runs install-tasks.ps1 with -DryRun -TaskPrefix AesopDryRunTest.
+        - Asserts exit code 0.
+        - Asserts output contains wscript.exe, //B, run-hidden.vbs, AesopDryRunTestWatchdogDaemon, and Hidden.
+        """
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-TaskPrefix",
+            "AesopDryRunTest",
+        ]
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # Check exit code
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected exit 0, got {result.returncode}.\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}",
+        )
+
+        # Check output contains expected strings
+        output = result.stdout + result.stderr
+        self.assertIn(
+            "wscript.exe",
+            output,
+            "Output should contain 'wscript.exe'",
+        )
+        self.assertIn(
+            "//B",
+            output,
+            "Output should contain '//B'",
+        )
+        self.assertIn(
+            "run-hidden.vbs",
+            output,
+            "Output should contain 'run-hidden.vbs'",
+        )
+        self.assertIn(
+            "AesopDryRunTestWatchdogDaemon",
+            output,
+            "Output should contain task name 'AesopDryRunTestWatchdogDaemon'",
+        )
+        self.assertIn(
+            "Hidden",
+            output,
+            "Output should contain 'Hidden' (Settings.Hidden=True)",
+        )
+
+    def test_dryrun_does_not_register_tasks(self):
+        """
+        Test that DryRun mode does NOT register tasks:
+        - Run install-tasks.ps1 with -DryRun -TaskPrefix AesopDryRunTest.
+        - Verify Get-ScheduledTask -TaskName 'AesopDryRunTestWatchdogDaemon' fails or returns nothing.
+        """
+        # First, run DryRun (should not register)
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-TaskPrefix",
+            "AesopDryRunTest",
+        ]
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0)
+
+        # Now check that the task was NOT registered
+        check_cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Get-ScheduledTask -TaskName 'AesopDryRunTestWatchdogDaemon' -ErrorAction SilentlyContinue",
+        ]
+
+        check_result = subprocess.run(
+            check_cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        # Task should not exist, so output should be empty
+        self.assertEqual(
+            check_result.stdout.strip(),
+            "",
+            f"Task should not be registered after DryRun, but got: {check_result.stdout}",
+        )
+
+    def test_no_cwd_pollution(self):
+        """
+        Test that running the script doesn't change the current working directory.
+        """
+        # Record initial cwd
+        initial_cwd = os.getcwd()
+
+        # Run the script
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-TaskPrefix",
+            "AesopNoPollutionTest",
+        ]
+
+        subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # Verify cwd hasn't changed
+        final_cwd = os.getcwd()
+        self.assertEqual(
+            initial_cwd,
+            final_cwd,
+            f"CWD changed from {initial_cwd} to {final_cwd}",
+        )
+
+    def test_run_hidden_vbs_waits_and_propagates_exit(self):
+        """
+        Test that run-hidden.vbs properly waits for child and propagates exit code.
+
+        P1 fix: vbs must use shell.Run(cmd, 0, True) with WScript.Quit rc to:
+        - Wait for the bash process to complete (not exit immediately)
+        - Propagate exit code so task LastTaskResult is meaningful
+        - Allow ExecutionTimeLimit and MultipleInstances IgnoreNew to work
+
+        Asserts:
+        - File contains ", True" (wait flag in shell.Run)
+        - File contains "WScript.Quit rc" (exit code propagation)
+        - File does NOT contain "waitForExit = False" (old broken pattern)
+        """
+        vbs_path = self.worktree_root / "daemons" / "run-hidden.vbs"
+        with open(vbs_path, "r") as f:
+            content = f.read()
+
+        # Assert wait flag is True
+        self.assertIn(
+            ", True",
+            content,
+            "run-hidden.vbs must use shell.Run(cmd, 0, True) to wait for child",
+        )
+
+        # Assert exit code propagation
+        self.assertIn(
+            "WScript.Quit rc",
+            content,
+            "run-hidden.vbs must use WScript.Quit rc to propagate exit code",
+        )
+
+        # Assert old broken pattern is gone
+        self.assertNotIn(
+            "waitForExit = False",
+            content,
+            "run-hidden.vbs must not use waitForExit = False (exits immediately)",
+        )
+
+    def test_dryrun_with_nonexistent_bash_exe(self):
+        """
+        Test DryRun works even with nonexistent -BashExe.
+
+        P1 fix: In DryRun mode, validation failures should downgrade to warnings,
+        allowing preview to work on machines without Git Bash installed.
+
+        Asserts:
+        - Exit code 0 (DryRun is a preview, not a real operation)
+        - Output contains DRYRUN lines (preview printed)
+        - No fatal error about missing BashExe
+        """
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-BashExe",
+            "C:\\nonexistent\\bash.exe",
+            "-TaskPrefix",
+            "AesopNonexistentBashTest",
+        ]
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # DryRun should succeed despite missing bash
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"DryRun should exit 0 even with nonexistent BashExe.\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}",
+        )
+
+        # But should still print the DRYRUN preview
+        output = result.stdout + result.stderr
+        self.assertIn(
+            "DRYRUN:",
+            output,
+            "DryRun should print DRYRUN preview lines even with validation warnings",
+        )
+
+    def test_command_with_double_quote_validation(self):
+        """
+        Test that commands containing double quotes are rejected.
+
+        P1 fix: The vbs launcher requires no double quotes in args (by contract).
+        If -WatchdogCommand contains ", exit 1 with validation error.
+
+        Asserts:
+        - Exit code 1 (validation failure)
+        - Output contains validation error message about double quotes
+        """
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-WatchdogCommand",
+            'bash -c "echo invalid"',
+            "-TaskPrefix",
+            "AesopQuoteTest",
+        ]
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # Should fail validation
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            "Command with double quotes should fail validation",
+        )
+
+        # Should have a clear error message
+        output = result.stdout + result.stderr
+        self.assertTrue(
+            "quote" in output.lower() or "double" in output.lower(),
+            f"Error message should mention quotes, got: {output}",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

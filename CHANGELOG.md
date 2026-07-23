@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
+## [0.3.2] - 2026-07-23
+
+### Fixed
+- **Windows daemons no longer flash a console window**: ad-hoc Scheduled Tasks launched `bash.exe` with Interactive logon, popping a visible console every watchdog interval (5 min). New `daemons/install-tasks.ps1` registers the watchdog/monitor tasks through a hidden `wscript` launcher (`daemons/run-hidden.vbs`) — same cadence, zero window flash.
+
+### Added
+- `daemons/install-tasks.ps1` — idempotent Windows task installer (install/uninstall/dry-run, configurable commands + intervals); shipped in the npm package.
+
 ## [0.3.1] - 2026-07-22 - Waves 28-31
 
 ### Added
