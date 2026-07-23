@@ -1,0 +1,50 @@
+name: main-full
+
+# Purpose: Post-merge full sequential CI run — drift guard vs shard de-collection / flaky luck-passes
+# / skip-path classes. NOT a merge gate (main is already protected by PR checks).
+# Cancels superseded runs to avoid queue backup.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main-full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  main-full-verify:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python test dependencies
+        run: pip install pyyaml
+
+      - name: Run Node.js tests
+        env:
+          AESOP_TEST_CHILD_TIMEOUT_MS: '120000'
+        run: node --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
+
+      - name: Run Python tests (PYTHONUTF8=1 for Windows encoding)
+        env:
+          PYTHONUTF8: '1'
+        run: npm run test:py
+
+      - name: Run shell test suites (ubuntu only)
+        if: runner.os == 'Linux'
+        run: npm run test:sh

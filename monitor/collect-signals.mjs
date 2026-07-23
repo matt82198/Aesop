@@ -613,6 +613,72 @@ function detectIsolationViolations() {
   return { violations, count: violations.length };
 }
 
+// 11b) Main CI status polling
+// Calls `gh run list` to get latest main-full workflow run status; never throws
+function checkMainCiStatus() {
+  try {
+    // Execute gh command to get latest main-full workflow run
+    const result = execSync(
+      'gh run list --workflow=main-full.yml --branch main --limit 1 --json status,conclusion,headSha,url',
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+    ).trim();
+
+    if (!result) {
+      // No runs found (workflow may not have run yet)
+      return {
+        state: 'unknown',
+        reason: 'No main-full workflow runs found',
+        checked_at: new Date(now).toISOString(),
+      };
+    }
+
+    const runs = JSON.parse(result);
+    if (!Array.isArray(runs) || runs.length === 0) {
+      return {
+        state: 'unknown',
+        reason: 'No main-full workflow runs found',
+        checked_at: new Date(now).toISOString(),
+      };
+    }
+
+    const latestRun = runs[0];
+    const status = latestRun.status || '';
+    const conclusion = latestRun.conclusion || '';
+    const sha = latestRun.headSha || '';
+    const url = latestRun.url || '';
+
+    // Map status and conclusion to state
+    let state = 'unknown';
+    if (status === 'completed') {
+      if (conclusion === 'success') {
+        state = 'pass';
+      } else if (conclusion === 'failure') {
+        state = 'fail';
+      } else {
+        state = 'unknown';
+      }
+    } else if (status === 'in_progress') {
+      state = 'running';
+    } else {
+      state = 'unknown';
+    }
+
+    return {
+      state,
+      sha,
+      url,
+      checked_at: new Date(now).toISOString(),
+    };
+  } catch (e) {
+    // gh command failed, missing, or unauthed — return unknown gracefully
+    return {
+      state: 'unknown',
+      reason: e.message || 'gh command unavailable or failed',
+      checked_at: new Date(now).toISOString(),
+    };
+  }
+}
+
 // 12) Agent stall detection
 // Calls tools/stall_check.py --json with bounded timeout; fails gracefully with NOT-AVAILABLE signal
 function checkAgentStalls() {
@@ -891,6 +957,7 @@ const gitState = checkGitState();
 const memory = checkMemoryFreshness();
 const logFiles = checkLogFiles(securityAlertsContent);
 const isolationViolations = detectIsolationViolations();
+const mainCi = checkMainCiStatus();
 const agentStalls = checkAgentStalls();
 
 // Extended signal checks (5, 6, 8, 10) — skipped if extended_signals is OFF
@@ -941,6 +1008,7 @@ const signals = {
   costTick,
   unreviewedPrompts,
   isolationViolations,
+  main_ci: mainCi,
   agentStalls,
 };
 
@@ -1012,6 +1080,21 @@ if (!agentStalls.available) {
       brief.push(`  - ${stall.agent}: ${stall.verdict} (${stall.mtime_age_s}s old)`);
     }
   }
+}
+brief.push('');
+
+brief.push('## Main CI status (main-full workflow)');
+if (mainCi.state === 'pass') {
+  brief.push('✓ Latest main-full run passed.');
+} else if (mainCi.state === 'fail') {
+  brief.push(`🚨 **Latest main-full run FAILED:**`);
+  if (mainCi.sha) brief.push(`  SHA: ${mainCi.sha}`);
+  if (mainCi.url) brief.push(`  URL: ${mainCi.url}`);
+} else if (mainCi.state === 'running') {
+  brief.push('⏳ Main-full workflow currently running...');
+  if (mainCi.url) brief.push(`  URL: ${mainCi.url}`);
+} else {
+  brief.push(`⚠ Main-full status unknown: ${mainCi.reason || 'no data available'}`);
 }
 brief.push('');
 
