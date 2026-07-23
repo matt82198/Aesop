@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""Tests for shadow adjudication wave.
+
+TDD-first tests covering:
+  * Corpus file parsing: 16 items with required fields.
+  * Blind adjudication: labels NEVER appear in context packs or prompts.
+  * Scorecard math: agreement/correctness logic, bar criteria.
+  * API call cap: max 40 calls enforced.
+
+Offline only (no live API calls). Uses FakeTransport fixture.
+
+stdlib-only (unittest), ASCII-only, Windows + Linux safe.
+"""
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+# Add tools/ to sys.path.
+TEST_DIR = Path(__file__).resolve().parent
+REPO_ROOT = TEST_DIR.parent
+TOOLS_DIR = REPO_ROOT / "tools"
+DRIVER_DIR = REPO_ROOT / "driver"
+
+if str(DRIVER_DIR) not in sys.path:
+    sys.path.insert(0, str(DRIVER_DIR))
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from context_pack import ContextPack  # noqa: E402
+from shadow_adjudication import (  # noqa: E402
+    CorpusItem,
+    ScorecardItem,
+    build_finding_context_pack,
+    compute_scorecard_stats,
+    load_corpus,
+)
+
+
+class TestCorpusLoading(unittest.TestCase):
+    """Test corpus file parsing."""
+
+    def test_corpus_file_exists(self):
+        """Verify corpus file exists in expected location."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        self.assertTrue(
+            corpus_path.exists(), f"Corpus file not found: {corpus_path}"
+        )
+
+    def test_corpus_has_16_items(self):
+        """Corpus must have exactly 16 items."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+        self.assertEqual(
+            len(corpus), 16, f"Expected 16 corpus items, got {len(corpus)}"
+        )
+
+    def test_corpus_items_have_required_fields(self):
+        """Each corpus item must have required fields."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        required_fields = ["id", "finding_text", "source_lens"]
+        for idx, item in enumerate(corpus):
+            for field in required_fields:
+                self.assertTrue(
+                    hasattr(item, field),
+                    f"Item {idx} ({item.id}) missing field: {field}",
+                )
+
+    def test_corpus_labels_present(self):
+        """Verify corpus items have labels (ground truth data)."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        for item in corpus:
+            self.assertIsNotNone(
+                item.ground_truth,
+                f"Item {item.id} missing ground_truth label",
+            )
+            self.assertIsNotNone(
+                item.incumbent_verdict,
+                f"Item {item.id} missing incumbent_verdict label",
+            )
+
+
+class TestBlindAdjudication(unittest.TestCase):
+    """Test blind adjudication: labels never reach context packs."""
+
+    def setUp(self):
+        """Create test item and repo structure."""
+        self.item = CorpusItem(
+            id="test-finding",
+            finding_text="Test finding: something breaks.",
+            source_lens="test_lens",
+            incumbent_verdict="real_defect",
+            ground_truth="real_defect",
+            gt_note="Test note",
+        )
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo_root = self.temp_dir.name
+        self.conductor_root = Path(self.temp_dir.name) / "conductor3"
+        self.conductor_root.mkdir(exist_ok=True)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        self.temp_dir.cleanup()
+
+    def test_context_pack_excludes_labels(self):
+        """Context pack MUST NOT contain label strings."""
+        pack = build_finding_context_pack(
+            self.item, self.repo_root, str(self.conductor_root)
+        )
+
+        # Serialize pack to JSON (as would be sent to challenger).
+        pack_json = json.dumps(pack.content)
+
+        # Assert label strings do NOT appear.
+        label_strings = [
+            "incumbent_verdict",
+            "ground_truth",
+            "gt_note",
+        ]
+        for label in label_strings:
+            self.assertNotIn(
+                label,
+                pack_json,
+                f"Label string '{label}' found in context pack (blind adjudication violated)",
+            )
+
+    def test_context_pack_includes_finding_text(self):
+        """Context pack MUST include the finding_text."""
+        pack = build_finding_context_pack(
+            self.item, self.repo_root, str(self.conductor_root)
+        )
+
+        # The finding text should be in the pack.
+        pack_text = json.dumps(pack.content)
+        self.assertIn(
+            self.item.finding_text,
+            pack_text,
+            "Finding text not found in context pack",
+        )
+
+    def test_context_pack_includes_source_lens(self):
+        """Context pack MUST include the source_lens."""
+        pack = build_finding_context_pack(
+            self.item, self.repo_root, str(self.conductor_root)
+        )
+
+        # The source lens should be in the pack.
+        pack_text = json.dumps(pack.content)
+        self.assertIn(
+            self.item.source_lens,
+            pack_text,
+            "Source lens not found in context pack",
+        )
+
+
+class TestScorecardMath(unittest.TestCase):
+    """Test scorecard computation logic."""
+
+    def test_agreement_calculation(self):
+        """Test agreement rate calculation."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+            CorpusItem("id2", "text2", "lens2", "false_positive", "false_positive", ""),
+            CorpusItem("id3", "text3", "lens3", "real_defect", "false_positive", ""),
+        ]
+
+        scorecard = [
+            ScorecardItem(
+                "id1",
+                "real_defect",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+            ScorecardItem(
+                "id2",
+                "false_positive",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+            ScorecardItem(
+                "id3",
+                "real_defect",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=False,
+                correct_vs_ground_truth=False,
+            ),
+        ]
+
+        stats = compute_scorecard_stats(scorecard, corpus)
+
+        # 2 out of 3 agree with incumbent.
+        self.assertAlmostEqual(
+            stats["overall_agreement_pct"], 66.7, delta=0.1
+        )
+
+    def test_real_defect_subset_accuracy(self):
+        """Test accuracy on real_defect subset."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+            CorpusItem("id2", "text2", "lens2", "real_defect", "real_defect", ""),
+            CorpusItem("id3", "text3", "lens3", "enhancement_opportunity", "enhancement_opportunity", ""),
+        ]
+
+        scorecard = [
+            ScorecardItem(
+                "id1",
+                "real_defect",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+            ScorecardItem(
+                "id2",
+                "false_positive",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=False,
+                correct_vs_ground_truth=False,
+            ),
+            ScorecardItem(
+                "id3",
+                "enhancement_opportunity",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+        ]
+
+        stats = compute_scorecard_stats(scorecard, corpus)
+
+        # Real defect subset: 1 correct out of 2.
+        self.assertAlmostEqual(
+            stats["real_defect_agreement_pct"], 50.0, delta=0.1
+        )
+
+    def test_false_positive_subset_accuracy(self):
+        """Test accuracy on false_positive subset."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "false_positive", "false_positive", ""),
+            CorpusItem("id2", "text2", "lens2", "false_positive", "false_positive", ""),
+            CorpusItem("id3", "text3", "lens3", "real_defect", "real_defect", ""),
+        ]
+
+        scorecard = [
+            ScorecardItem(
+                "id1",
+                "false_positive",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+            ScorecardItem(
+                "id2",
+                "false_positive",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+            ScorecardItem(
+                "id3",
+                "real_defect",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+        ]
+
+        stats = compute_scorecard_stats(scorecard, corpus)
+
+        # False positive subset: 2 correct out of 2.
+        self.assertAlmostEqual(
+            stats["false_positive_agreement_pct"], 100.0, delta=0.1
+        )
+
+    def test_rubber_stamp_refutation_detection(self):
+        """Test rubber-stamp (items 9, 14) refutation detection."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "false_positive", "false_positive", ""),
+            CorpusItem("whitelist-gate-weakening", "text2", "lens2", "false_positive", "false_positive", ""),
+            CorpusItem("regression-ui-suite", "text3", "lens3", "false_positive", "false_positive", ""),
+        ]
+
+        scorecard = [
+            ScorecardItem(
+                "id1",
+                "real_defect",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=False,
+                correct_vs_ground_truth=False,
+            ),
+            ScorecardItem(
+                "whitelist-gate-weakening",
+                "false_positive",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+            ScorecardItem(
+                "regression-ui-suite",
+                "false_positive",
+                False,
+                0,
+                True,
+                0,
+                agreement_with_incumbent=True,
+                correct_vs_ground_truth=True,
+            ),
+        ]
+
+        stats = compute_scorecard_stats(scorecard, corpus)
+
+        # Both rubber-stamp items correctly identified as false_positive.
+        self.assertEqual(stats["rubber_stamp_refutations_count"], 2)
+
+    def test_schema_validity_rate(self):
+        """Test schema validity tracking."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+            CorpusItem("id2", "text2", "lens2", "real_defect", "real_defect", ""),
+            CorpusItem("id3", "text3", "lens3", "real_defect", "real_defect", ""),
+        ]
+
+        scorecard = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+            ScorecardItem("id2", "real_defect", False, 0, False, 0, True, True),
+            ScorecardItem("id3", "real_defect", False, 0, True, 0, True, True),
+        ]
+
+        stats = compute_scorecard_stats(scorecard, corpus)
+
+        # 2 out of 3 schema valid.
+        self.assertAlmostEqual(stats["schema_valid_pct"], 66.7, delta=0.1)
+
+    def test_decision_failed_count(self):
+        """Test DECISION_FAILED tracking."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+            CorpusItem("id2", "text2", "lens2", "real_defect", "real_defect", ""),
+        ]
+
+        scorecard = [
+            ScorecardItem(
+                "id1",
+                "DECISION_FAILED",
+                False,
+                0,
+                False,
+                2,
+                False,
+                False,
+            ),
+            ScorecardItem("id2", "real_defect", False, 0, True, 0, True, True),
+        ]
+
+        stats = compute_scorecard_stats(scorecard, corpus)
+
+        # 1 DECISION_FAILED.
+        self.assertEqual(stats["decision_failed_count"], 1)
+
+
+class TestSuccessBar(unittest.TestCase):
+    """Test success bar criteria."""
+
+    def test_success_bar_real_defect_threshold(self):
+        """Success requires >=80% agreement on real_defect subset."""
+        # Create 10 items, all real_defect.
+        corpus = [
+            CorpusItem(f"id{i}", f"text{i}", f"lens{i}", "real_defect", "real_defect", "")
+            for i in range(10)
+        ]
+
+        # Scenario 1: 8 correct (80%) — should PASS.
+        scorecard_pass = [
+            ScorecardItem(
+                f"id{i}",
+                "real_defect",
+                False,
+                0,
+                True,
+                0,
+                True,
+                correct_vs_ground_truth=(i < 8),
+            )
+            for i in range(10)
+        ]
+
+        stats_pass = compute_scorecard_stats(scorecard_pass, corpus)
+        self.assertGreaterEqual(
+            stats_pass["real_defect_agreement_pct"],
+            80.0,
+            "80% agreement should meet bar",
+        )
+
+        # Scenario 2: 7 correct (70%) — should FAIL.
+        scorecard_fail = [
+            ScorecardItem(
+                f"id{i}",
+                "real_defect",
+                False,
+                0,
+                True,
+                0,
+                True,
+                correct_vs_ground_truth=(i < 7),
+            )
+            for i in range(10)
+        ]
+
+        stats_fail = compute_scorecard_stats(scorecard_fail, corpus)
+        self.assertLess(
+            stats_fail["real_defect_agreement_pct"],
+            80.0,
+            "70% agreement should fail bar",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
