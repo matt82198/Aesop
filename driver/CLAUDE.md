@@ -27,14 +27,28 @@
   build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
   by capability and decides green ONLY from test exit code (not model's say-so).
 - **backend_config.py** — Per-deployment model resolution (role → model id, API key/base URL).
-- **README.md** — the abstraction, the phased roadmap, the verification thesis.
+- **context_pack.py** — OrchestratorDriver increment 1: build_context_pack() reads
+  ONLY allowlisted control files (STATE.md, BUILDLOG.md, tracker.json, MEMORY.md, explicit
+  brief: paths under repo/conductor roots). Enforces cardinal rule 4 ("orchestrator reads
+  only the file brain") in code. Size-bounded with deterministic truncation (oldest-first
+  for logs) and manifest tracking.
+- **orchestrator_driver.py** — OrchestratorDriver seam (increment 1): mirrors AgentDriver
+  pattern for orchestrator adjudication. decide(decision_type, context_pack, schema) → JSON
+  verdict with fail-safe semantics (DECISION_FAILED after retries, never green). Backends:
+  claude, openai-compatible, codex (via AgentDriver abstraction). Schema optional (minimal
+  validation: 'verdict' + 'evidence' keys required always).
+- **decisions/** — Decision type schema registry (sibling lane owns schemas; orchestrator
+  reads them at runtime; increment 1 treats absent schemas as optional).
 - **../tests/test_agent_driver.py** — the contract's test suite.
 - **../tests/test_codex_driver_e2e.py** — Phase 2 end-to-end offline tests
   (FakeTransport, red-to-green verification, retry logic, ownership enforcement)
   + gated live test (AESOP_CODEX_LIVE env var).
-- **../tests/test_wave_bridge.py** — Phase 3 offline e2e (honest green: exit 0 only).
-  no network). Tests: manifest building, routing, fail-safe, ownership enforcement,
-  headline test (red stub + FakeTransport fix + test pass -> ok=True).
+- **../tests/test_wave_bridge.py** — Phase 3 offline e2e: manifest building, routing,
+  fail-safe, ownership, headline red-stub-to-green test (honest green: exit 0 only).
+- **../tests/test_orchestrator_driver.py** — OrchestratorDriver increment 1 tests (20 suites):
+  context_pack allowlist enforcement (arbitrary paths -> ContextPackViolation), size
+  capping + truncation, decide() happy path + malformed JSON retry + fail-safe, schema
+  loading/caching + validation, all offline (FakeTransport, no API keys/network).
 
 ## The five operations (what the wave loop needs from ANY backend)
 
@@ -58,6 +72,11 @@ Optional (non-abstract): `get_tokens_spent()`.
 - The wave loop calls **only** `AgentDriver` methods — never `agent()`,
   `parallel()`, Read/Write/Bash tools, or `budget.spent()` directly. That is
   the seam.
+- The orchestrator calls **only** `OrchestratorDriver.decide()` — never raw tool
+  APIs or harness methods. Context packs are allowlist-only (STATE.md, BUILDLOG.md,
+  tracker.json, MEMORY.md, explicit brief: paths under repo/conductor roots); arbitrary
+  reads are a code-level violation (`ContextPackViolation`), not a convention. This
+  **enforces cardinal rule 4 in code**.
 - `probe_capabilities()` must be **honest**. Defaults are conservative (no
   native abilities, accuracy 0.0, tier 4) — optimism is opt-in, never default.
 - **Weaker workers → higher verification tier.** Lower `tool_use_accuracy`
@@ -65,6 +84,9 @@ Optional (non-abstract): `get_tokens_spent()`.
   orchestrator's burden; they do not lower it.
 - Unknown roles in `resolve_model()` fall back to the worker model — a mis-typed
   role can never silently escalate cost.
+- **Fail-safe verdicts**: `OrchestratorDriver.decide()` returns `{'verdict':
+  'DECISION_FAILED', ...}` after retries exhausted; never fabricates a passing
+  verdict (mirrors the worker seat's never-green principle).
 - stdlib-only (`abc`, `dataclasses`, `typing`, `subprocess`), ASCII-only,
   Windows + Linux safe. Concrete adapters own any provider SDK, not this layer.
 
@@ -87,25 +109,16 @@ Codex driver (Tier 2): injects file contents into prompt, calls OpenAI Chat Comp
 
 ## Phase 3 Bridge Implementation Details
 
-Connects AgentDriver backends to wave-flat-dispatch manifest items; verification
-tier is driven by backend capability, not config.
-
-**build_manifest_item(driver, item) -> dict**: enriches a backlog item with model
-(driver.resolve_model), verificationTier (probe), and the four policy knobs from
-verification_policy(caps) — RESOLVED ONCE, carried as literal manifest fields so the
-template cannot recompute/drift; tier-1/Claude path stays byte-identical (repairCap=1,
-requireAdversarialReview=false, spotCheckFrac=0.10, validateAllJson=false).
-
-**dispatch_item(driver, item) -> dict**:
-- Routes by worker_filesystem_access: True→{route:'harness'}; False→orchestrator-managed
-  (dispatch_worker + run_command test). Returns {route, ok, testExit, filesWritten, verified, ...}.
-- HONESTY: Green (ok=True) ONLY on test exit 0; never from model's done:true. No testCmd
-  → unverified (ok=False, verified=False, reason='no_test_command'): "no test" ≠ "verified."
-- Fail-safe: exception → ok=False, verified=False. Ownership at driver level.
-
-**Tests**: prove a non-Claude backend (Codex + FakeTransport) takes a RED unittest
-stub, applies a fix, runs the test, and returns ok=True ONLY because the test passed
-(exit 0). All offline, no API key, no network.
+**build_manifest_item(driver, item)**: enriches a backlog item with model (resolve_model),
+verificationTier (probe), and the four verification_policy knobs — resolved ONCE as literal
+manifest fields so the template cannot recompute/drift; Claude tier-1 path stays byte-identical
+(repairCap=1, requireAdversarialReview=false, spotCheckFrac=0.10, validateAllJson=false).
+**dispatch_item(driver, item)**: routes by worker_filesystem_access (True -> harness route;
+False -> orchestrator-managed dispatch_worker + run_command test). HONESTY: ok=True ONLY on
+test exit 0, never from the model's done:true; no testCmd -> ok=False, verified=False,
+reason='no_test_command' ("no test" != "verified"); exception -> fail-safe False. Ownership
+enforced at driver level. Offline tests prove Codex+FakeTransport takes a RED unittest stub
+to green via real test exit 0 (no API key, no network).
 
 ## Wave Scheduler (WS3a Pilot) + GATE-1 Handoff Kit
 
@@ -119,27 +132,14 @@ stub, applies a fix, runs the test, and returns ok=True ONLY because the test pa
 
 ### REPORT-CONTRACT (GATE-1 Orchestrator Handoff)
 
-The scheduler emits a Report JSON consumed by the orchestrator to decide merge eligibility:
-```
-{
-  "phase": "dispatch"|"intake"|"halt"|"ceiling"|"gate_unavailable"|"manifest",
-  "wave_id": "<uuid>",
-  "items_selected": ["id1", "id2"],  // IDs selected for this wave
-  "items_shipped": [
-    { "slug": "feat/x", "backend": "claude-code|codex", "tier": 1|2|3|4, "verified": true|false (false = NOT PROVEN, not necessarily failed; tier null = no build record), "testExit": 0|1|null },
-    ...
-  ],
-  "merged": false, "tracker_update_attempted": true|absent, "tracker_unmapped_slugs": [..]|absent (LOUD -> success false),  // pilot always false (manual merge)
-  "success": true|false,
-  "timestamp": "<ISO8601>",
-  "branch": "<branch_name>",  // optional; set when ship succeeds
-  "sha": "<git_sha>",  // optional; set when ship succeeds
-  "halt_reason": "...",  // optional; set if halted
-  "ceiling_reason": "...",  // optional; ceiling exceeded before dispatch (abort-before-dispatch only)
-  "error": "..."  // optional; unexpected error
-}
-```
-Ceiling semantics: checked BEFORE run_wave dispatch (phase=ceiling, ceiling_reason populated). Mid-wave ceiling trips are run_wave's responsibility. items_shipped[] carries per-item observability: slug, backend (driver name), tier (verificationTier), verified (from test exit 0), testExit (test command exit code or null if not run).
+Scheduler emits a Report JSON the orchestrator uses for merge eligibility. Fields: phase
+(dispatch|intake|halt|ceiling|gate_unavailable|manifest), wave_id, items_selected[],
+items_shipped[] ({slug, backend, tier 1-4|null, verified — test-exit-0-only, false = NOT
+PROVEN, testExit}), merged (pilot: always false, manual merge), success, timestamp,
+branch/sha (set on ship), halt_reason/ceiling_reason/error (optional). Ceiling is checked
+BEFORE run_wave dispatch (phase=ceiling); mid-wave trips are run_wave's responsibility.
+Tracker sync: LOUD on unmapped slugs (tracker_unmapped_slugs -> success false). Full JSON
+shape lives in wave_scheduler.py's module docstring.
 
 ## Status
 
