@@ -60,6 +60,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `secret_scan.py` — Pre-push secret/credential detection gate (staged/history/paths)
 - `self_stats.py` — Git-derived metrics counter + README block generator
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
+- `shadow_adjudication.py` — Orchestrator-swap shadow wave: replays the ground-truth adjudication corpus (driver/decisions/shadow/) through OrchestratorDriver.decide() on a challenger backend; blind (labels never reach prompts), 40-call cap, scorecard + success-bar to bench/results/; --offline FakeTransport for tests, --live needs OPENAI_API_KEY env
 - `stall_check.py` — Automated agent transcript stall detector; optional --active-from flag refines STALLED verdict to require both stale mtime AND active task file; --emit-recovery emits JSON advisories; --recovery-dir writes recovery-<agent>.json files (idempotent)
 - `status.js` — One-shot fleet status snapshot (watchdog/monitor heartbeat age, dashboard port reachability, git branch and working tree state)
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
