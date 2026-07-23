@@ -462,5 +462,69 @@ class TestSuccessBar(unittest.TestCase):
         )
 
 
+class TestEvidenceSymmetry(unittest.TestCase):
+    """Guard against asymmetric evidence richness across verdict classes.
+
+    Increment 2.5 confound-fix: evidence must be balanced in structure and
+    completeness across real_defect, false_positive, and enhancement items.
+    """
+
+    def test_corpus_evidence_minimum_length(self):
+        """Each corpus item must have >= 2 evidence items for fairness."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        for item in corpus:
+            self.assertGreaterEqual(
+                len(item.evidence),
+                2,
+                f"Item {item.id} ({item.ground_truth}) has only {len(item.evidence)} evidence items; need >= 2",
+            )
+
+    def test_evidence_length_balanced_across_classes(self):
+        """Evidence structure should be comparable across ground_truth classes.
+
+        Real_defect and false_positive items should have similar mean evidence
+        length to prevent one class from being over-evidenced. Enhancement items
+        should be comparable too.
+        """
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        # Partition by ground truth class.
+        by_class = {}
+        for item in corpus:
+            cls = item.ground_truth.lower()
+            if cls not in by_class:
+                by_class[cls] = []
+            by_class[cls].append(item)
+
+        # Calculate mean evidence length per class.
+        mean_lengths = {}
+        for cls, items in by_class.items():
+            total_chars = sum(
+                len("\n".join(item.evidence).encode("utf-8")) for item in items
+            )
+            mean_lengths[cls] = (
+                total_chars / len(items) if items else 0
+            )
+
+        # Assertion: no class should be >30% richer or poorer than the mean.
+        if mean_lengths:
+            overall_mean = sum(mean_lengths.values()) / len(mean_lengths)
+            for cls, mean_len in mean_lengths.items():
+                deviation = abs(mean_len - overall_mean) / overall_mean if overall_mean > 0 else 0
+                self.assertLess(
+                    deviation,
+                    0.30,  # Allow 30% variance (rounding safety).
+                    f"Class {cls} evidence (mean {mean_len:.0f} chars) deviates {deviation:.1%} "
+                    f"from overall mean {overall_mean:.0f}; expected <30% variance for fairness",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
