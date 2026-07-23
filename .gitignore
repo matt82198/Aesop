@@ -43,3 +43,6 @@ node_test_output.txt
 ui/web/node_modules/
 !ui/web/dist/
 !ui/web/dist/**
+monitor/.monitor-heartbeat
+monitor/.signal-state.json
+monitor/.ledger-cursor.json
