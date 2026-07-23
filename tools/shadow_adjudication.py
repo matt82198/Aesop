@@ -156,8 +156,15 @@ Decision type: {decision_type}
 
 File brain (orchestrator's only input):
 """
+                    # Include main content (NO 500-char clip; pack's own size bounds apply).
                     for source, text in pack.content.items():
-                        user_prompt += f"\n[{source}]:\n{text[:500]}\n"
+                        user_prompt += f"\n[{source}]:\n{text}\n"
+
+                    # Include evidence section if present (increment 2.5).
+                    if pack.evidence:
+                        user_prompt += "\n[evidence]:\n"
+                        for evidence_name, evidence_text in pack.evidence.items():
+                            user_prompt += f"  {evidence_name}:\n{evidence_text}\n"
 
                     user_prompt += """
 
@@ -270,6 +277,11 @@ class CorpusItem:
     incumbent_verdict: str
     ground_truth: str
     gt_note: str
+    evidence: list = None
+
+    def __post_init__(self):
+        if self.evidence is None:
+            self.evidence = []
 
 
 @dataclass
@@ -289,7 +301,7 @@ class ScorecardItem:
 
 
 def load_corpus(corpus_path: str) -> List[CorpusItem]:
-    """Load corpus from jsonl file."""
+    """Load corpus from jsonl file (now with optional evidence field)."""
     items = []
     with open(corpus_path, "r", encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
@@ -305,6 +317,7 @@ def load_corpus(corpus_path: str) -> List[CorpusItem]:
                     incumbent_verdict=labels.get("incumbent_verdict", "unknown"),
                     ground_truth=labels.get("ground_truth", "unknown"),
                     gt_note=labels.get("gt_note", ""),
+                    evidence=obj.get("evidence", []),
                 )
                 items.append(item)
             except (json.JSONDecodeError, KeyError) as e:
@@ -314,7 +327,7 @@ def load_corpus(corpus_path: str) -> List[CorpusItem]:
 
 
 def build_finding_context_pack(
-    item: CorpusItem, repo_root: str, conductor_root: str
+    item: CorpusItem, repo_root: str, conductor_root: str, enriched: bool = False
 ) -> ContextPack:
     """Build a context pack for adjudication (BLIND: no labels).
 
@@ -322,9 +335,11 @@ def build_finding_context_pack(
         item: Corpus item with finding_text and source_lens.
         repo_root: Repo root path.
         conductor_root: Conductor root path.
+        enriched: If True, include evidence from the corpus item (increment 2.5).
 
     Returns:
-        ContextPack with only finding_text + source framing (no labels).
+        ContextPack with finding_text + source framing (no labels).
+        If enriched, also includes evidence section.
     """
     # Build sources dict: finding text + source lens.
     # This is the BLIND framing the challenger sees.
@@ -363,6 +378,23 @@ Provide evidence supporting your classification."""
         }
     )
 
+    # Add evidence if enriched mode is enabled (increment 2.5).
+    if enriched and item.evidence:
+        # Convert evidence list to a dict for build_context_pack
+        evidence_dict = {}
+        for idx, evidence_item in enumerate(item.evidence):
+            evidence_dict[f"evidence_{idx}"] = evidence_item
+
+        # Rebuild pack with evidence
+        pack_with_evidence = build_context_pack(
+            decision_type="adjudicate_finding",
+            sources=sources,
+            repo_root=repo_root,
+            conductor_root=conductor_root,
+            evidence=evidence_dict,
+        )
+        return pack_with_evidence
+
     return pack
 
 
@@ -372,11 +404,12 @@ def adjudicate_one_finding(
     repo_root: str,
     conductor_root: str,
     schema: Optional[Dict[str, Any]],
+    enriched: bool = False,
 ) -> ScorecardItem:
     """Run one adjudication decision through the driver."""
     try:
-        # Build context pack (BLIND).
-        pack = build_finding_context_pack(item, repo_root, conductor_root)
+        # Build context pack (BLIND; optionally enriched with evidence).
+        pack = build_finding_context_pack(item, repo_root, conductor_root, enriched=enriched)
 
         # Verify labels never reach the pack (unit test for blind adjudication).
         pack_text = json.dumps(pack.content)
@@ -657,6 +690,12 @@ def main():
         help="Challenger model id for the ladder (default: gpt-4o-mini)",
     )
     parser.add_argument(
+        "--enriched",
+        action="store_true",
+        default=False,
+        help="Use enriched context packs with evidence (increment 2.5; default: off for reproducibility)",
+    )
+    parser.add_argument(
         "--out-tag",
         default=None,
         help="Results filename tag (default: derived from --model); rung files never overwrite each other",
@@ -734,7 +773,7 @@ def main():
             break
 
         result = adjudicate_one_finding(
-            driver, item, str(repo_root), str(conductor_root), schema
+            driver, item, str(repo_root), str(conductor_root), schema, enriched=args.enriched
         )
         scorecard.append(result)
         api_call_count += 1
@@ -758,8 +797,15 @@ def main():
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Per-rung output files: default tag from model id so ladder runs never clobber.
+    # If enriched mode is on, add "-enriched" to tag.
     # Rung 1 (gpt-4o-mini) keeps its original untagged filenames for continuity.
-    tag = args.out_tag or ("" if args.model == "gpt-4o-mini" else "-" + args.model.replace("/", "_"))
+    if args.out_tag:
+        tag = args.out_tag
+    else:
+        base_tag = "" if args.model == "gpt-4o-mini" else "-" + args.model.replace("/", "_")
+        enriched_suffix = "-enriched" if args.enriched else ""
+        tag = base_tag + enriched_suffix
+
     json_path = results_dir / f"shadow-adjudication-2026-07-23{tag}.json"
     md_path = results_dir / f"shadow-adjudication-2026-07-23{tag}.md"
 
