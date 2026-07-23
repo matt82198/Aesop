@@ -13,21 +13,20 @@
 | False Positive | 20% (1/5) | 60% | 80% | 80% |
 | **Item #9** | ❌ defect | ❌ defect | ✓ FP | **✓ FP** |
 | **Item #13** | ✓ FP | ❌ defect | ✓ FP | **✓ FP** |
-| **Rubber-Stamp** | 0/2 | 1/2 | 2/2⚠️LEAKY | **2/2 ✓GENUINE** |
 | **gpt-4o** |  |  |  |  |
 | Overall | 50.0% | 37.5% ❌ | 62.5% ⚠️ANSWER-LEAK | **50.0% (no change)** |
 | Real Defect | 88.9% | 44.4% | 88.9% | 66.7% |
 | False Positive | 0% (0/5) | 20% | 0% | 20% |
 | **Item #9** | ❌ defect | ❌ enhancement | ❌ enhancement | ❌ enhancement |
 | **Item #13** | ❌ defect | ❌ defect | ❌ defect | ❌ defect |
-| **Rubber-Stamp** | 0/2 | 1/2 | 0/2 | **1/2** |
 | **gpt-5.6-sol** |  |  |  |  |
 | Overall | 62.5% | 43.8% ❌ | 93.8% ⚠️ANSWER-LEAK | **68.8% (honest)** |
 | Real Defect | 88.9% | 55.6% | 88.9% | 66.7% |
 | False Positive | 40% (2/5) | 40% | 100% ⚠️ | 60% |
 | **Item #9** | ❌ undetermined | ❌ defect | ✓ FP | ❌ undetermined |
 | **Item #13** | ❌ undetermined | ✓ FP | ✓ FP | ❌ defect |
-| **Rubber-Stamp** | 0/2 | 1/2 | 2/2⚠️LEAKY | **1/2 (regressed)** |
+
+> **Reading the Item #9/#13 rows:** a ✓FP is a correct refutation of a false claim. Do NOT total these into a 'genuine refusal' score for the mechanism-only column: items #9 and #13 are structurally leaky (their mechanism clauses ARE their refutations), so mini's ✓FP on them is residual leakage, not acquired capability — see the Honest Verdict below.
 
 ## What Happened: The Answer-Leakage Confound
 
