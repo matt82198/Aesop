@@ -109,9 +109,11 @@ class OpenAICompatibleDriver(AgentDriver):
         self,
         base_url: str = "https://api.openai.com/v1",
         timeout_s: float = 120.0,
+        model: str = "gpt-4o-mini",
     ):
         self.base_url = base_url
         self.timeout_s = timeout_s
+        self.model = model
         self.tokens_spent = 0
         self.last_context_pack = None
 
@@ -172,7 +174,7 @@ Classify this finding."""
 
             # Build the payload with temperature 0 for consistency.
             payload = {
-                "model": "gpt-4o-mini",
+                "model": self.model,
                 "messages": [{"role": "user", "content": user_prompt}],
                 "temperature": 0,
             }
@@ -225,7 +227,7 @@ Classify this finding."""
         return WorkerResult(worker_id="fake")
 
     def resolve_model(self, role: str) -> str:
-        return "gpt-4o-mini"
+        return self.model
 
     def get_tokens_spent(self) -> Optional[int]:
         return self.tokens_spent
@@ -531,13 +533,14 @@ def write_scorecard_md(
     corpus: List[CorpusItem],
     stats: Dict[str, Any],
     output_path: str,
+    model: str = "gpt-4o-mini",
 ) -> None:
     """Write human-readable scorecard as Markdown."""
     lines = [
         "# Shadow Adjudication Wave — Scorecard Report",
         "",
         "**Date**: 2026-07-23",
-        "**Challenger Model**: gpt-4o-mini (OpenAI-compatible)",
+        f"**Challenger Model**: {model} (OpenAI-compatible)",
         "**Corpus Size**: 16 items",
         "",
         "## Aggregate Statistics",
@@ -626,6 +629,16 @@ def main():
         action="store_true",
         help="Run live with real OpenAI API (requires OPENAI_API_KEY env var)",
     )
+    parser.add_argument(
+        "--model",
+        default="gpt-4o-mini",
+        help="Challenger model id for the ladder (default: gpt-4o-mini)",
+    )
+    parser.add_argument(
+        "--out-tag",
+        default=None,
+        help="Results filename tag (default: derived from --model); rung files never overwrite each other",
+    )
 
     args = parser.parse_args()
 
@@ -677,7 +690,7 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
-        backend = OpenAICompatibleDriver()
+        backend = OpenAICompatibleDriver(model=args.model)
     else:
         print("Error: specify --offline or --live", file=sys.stderr)
         sys.exit(1)
@@ -708,16 +721,20 @@ def main():
 
     # Compute stats.
     stats = compute_scorecard_stats(scorecard, corpus[: len(scorecard)])
+    stats["challenger_model"] = args.model
 
     # Write outputs.
     results_dir = REPO_ROOT / "bench" / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    json_path = results_dir / "shadow-adjudication-2026-07-23.json"
-    md_path = results_dir / "shadow-adjudication-2026-07-23.md"
+    # Per-rung output files: default tag from model id so ladder runs never clobber.
+    # Rung 1 (gpt-4o-mini) keeps its original untagged filenames for continuity.
+    tag = args.out_tag or ("" if args.model == "gpt-4o-mini" else "-" + args.model.replace("/", "_"))
+    json_path = results_dir / f"shadow-adjudication-2026-07-23{tag}.json"
+    md_path = results_dir / f"shadow-adjudication-2026-07-23{tag}.md"
 
     write_scorecard_json(scorecard, stats, str(json_path))
-    write_scorecard_md(scorecard, corpus[: len(scorecard)], stats, str(md_path))
+    write_scorecard_md(scorecard, corpus[: len(scorecard)], stats, str(md_path), model=args.model)
 
     # Print summary.
     print("")
