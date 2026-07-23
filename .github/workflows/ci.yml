@@ -258,6 +258,7 @@ jobs:
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4, PYTHONUTF8=1 for Windows encoding)
         env:
           PYTHONUTF8: '1'
+        shell: bash
         run: |
           python3 << 'EOF'
           import os
