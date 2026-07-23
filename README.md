@@ -14,7 +14,13 @@
 
 ## What It Does
 
-**Aesop** is a source-available orchestration harness that runs multi-agent workflows on any repository. It ranks backlog, dispatches parallel Haiku workers (scoped to disjoint file ownership), verifies merges with adversarial safety, and feeds learnings into the next wave. Durable state (SQLite + git-rendered checkpoints) survives machine wipes and enables team coordination. This repo's own 223 PRs across 880 commits were delivered by Aesop's own `/buildsystem` wave loop—a supervised loop under a human operator who sets goals and owns outward gates (npm publish, releases, history rewrites). The stack is portable: swappable backends (Claude Code reference, OpenAI-compatible Ollama/OpenRouter, Codex bridge), with auto-tuned verification safety calibrated per backend.
+**Aesop** is a **crash-recoverable orchestration harness** for multi-agent workflows on any repository. One-line theme: *stateless agent execution over git-backed durable memory*.
+
+Core idea: **agent behavior is source code.** Every decision lives in durable, human-diffable files—git history, plain-text STATE.md, append-only BUILDLOG.md, Python guardrails. When a machine fails, you re-read from disk. No vector DBs, no distributed consensus, no magic. This repo's own 251 merged PRs across 1088 commits were delivered by Aesop's own `/buildsystem` wave loop—a supervised loop under a human operator who sets goals and owns outward gates (npm publish, releases, history rewrites).
+
+**Why it matters:** crash recovery is not a special path; it is how the system *always* starts. Stateless workers, persistent filesystem brain, Haiku-first dispatch (4.3× cheaper than hierarchical design, proven by real A/B), fail-closed guardrails (pre-push secret gate, kill-switch, cost ceiling), and observable heartbeats. The result: 251 PRs in 11 days; Haiku at 39/39 on a 39-task benchmark vs Opus 38/39, at ~1/3 the cost.
+
+**Why it's built this way:** [The Aesop Hypothesis](./docs/THE-AESOP-HYPOTHESIS.md) — the design philosophy, the trade-offs, the cancelled architectures with published data.
 
 ## Feature Demo
 
@@ -86,15 +92,16 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 244 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 1065 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 251 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1088 <!-- metrics-verified: self_stats.py (git log) --> |
 | Project Age | 11 days <!-- metrics-verified: self_stats.py (git log) --> |
 | Waves | 30 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 185,174 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 541 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 186,587 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 546 <!-- metrics-verified: self_stats.py (git log) --> |
 | Distinct Co-authors | 11 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
+
 
 *Wave: one complete build cycle (intake → dispatch → verify → ship) run by the orchestration engine.*
 

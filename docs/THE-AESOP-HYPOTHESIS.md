@@ -1,0 +1,140 @@
+# The Aesop Hypothesis: Why Crash-Recoverable Systems Outrun Distributed Ones
+
+**Expanded from the original essay:** https://medium.com/@matt82198/the-aesop-hypothesis-ai-agents-that-survive-because-theyre-designed-to-fail-de5f033369d4
+
+---
+
+## The Hypothesis
+
+**Agent behavior is source code.** Everything a fleet does — every decision, every checkpoint, every recovery path — lives in durable, human-diffable files: git history, plain-text STATE.md, append-only BUILDLOG.md, Python scripts, shell hooks. No vector embeddings, no distributed consensus, no magic. When a machine fails, you re-read from disk. When a human operator needs to audit a decision, they grep the git log or read the state file. When you need to reason about cost, you look at the dispatch rules in code.
+
+This hypothesis rests on five pillars:
+
+1. **Durable plain-text state** — git + POSIX text as the state layer, not Postgres or vector DBs.
+2. **Stateless runtimes** — agents execute one request at a time; permanent state lives on disk.
+3. **Cost-aware parallelism** — cheap Haiku subagents in parallel, not serial Opus.
+4. **Guardrails in code, not prose** — pre-push secret gates, kill-switches, cost ceilings: all executable.
+5. **Observable signals** — heartbeats, append-only logs, drift detectors, crash-recovery as the normal startup path.
+
+The bet is this: **a small, crash-recoverable system running on git and plain text outperforms a distributed one** in latency, debuggability, cost, and trust — because the simpler system fails loudly and often, learns from every failure, and never hides state in a database you can't grep.
+
+---
+
+## (1) Git + POSIX Text as the State Layer
+
+**Why not Postgres? Why not vector DBs?**
+
+Aesop's core state lives in git-committed files: `STATE.md` (intent, phase, NEXT STEPS), `BUILDLOG.md` (append-only progress snapshots), Python scripts (cost rules, dispatch logic), shell hooks (pre-push gates). This is not a limitation. It is the whole idea.
+
+**Durability.** Postgres fails when the connection pool is exhausted or the database is unreachable. Git fails when the filesystem is corrupted — a far rarer event on any modern machine. State committed to git survives machine wipes, container restarts, session loss. You clone a repository from 2026-07-18, and you know *exactly* what the system was doing on that date. No migration scripts, no schema versioning, no eventual consistency.
+
+**Human-diffable forensics.** When something goes wrong, you run `git log -p` and read the actual changes that led to the broken state. You see not just what happened, but *why* the system made each decision (because the humans who designed it wrote it in code and commit messages). A vector DB stores embeddings; a BUILDLOG.md stores human-readable decisions.
+
+**Single-box by explicit design choice.** Aesop is not "not distributed yet." Multi-instance coordination is *deliberately unscheduled*. The system runs on one machine. When team scale requires multi-instance support, the real work is not "add Postgres"; it is "redesign state to support leases and event-sourcing on SQLite." That redesign is on the roadmap, not an architectural gap. Postgres is a refactoring target *after* the single-box proves the core loop works. Premature distribution is premature optimization.
+
+**Cite:** [`docs/CHECKPOINTING.md`](./CHECKPOINTING.md) — the durable state strategy; [`docs/CARDINAL-RULES.md`](./CARDINAL-RULES.md) § 5 — handoff discipline.
+
+---
+
+## (2) Stateless Runtimes + Persistent Filesystem Brain
+
+**The architecture is simple:** agents are processes. Each agent receives a scoped task, reads the filesystem for context, makes decisions, writes results, and exits. The filesystem is the only source of truth.
+
+When an agent crashes (or hits a timeout, or the user kills it), the next agent picks up from the checkpoint files on disk. There is no agent state in memory, no distributed transaction, no graceful shutdown protocol. Dead is dead; reading from disk is the recovery protocol *and the normal startup path*.
+
+**Why this matters:** the system never invents state. An agent that hangs for 3 minutes and is forcibly killed is indistinguishable from one that exits normally — both leave state on disk, and the next reader validates what's there. No "check if this agent is still alive" logic, no heartbeat-based membership. The watchdog's job is simple: if a task hangs, kill it; the orchestrator will re-read the checkpoint and decide what to do next.
+
+**Crash recovery is not a special path.** On resume after a crash (or user interruption, or session loss), the orchestrator reads STATE.md and BUILDLOG.md from disk, verifies them against git log, and proceeds. If STATE.md is stale, it updates it. If BUILDLOG.md shows a half-completed task, it completes it or rolls back and retries. This is the same code path that runs on normal startup. No two code paths, no special-case recovery hooks, no "was I shut down cleanly?" flag.
+
+**Cite:** [`docs/CHECKPOINTING.md`](./CHECKPOINTING.md) — recovery workflow; [`docs/RELIABILITY.md`](./RELIABILITY.md) — inputs-always-produce-outputs principle.
+
+---
+
+## (3) Cost Architecture: Haiku-First, Flat Fan-Out, the Cancelled Hierarchical Design
+
+**The cost model is the heart of the system.** Subagents are *always* Haiku (1/3 the per-token cost of Opus), spawned in parallel (5–8 agents per wave). This single rule, more than any other, determines whether agent-driven work scales or burns money.
+
+**The A/B that killed hierarchical dispatch:** Earlier designs proposed a three-tier model — Fable orchestrator + Sonnet supervisors (splitting work into domains) + Haiku workers. Lab testing showed **4.3× cost increase for identical quality**. The hierarchical design was cancelled. (Cancelled architectures with published data is engineering honesty, not weakness.)
+
+Today's dispatch is flat: one Opus/Fable orchestrator on the main thread, 5–8 parallel Haiku workers per wave, no intermediate supervisors. Cost per wave: roughly $0.01–0.02 USD. Scaling to 10 waves per day still costs less than a single Opus API call.
+
+**The benchmark proves Haiku is good enough.** The held-out judgment benchmark (v3 = 28 additional tasks, building on v2 = 11 prior) tested Haiku, Sonnet, and Opus across 39 combined judgment tasks: bug-in-diff (with concurrency races and resource leaks), finding-inflation, acceptance-criteria coverage, severity calibration, root-cause-from-trace, refactor-equivalence, security issue spotting. All three models converged on identical answers for all 28 v3 tasks. Combined score: **Haiku 39/39** vs **Opus 38/39** (Opus erred on one severity call; Haiku did not). At ~1/3 the per-token cost.
+
+**Honest limits on the benchmark:** Curated (N=39), not sampled from real fleet transcripts. No frontier-reaching task found where Opus beats Haiku. The benchmark maps a floor ("Haiku is sufficient for these judgment shapes"), not the absolute frontier. Cost is token-price ratio, not wall-clock latency. These are not hidden; they are load-bearing caveats.
+
+**Cite:** [`docs/DISPATCH-MODEL.md`](./DISPATCH-MODEL.md) — cost model and patterns; [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](../bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md) — benchmark run and interpretation.
+
+---
+
+## (4) Guardrails Enforced in Code, Not Prose
+
+**Safety rules live in executable code**, not documentation:
+
+- **Pre-push secret gate** (`tools/secret_scan.py`): scans staged files for 50+ secret patterns (AWS keys, Anthropic keys, tokens). Exits with failure on file-read errors; never silently passes.
+- **Kill-switch** (`tools/halt.py`): wired into the live dispatch path. When triggered, aborts all pending work with zero new workers spawned. Operator-triggered (manual brake), not autonomous.
+- **Cost ceiling** (`tools/cost_ceiling.py`): halts dispatch when the configured per-wave budget is exceeded. Enforces a *configured* ceiling, not live-metered spend.
+- **Pre-push branch checks**: run before every push (enforced via git hooks). No committing to main, no force-push without explicit approval.
+
+The key insight: **fail-closed by default.** A secret-scan that silently passes when the file is unreadable is worse than a crash. A kill-switch that doesn't trip is useless. A cost ceiling that is "maybe" enforced wastes tokens. Aesop inverts the default: safety rules are executable and logged; unsafe paths are explicitly rejected; a gate that fails triggers an immediate backout.
+
+**Cite:** [`docs/CARDINAL-RULES.md`](./CARDINAL-RULES.md) § 7 — security and version control; [`tools/halt.py`](../tools/halt.py), [`tools/cost_ceiling.py`](../tools/cost_ceiling.py) — implementations.
+
+---
+
+## (5) Observability: Heartbeats, Append-Only Logs, Drift Signals, and CI Sharding
+
+**Every action produces a signal.** Daemons emit heartbeats every cycle (even on error). Logs are append-only; every task appended with a timestamp. Stalled agents trigger automatic watchdog restarts (3 retries, then escalate to human).
+
+**Drift detection.** The orchestrator compares expected state (BUILDLOG.md) against reality (git log, filesystem timestamps). Drift = stale checkpoint, incomplete work, or a half-written file. On detection, the system does not guess: it re-reads from disk and either rolls forward (if work completed) or rolls back (if interrupted).
+
+**CI sharding story.** Early on, Aesop's test suite ran serially on Windows, wall-clock time ~11 minutes. A single spawn-semantics bug hit Windows harder than Linux (process group cleanup behaved differently). Rather than paper over it with retries, the team:
+1. Diagnosed the root cause (Windows process tree cleanup).
+2. Fixed it (explicit cleanup in the test harness).
+3. Added sharding (4-way split, ~3 min wall-clock with 80–180s per shard).
+4. Made Windows a required check (previously optional).
+
+The point: **observability means you see the real bottleneck**, and you fix it, not the symptom. Aesop's CI reports job timings for every shard; the orchestrator reads those and can rebalance if a shard drifts >20% off baseline.
+
+**Cite:** [`docs/CARDINAL-RULES.md`](./CARDINAL-RULES.md) § 3 — reliability core and heartbeats; [`docs/RELIABILITY.md`](./RELIABILITY.md) — inputs-always-produce-outputs, never-wait discipline.
+
+---
+
+## Proof: What Ships with the System
+
+These are not claims about what Aesop *could* do. They are receipts:
+
+- **1,088 commits, 251 merged PRs, 30 waves** (verified by anyone who clones; `tools/self_stats.py`).
+- **143,403 lines of code** across 546 files, delivered end-to-end: from feature intake to merge.
+- **Benchmark results** committed in `bench/results/` — 39 judgment tasks, all models scored by deterministic Python scoring (no LLM in the grading loop).
+- **Kill-switch proof** — `tools/halt.py` is wired into the live dispatch path and was exercised on a real wave.
+- **Cost ceiling** — implemented in `tools/cost_ceiling.py`, enforced per-wave.
+- **Windows CI sharding** — reduced wall-clock time from ~11 min to ~3 min (4-way shard); now a required check.
+- **Durable state** — STATE.md, BUILDLOG.md, and all orchestration rules are git-committed and human-readable.
+
+---
+
+## Honest Limits
+
+This is not a universal solution. The system has explicit boundaries:
+
+1. **Single-box by design.** Aesop runs on one machine. Multi-instance coordination is on the roadmap, not shipped. If you need 100-machine scale today, this is not the tool.
+2. **Small-N benchmarks.** 39 judgment tasks is directional evidence, not statistical proof. Frontier reasoning (where Opus depth might matter 3×) is not tested here.
+3. **Lab-measured multi-writer throughput.** 800 events/sec is measured in a stress test, not production. Team scale beyond one machine requires additional work (leases, event-sourcing, distributed consensus).
+4. **No third-party verification yet.** The artifacts are committed so a skeptic can reproduce — that is transparency, not independent replication.
+5. **Release candidate.** APIs, config, and dashboard contracts may still shift. Pin the exact version if you need stability.
+
+---
+
+## The Bet
+
+**Simple systems that fail loudly and often outrun complex ones that hide state in databases.**
+
+Aesop bets on:
+- **Transparency over abstraction.** Every decision is code. Every state is a file you can read and diff.
+- **Crash recovery as design principle.** If you build for recovery from scratch, you build for reliability. Distributed systems hide failures; crash-recoverable ones surface them.
+- **Small is faster than smart.** Flat fan-out (5–8 Haiku agents) beats hierarchical dispatch (4.3× cost), even at scale, because the simpler system has fewer failure modes.
+- **Cost as a first-class constraint.** The whole system is designed around $0.01–0.02 per wave. Expensive paths are rejected before they ship.
+
+The evidence is in the receipts: 1,088 commits, 251 PRs, 30 waves, zero hallucinated audits (via adversarial verification), and a benchmark that proves Haiku is good enough.
+
+**Read more:** [`docs/autonomous-swe.md`](./autonomous-swe.md) — honest account of what shipped, what didn't, and where the gaps are.
