@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <em>Autonomous Developer for Any Repository</em>
+  <em>Crash-only multi-agent orchestration for any repository</em>
 </p>
 
 <p align="center">
