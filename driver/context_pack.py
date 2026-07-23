@@ -41,17 +41,25 @@ class ContextPack:
         decision_type: Decision class name (e.g., 'rank_backlog', 'adjudicate_findings').
         sources_requested: Logical names passed to build_context_pack().
         content: Dict mapping source -> (text content | error message).
+        evidence: Dict mapping evidence_name -> text (code excerpts, repro output, etc.).
         manifest: List of {source, included, truncated, truncation_reason, size_bytes}.
+        evidence_manifest: List of {name, included, truncated, truncation_reason, size_bytes}.
         total_size_bytes: Sum of all content sizes.
         total_size_cap: The size limit enforced (default ~32KB).
+        evidence_size_bytes: Sum of all evidence sizes.
+        evidence_size_cap: Separate size limit for evidence (default ~4KB).
     """
 
     decision_type: str
     sources_requested: Tuple[str, ...] = field(default_factory=tuple)
     content: Dict[str, str] = field(default_factory=dict)
+    evidence: Dict[str, str] = field(default_factory=dict)
     manifest: List[Dict] = field(default_factory=list)
+    evidence_manifest: List[Dict] = field(default_factory=list)
     total_size_bytes: int = 0
     total_size_cap: int = 32768  # ~32KB default
+    evidence_size_bytes: int = 0
+    evidence_size_cap: int = 4096  # ~4KB default for evidence
 
 
 def _is_allowed_path(path: str, repo_root: str, conductor_root: str) -> bool:
@@ -87,6 +95,8 @@ def build_context_pack(
     repo_root: Optional[str] = None,
     conductor_root: Optional[str] = None,
     size_cap: int = 32768,
+    evidence: Optional[Dict[str, str]] = None,
+    evidence_cap: int = 4096,
 ) -> ContextPack:
     """Build a size-bounded context pack from allowlisted sources.
 
@@ -96,6 +106,7 @@ def build_context_pack(
       - MEMORY.md and similar control files (git-tracked state).
       - state/tracker.json (work items).
       - Explicitly passed files under the repo or conductor roots.
+      - Evidence excerpts (code snippets, repro output, etc.) passed explicitly.
 
     Args:
         decision_type: Name of the decision (e.g., 'rank_backlog').
@@ -108,11 +119,16 @@ def build_context_pack(
 
         repo_root: Path to the aesop repo root. If None, uses cwd.
         conductor_root: Path to conductor3 root. If None, assumes ~/conductor3.
-        size_cap: Size limit in bytes (default 32KB). Truncation is deterministic
-                  (oldest-first for logs).
+        size_cap: Size limit in bytes for main content (default 32KB). Truncation
+                  is deterministic (oldest-first for logs).
+        evidence: Optional dict mapping evidence_name -> evidence_text.
+                  Evidence must be passed explicitly (not read from arbitrary paths).
+                  Appended to pack under '[evidence]' section; size-bounded separately.
+        evidence_cap: Size limit in bytes for evidence content (default 4KB).
+                      Truncation is deterministic (truncate end of text).
 
     Returns:
-        ContextPack with content dict + manifest.
+        ContextPack with content dict + evidence dict + manifest.
 
     Raises:
         ContextPackViolation: if a source path violates the allowlist.
@@ -126,6 +142,7 @@ def build_context_pack(
         decision_type=decision_type,
         sources_requested=tuple(sources.keys()),
         total_size_cap=size_cap,
+        evidence_size_cap=evidence_cap,
     )
 
     for source_name, source_spec in sources.items():
@@ -141,9 +158,33 @@ def build_context_pack(
         for text in content_dict.values():
             pack.total_size_bytes += len(text.encode("utf-8"))
 
-    # Enforce size cap: truncate oldest-first (log sources first).
+    # Enforce size cap on main content: truncate oldest-first (log sources first).
     if pack.total_size_bytes > pack.total_size_cap:
         _truncate_pack(pack, pack.total_size_cap)
+
+    # Add evidence if provided (explicit, allowlist-only).
+    if evidence:
+        for evidence_name, evidence_text in evidence.items():
+            if not evidence_name:
+                continue
+
+            pack.evidence[evidence_name] = evidence_text
+            evidence_bytes = len(evidence_text.encode("utf-8"))
+            pack.evidence_size_bytes += evidence_bytes
+
+            pack.evidence_manifest.append(
+                {
+                    "name": evidence_name,
+                    "included": True,
+                    "truncated": False,
+                    "truncation_reason": None,
+                    "size_bytes": evidence_bytes,
+                }
+            )
+
+        # Enforce size cap on evidence: truncate end-of-text if needed.
+        if pack.evidence_size_bytes > pack.evidence_size_cap:
+            _truncate_evidence(pack, pack.evidence_size_cap)
 
     return pack
 
@@ -359,3 +400,46 @@ def _truncate_pack(pack: ContextPack, size_cap: int) -> None:
             manifest_entry["truncated"] = True
             manifest_entry["truncation_reason"] = "size_cap_exceeded"
             manifest_entry["size_bytes"] = best_size
+
+
+def _truncate_evidence(pack: ContextPack, size_cap: int) -> None:
+    """Truncate evidence content to fit within size_cap.
+
+    Truncates end-of-text for each evidence item (newest first, then oldest).
+    Mutates pack.evidence and pack.evidence_manifest in place.
+
+    Args:
+        pack: The context pack with evidence to truncate.
+        size_cap: The target size limit in bytes for evidence.
+    """
+    # Truncate evidence items (reverse order: newest/last-added first).
+    for manifest_entry in reversed(pack.evidence_manifest):
+        if pack.evidence_size_bytes <= size_cap:
+            break
+
+        evidence_name = manifest_entry["name"]
+        if evidence_name not in pack.evidence:
+            continue
+
+        text = pack.evidence[evidence_name]
+        current_size = len(text.encode("utf-8"))
+
+        # Truncate end of text.
+        best_text = text
+        best_size = current_size
+        for reduction in [2, 4, 10, 100]:
+            target_size = max(100, current_size // reduction)
+            new_text = text[:target_size] + "\n... TRUNCATED ..."
+            new_size = len(new_text.encode("utf-8"))
+            # Accept this reduction if it helps us get closer to the cap.
+            if new_size < best_size:
+                best_text = new_text
+                best_size = new_size
+            if pack.evidence_size_bytes - current_size + new_size <= size_cap:
+                break
+
+        pack.evidence[evidence_name] = best_text
+        pack.evidence_size_bytes -= current_size - best_size
+        manifest_entry["truncated"] = True
+        manifest_entry["truncation_reason"] = "evidence_size_cap_exceeded"
+        manifest_entry["size_bytes"] = best_size

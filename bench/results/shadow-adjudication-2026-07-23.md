@@ -6,39 +6,39 @@
 
 ## Aggregate Statistics
 
-- **Overall Agreement (vs incumbent)**: 62.5%
-- **Real Defect Subset Agreement**: 100.0%
-- **False Positive Subset Agreement**: 20.0%
+- **Overall Agreement (vs incumbent)**: 0.0%
+- **Real Defect Subset Agreement**: 0.0%
+- **False Positive Subset Agreement**: 0.0%
 - **Rubber-Stamp Refutations** (items 9, 14 correctly classified as false_positive): 0/2
-- **Schema Validity Rate**: 100.0%
-- **DECISION_FAILED Count**: 0
+- **Schema Validity Rate**: 0.0%
+- **DECISION_FAILED Count**: 16
 
 ## Success Bar Results
 
-- >=80% agreement on gt=real_defect items: **PASS** (100.0%)
+- >=80% agreement on gt=real_defect items: **FAIL** (0.0%)
 - >=1 of items {9, 14} classified false_positive: **FAIL** (0/2)
-- >=90% schema-valid without retry exhaustion: **PASS** (100.0%)
+- >=90% schema-valid without retry exhaustion: **FAIL** (0.0%)
 
 ## Item-by-Item Results
 
 | ID | Challenger | Ground Truth | Correct | Confidence | Schema Valid |
 |---|---|---|---|---|---|
-| vbs-waitforexit | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| dryrun-blocked | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| uninstall-exit0 | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| quote-validation | real_defect | real_defect | ✓ | 0.95 | ✓ |
-| apostrophe-path | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| unc-paths | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| hardcoded-username | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| audit-log-observability | real_defect | enhancement_opportunity | ✗ | 0.90 | ✓ |
-| whitelist-gate-weakening | real_defect | false_positive | ✗ | 0.90 | ✓ |
-| ps1-syntax-gate | real_defect | enhancement_opportunity | ✗ | 0.90 | ✓ |
-| test-hardcoded-path | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| fixreview-parents1 | real_defect | false_positive | ✗ | 0.90 | ✓ |
-| fixreview-backtick-test | false_positive | false_positive | ✓ | 0.85 | ✓ |
-| regression-ui-suite | real_defect | false_positive | ✗ | 0.90 | ✓ |
-| cimergewait-exit0 | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| vbs-syntax-validity | real_defect | false_positive | ✗ | 0.90 | ✓ |
+| vbs-waitforexit | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| dryrun-blocked | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| uninstall-exit0 | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| quote-validation | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| apostrophe-path | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| unc-paths | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| hardcoded-username | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| audit-log-observability | DECISION_FAILED | enhancement_opportunity | ✗ | 0.00 | ✗ |
+| whitelist-gate-weakening | DECISION_FAILED | false_positive | ✗ | 0.00 | ✗ |
+| ps1-syntax-gate | DECISION_FAILED | enhancement_opportunity | ✗ | 0.00 | ✗ |
+| test-hardcoded-path | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| fixreview-parents1 | DECISION_FAILED | false_positive | ✗ | 0.00 | ✗ |
+| fixreview-backtick-test | DECISION_FAILED | false_positive | ✗ | 0.00 | ✗ |
+| regression-ui-suite | DECISION_FAILED | false_positive | ✗ | 0.00 | ✗ |
+| cimergewait-exit0 | DECISION_FAILED | real_defect | ✗ | 0.00 | ✗ |
+| vbs-syntax-validity | DECISION_FAILED | false_positive | ✗ | 0.00 | ✗ |
 
 ## Caveats
 

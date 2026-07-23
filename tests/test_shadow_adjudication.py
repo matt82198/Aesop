@@ -462,5 +462,140 @@ class TestSuccessBar(unittest.TestCase):
         )
 
 
+class TestEvidenceMechanismMode(unittest.TestCase):
+    """Test mechanism-only evidence mode (confound fix 2: answer-leakage prevention)."""
+
+    def test_mechanism_mode_strips_conclusion_clauses(self):
+        """Mechanism mode should keep only first 2 evidence items (mechanism + behavior).
+
+        The [3] conclusion/impact clause often contains the verdict direction
+        and must be stripped to prevent answer-leakage to models.
+        """
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        # Test with one item that has 3 evidence parts
+        test_item = corpus[0]
+        self.assertGreaterEqual(len(test_item.evidence), 3, "Test item must have >= 3 evidence items")
+
+        # Build pack in mechanism mode (should have only 2 evidence items)
+        repo_root = REPO_ROOT
+        conductor_root = REPO_ROOT.parent / "conductor3"
+        pack_mechanism = build_finding_context_pack(
+            test_item, str(repo_root), str(conductor_root), enriched=True, evidence_mode="mechanism"
+        )
+
+        # Verify evidence is sliced to 2 items
+        self.assertEqual(
+            len(pack_mechanism.evidence),
+            2,
+            f"Mechanism mode should have 2 evidence items, got {len(pack_mechanism.evidence)}",
+        )
+
+        # Verify full mode keeps all 3
+        pack_full = build_finding_context_pack(
+            test_item, str(repo_root), str(conductor_root), enriched=True, evidence_mode="full"
+        )
+        self.assertEqual(
+            len(pack_full.evidence),
+            3,
+            f"Full mode should have 3 evidence items, got {len(pack_full.evidence)}",
+        )
+
+    def test_mechanism_mode_no_conclusion_tokens(self):
+        """Mechanism mode must not contain the [3] conclusion clause.
+
+        The [3] items contain verdict-direction-implying content and must be
+        stripped in mechanism mode. We verify this by checking that the pack
+        has exactly 2 evidence items (no [3] conclusion).
+        """
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        repo_root = REPO_ROOT
+        conductor_root = REPO_ROOT.parent / "conductor3"
+
+        for item in corpus:
+            pack = build_finding_context_pack(
+                item, str(repo_root), str(conductor_root), enriched=True, evidence_mode="mechanism"
+            )
+
+            # Mechanism mode must have exactly 2 evidence items (no [3] conclusion)
+            self.assertEqual(
+                len(pack.evidence),
+                2,
+                f"Item {item.id}: mechanism mode must have exactly 2 evidence items "
+                f"(no [3] conclusion clause), got {len(pack.evidence)}: {list(pack.evidence.keys())}",
+            )
+
+
+class TestEvidenceSymmetry(unittest.TestCase):
+    """Guard against asymmetric evidence richness across verdict classes.
+
+    Increment 2.5 confound-fix: evidence must be balanced in structure and
+    completeness across real_defect, false_positive, and enhancement items.
+    """
+
+    def test_corpus_evidence_minimum_length(self):
+        """Each corpus item must have >= 2 evidence items for fairness."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        for item in corpus:
+            self.assertGreaterEqual(
+                len(item.evidence),
+                2,
+                f"Item {item.id} ({item.ground_truth}) has only {len(item.evidence)} evidence items; need >= 2",
+            )
+
+    def test_evidence_length_balanced_across_classes(self):
+        """Evidence structure should be comparable across ground_truth classes.
+
+        Real_defect and false_positive items should have similar mean evidence
+        length to prevent one class from being over-evidenced. Enhancement items
+        should be comparable too.
+        """
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        # Partition by ground truth class.
+        by_class = {}
+        for item in corpus:
+            cls = item.ground_truth.lower()
+            if cls not in by_class:
+                by_class[cls] = []
+            by_class[cls].append(item)
+
+        # Calculate mean evidence length per class.
+        mean_lengths = {}
+        for cls, items in by_class.items():
+            total_chars = sum(
+                len("\n".join(item.evidence).encode("utf-8")) for item in items
+            )
+            mean_lengths[cls] = (
+                total_chars / len(items) if items else 0
+            )
+
+        # Assertion: no class should be >30% richer or poorer than the mean.
+        if mean_lengths:
+            overall_mean = sum(mean_lengths.values()) / len(mean_lengths)
+            for cls, mean_len in mean_lengths.items():
+                deviation = abs(mean_len - overall_mean) / overall_mean if overall_mean > 0 else 0
+                self.assertLess(
+                    deviation,
+                    0.30,  # Allow 30% variance (rounding safety).
+                    f"Class {cls} evidence (mean {mean_len:.0f} chars) deviates {deviation:.1%} "
+                    f"from overall mean {overall_mean:.0f}; expected <30% variance for fairness",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

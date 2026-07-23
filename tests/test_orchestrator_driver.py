@@ -643,6 +643,142 @@ class TestContextPackSizeCap(unittest.TestCase):
             self.assertTrue(state_manifest["truncated"])
 
 
+class TestContextPackEvidence(unittest.TestCase):
+    """Test evidence-enriched context packs (increment 2.5)."""
+
+    def setUp(self):
+        """Create temp repo/conductor roots."""
+        self.temp_repo = tempfile.TemporaryDirectory()
+        self.temp_conductor = tempfile.TemporaryDirectory()
+        self.repo_root = self.temp_repo.name
+        self.conductor_root = self.temp_conductor.name
+
+    def tearDown(self):
+        """Clean up temp dirs."""
+        self.temp_repo.cleanup()
+        self.temp_conductor.cleanup()
+
+    def test_evidence_included_in_pack(self):
+        """Evidence dict is included and added to pack.evidence."""
+        evidence_dict = {
+            "code_example": "def foo():\n    pass",
+            "repro_output": "Error: xyz\nStack trace...",
+        }
+
+        pack = build_context_pack(
+            decision_type="adjudicate_finding",
+            sources={},
+            repo_root=self.repo_root,
+            conductor_root=self.conductor_root,
+            evidence=evidence_dict,
+        )
+
+        self.assertEqual(len(pack.evidence), 2)
+        self.assertIn("code_example", pack.evidence)
+        self.assertIn("repro_output", pack.evidence)
+        self.assertEqual(pack.evidence["code_example"], "def foo():\n    pass")
+        self.assertEqual(pack.evidence["repro_output"], "Error: xyz\nStack trace...")
+
+    def test_evidence_size_tracked_in_manifest(self):
+        """Evidence size is tracked separately and recorded in manifest."""
+        evidence_dict = {"example": "test content"}
+
+        pack = build_context_pack(
+            decision_type="adjudicate_finding",
+            sources={},
+            repo_root=self.repo_root,
+            conductor_root=self.conductor_root,
+            evidence=evidence_dict,
+        )
+
+        self.assertGreater(pack.evidence_size_bytes, 0)
+        self.assertEqual(len(pack.evidence_manifest), 1)
+        manifest_entry = pack.evidence_manifest[0]
+        self.assertEqual(manifest_entry["name"], "example")
+        self.assertTrue(manifest_entry["included"])
+        self.assertFalse(manifest_entry["truncated"])
+
+    def test_evidence_size_cap_enforced(self):
+        """Evidence size cap is enforced; truncation is marked."""
+        # Create evidence that exceeds the cap.
+        large_evidence = "x" * 10000
+        evidence_dict = {
+            "large": large_evidence,
+            "small": "test",
+        }
+
+        pack = build_context_pack(
+            decision_type="adjudicate_finding",
+            sources={},
+            repo_root=self.repo_root,
+            conductor_root=self.conductor_root,
+            evidence=evidence_dict,
+            evidence_cap=500,  # Small cap to force truncation.
+        )
+
+        # Total evidence size should be under cap.
+        self.assertLess(pack.evidence_size_bytes, 500)
+
+        # At least one evidence item should be truncated.
+        truncated_items = [m for m in pack.evidence_manifest if m["truncated"]]
+        self.assertGreater(len(truncated_items), 0)
+
+        # Truncated items should have a reason.
+        for item in truncated_items:
+            self.assertEqual(item["truncation_reason"], "evidence_size_cap_exceeded")
+
+    def test_evidence_no_label_leak_assertion(self):
+        """Evidence should not contain label/verdict strings."""
+        evidence_dict = {
+            "neutral_fact": "Git Bash accepts //server/share syntax",
+        }
+
+        pack = build_context_pack(
+            decision_type="adjudicate_finding",
+            sources={},
+            repo_root=self.repo_root,
+            conductor_root=self.conductor_root,
+            evidence=evidence_dict,
+        )
+
+        # Verify no label strings appear in evidence.
+        evidence_text = json.dumps(pack.evidence)
+        forbidden_labels = [
+            "false_positive",
+            "real_defect",
+            "enhancement_opportunity",
+            "incumbent_verdict",
+            "ground_truth",
+            "gt_note",
+        ]
+        for label in forbidden_labels:
+            self.assertNotIn(label, evidence_text)
+
+    def test_evidence_separated_from_content(self):
+        """Evidence is separate from main content and doesn't compete for size cap."""
+        content_text = "x" * 1000
+        evidence_text = "y" * 1000
+
+        state_file = Path(self.repo_root) / "STATE.md"
+        state_file.write_text(content_text, encoding="utf-8")
+
+        pack = build_context_pack(
+            decision_type="adjudicate_finding",
+            sources={"state": None},
+            repo_root=self.repo_root,
+            conductor_root=self.conductor_root,
+            size_cap=2000,
+            evidence={"evidence_item": evidence_text},
+            evidence_cap=2000,
+        )
+
+        # Both content and evidence should be included without competing.
+        self.assertIn("state", pack.content)
+        self.assertIn("evidence_item", pack.evidence)
+        self.assertGreater(pack.total_size_bytes, 0)
+        self.assertGreater(pack.evidence_size_bytes, 0)
+
+
 class TestOrchestratorDriverCapabilities(unittest.TestCase):
     """Test capability delegation to backend."""
 
