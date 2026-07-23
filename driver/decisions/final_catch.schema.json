@@ -1,0 +1,245 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Final Catch Decision",
+  "description": "Orchestrator S2 decision: pre-merge safeguard. Before shipping (merging to main), perform a last sanity check: does the item pass all gates (tests, secret-scan, branch protection)? Are there any last-minute red flags? Should this item be held or escalated?",
+  "type": "object",
+  "required": ["verdict", "evidence"],
+  "properties": {
+    "decision_type": {
+      "type": "string",
+      "const": "final_catch"
+    },
+    "input": {
+      "type": "object",
+      "description": "The item ready for merge and its verification state",
+      "required": ["item", "verification_results"],
+      "properties": {
+        "item": {
+          "type": "object",
+          "description": "The wave item ready to merge",
+          "required": ["slug", "branch", "pr_number"],
+          "properties": {
+            "slug": {
+              "type": "string",
+              "description": "Item identifier"
+            },
+            "branch": {
+              "type": "string",
+              "description": "Feature branch name"
+            },
+            "pr_number": {
+              "type": "integer",
+              "description": "GitHub PR number"
+            },
+            "commit_sha": {
+              "type": "string",
+              "description": "Latest commit SHA on the branch"
+            },
+            "files_changed": {
+              "type": "integer",
+              "description": "Number of files changed in this PR"
+            },
+            "additions": {
+              "type": "integer"
+            },
+            "deletions": {
+              "type": "integer"
+            }
+          }
+        },
+        "verification_results": {
+          "type": "object",
+          "description": "Results from all pre-merge checks",
+          "required": ["test_passed", "secret_scan_passed"],
+          "properties": {
+            "test_passed": {
+              "type": "boolean",
+              "description": "Did the item's test suite pass?"
+            },
+            "test_exit_code": {
+              "type": "integer",
+              "description": "Exit code from final test run"
+            },
+            "secret_scan_passed": {
+              "type": "boolean",
+              "description": "Did secret-scan.py --staged pass?"
+            },
+            "ci_status": {
+              "type": "string",
+              "enum": ["success", "failure", "pending", "not_run"],
+              "description": "GitHub Actions CI status"
+            },
+            "branch_protection_check": {
+              "type": "object",
+              "description": "Status of branch protection requirements",
+              "properties": {
+                "required_checks_passing": {
+                  "type": "boolean"
+                },
+                "review_approvals": {
+                  "type": "integer",
+                  "description": "Number of required review approvals (may be 0 for orchestrator items)"
+                },
+                "strict_up_to_date": {
+                  "type": "boolean",
+                  "description": "Is branch up-to-date with main?"
+                }
+              }
+            },
+            "adversarial_review": {
+              "type": "object",
+              "description": "Results from adversarial code review if performed",
+              "properties": {
+                "completed": {
+                  "type": "boolean"
+                },
+                "defects_found": {
+                  "type": "integer"
+                },
+                "defects": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "severity": {
+                        "type": "string",
+                        "enum": ["blocker", "major", "minor"]
+                      },
+                      "description": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "gate_history": {
+          "type": "array",
+          "description": "Prior gate attempts on this item",
+          "items": {
+            "type": "object",
+            "properties": {
+              "attempt": {
+                "type": "integer"
+              },
+              "timestamp": {
+                "type": "string"
+              },
+              "gate_status": {
+                "type": "string",
+                "enum": ["passed", "failed", "held"]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "description": "The final merge decision",
+      "required": ["safe_to_merge"],
+      "properties": {
+        "safe_to_merge": {
+          "type": "boolean",
+          "description": "Is this item safe to merge to main?"
+        },
+        "gates_passed": {
+          "type": "array",
+          "description": "Which gates passed",
+          "items": {
+            "type": "string",
+            "enum": ["test_pass", "secret_scan", "ci_green", "branch_protection", "adversarial_review_clean"]
+          }
+        },
+        "gates_failed": {
+          "type": "array",
+          "description": "Which gates failed",
+          "items": {
+            "type": "object",
+            "properties": {
+              "gate": {
+                "type": "string"
+              },
+              "failure_reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "blocker_defects": {
+          "type": "array",
+          "description": "Critical issues that block merge",
+          "items": {
+            "type": "object",
+            "properties": {
+              "defect": {
+                "type": "string"
+              },
+              "impact": {
+                "type": "string",
+                "enum": ["data_loss", "security", "test_failure", "branch_protection", "other"]
+              },
+              "remediation": {
+                "type": "string",
+                "description": "How to fix before merge"
+              }
+            }
+          }
+        },
+        "hold_reason": {
+          "type": "string",
+          "description": "If not safe to merge, why not (e.g., 'test_failed', 'secret_scan_blocked', 'adversarial_review_found_defects')"
+        },
+        "escalation_needed": {
+          "type": "boolean",
+          "description": "Does this need human review before merge?"
+        },
+        "escalation_reason": {
+          "type": "string",
+          "description": "If escalation needed, why (unusual pattern, potential security issue, etc.)"
+        }
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence in this gate decision (0.0-1.0). 1.0 if all checks pass clearly; lower if edge cases present."
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Citations to gate check results",
+      "items": {
+        "type": "object",
+        "required": ["gate", "description"],
+        "properties": {
+          "gate": {
+            "type": "string",
+            "enum": ["test_output", "secret_scan_log", "ci_run", "branch_protection_check", "adversarial_review_report"]
+          },
+          "description": {
+            "type": "string",
+            "description": "What this gate checked and result"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed"]
+          },
+          "log_excerpt": {
+            "type": "string",
+            "description": "Relevant output from the gate check"
+          },
+          "link": {
+            "type": "string",
+            "description": "URL to CI run, PR, or gate log if available"
+          }
+        }
+      }
+    }
+  }
+}
