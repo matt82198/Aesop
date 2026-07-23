@@ -168,7 +168,6 @@
     "evidence": {
       "type": "array",
       "description": "Citations supporting the repair decision",
-      "required": true,
       "items": {
         "type": "object",
         "required": ["type", "description"],

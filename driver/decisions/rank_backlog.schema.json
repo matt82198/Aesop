@@ -155,7 +155,6 @@
     "evidence": {
       "type": "array",
       "description": "Citations to files and line ranges that support this decision",
-      "required": true,
       "items": {
         "type": "object",
         "required": ["file", "description"],

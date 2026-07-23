@@ -211,7 +211,6 @@
     "evidence": {
       "type": "array",
       "description": "Citations to the input briefs and their findings",
-      "required": true,
       "items": {
         "type": "object",
         "required": ["source_brief", "description"],

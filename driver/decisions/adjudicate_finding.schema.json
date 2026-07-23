@@ -156,7 +156,6 @@
     "evidence": {
       "type": "array",
       "description": "Citations supporting this adjudication",
-      "required": true,
       "items": {
         "type": "object",
         "required": ["type", "description"],

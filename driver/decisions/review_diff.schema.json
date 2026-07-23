@@ -174,7 +174,6 @@
     "evidence": {
       "type": "array",
       "description": "Citations supporting this review verdict",
-      "required": true,
       "items": {
         "type": "object",
         "required": ["type", "description"],

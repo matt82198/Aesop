@@ -214,7 +214,6 @@
     "evidence": {
       "type": "array",
       "description": "Citations to gate check results",
-      "required": true,
       "items": {
         "type": "object",
         "required": ["gate", "description"],
