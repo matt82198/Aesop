@@ -40,47 +40,44 @@ Models were not judging; they were reading the answer from the [3] item.
 
 **The --evidence-mode mechanism fix**: Strip the [3] clauses entirely. Keep only [1] Mechanism and [2] Behavior (raw factual description, no conclusions). This reveals TRUE capability.
 
-## Honest Verdict: **HYPOTHESIS PARTIALLY HELD — WITH TIER-GATING**
+## Honest Verdict: **MODEST OVERALL LIFT; NARRATIVE ITEMS INCONCLUSIVE**
 
-### The Mechanism-Only Results Are the Truth:
+### 1. OVERALL ACCURACY: Defensible, Tier-Bounded
 
-1. **gpt-4o-mini: ENRICHMENT WORKS FOR THIS TIER**
-   - 68.8% overall (honest, down from 87.5% leaky but still legitimate)
-   - **CRITICAL: Still achieves 2/2 on items #9 and #13 even WITHOUT answer hints**
-   - This proves genuine capability improvement from fair evidence
-   - Enrichment genuinely enables narrative refutations on this tier
+Mechanism-only evidence provides a modest lift (~+6 percentage points):
+- **gpt-4o-mini**: 62.5% → 68.8% (+6.3%)
+- **gpt-5.6-sol**: 62.5% → 68.8% (+6.3%)
+- **gpt-4o**: 50.0% → 50.0% (no change; weak tier unchanged)
 
-2. **gpt-4o: ENRICHMENT DOES NOT HELP THIS TIER**
-   - 50.0% overall (unchanged from baseline—no benefit)
-   - Items #9 and #13: 1/2 (still fails both narrative refusals)
-   - Even fair evidence cannot bridge this tier's narrative refusal deficit
-   - **Narrative refusal is tier-gated, not evidence-bounded**
+**Finding**: Evidence helps overall accuracy a bit, more for capable models, nothing for the weak model. This is modest but defensible.
 
-3. **gpt-5.6-sol: WAS LEAKING, NOT GENUINELY SUPERIOR**
-   - 68.8% overall (honest, DOWN from 93.8% leaky)
-   - Items #9 and #13: 1/2 (REGRESSED from 2/2 in leaky run)
-   - The frontier model's apparent advantage came from reading the answer, not better judgment
-   - Without answer hints, frontier barely outperforms mid-tier
+### 2. NARRATIVE ITEMS #9 & #13: **INCONCLUSIVE — Structural Confound**
 
-## The Real Finding
+**Critical Caveat**: For these two items, the mechanism clauses ARE THEMSELVES THE REFUTATION. The mechanism facts directly contain the answer:
 
-**Enrichment IS real, but narrative refusals are FRONTIER-EXCLUSIVE:**
+- **Item #9 mechanism** states: "health check scans top-level directory only; paths like daemon/* are not in scope" — this directly negates the finding's premise
+- **Item #13 mechanism** states: "test assertion would correctly fail if the bug regressed" — this directly explains soundness
 
-- **Mid-tier (gpt-4o-mini)** CAN execute narrative refusals with fair evidence (2/2 on #9, #13)
-- **Lower-tier (gpt-4o)** CANNOT, even with fair evidence (0/2 on both items)
-- **Frontier (gpt-5.6-sol)** loses advantage when answer-leakage is removed
+Because mechanism IS refutation for these items, **mechanism-only mode never actually de-leaked them**. Mini's 2/2 on items #9 & #13 is residual leakage, not genuine capability. This is confirmed by the inversion: baseline ladder had mini at 0/2 (worst rubber-stamper) and frontier sol as the only clean refuser; mechanism mode flips this to mini>sol on items #9/#13. This inversion violates the entire baseline hierarchy on N=1, a red flag for artifact.
 
-This confirms the original ladder finding: some reasoning tasks (narrative refusals) have an inherent capability ceiling per model tier. Enrichment helps capable tiers but cannot bridge the gap for incapable tiers.
+**Conclusion**: Items #9 and #13 CANNOT be cleanly tested with this corpus. Do NOT claim mini acquired narrative refusal.
 
-## Methodology Note: The Narrative Refutation Paradox
+### 3. N=1 Statistical Caveat
 
-For items #9 (whitelist-gate-weakening) and #13 (fixreview-backtick-test), fair adjudication requires understanding:
-- Item #9: Multi-layer gate architecture (health check vs secret-scan vs allowlist)
-- Item #13: Test assertion execution trace (what property the assertion checks)
+Every cell represents a single API run at default temperature. The 2-item sub-scores (#9, #13) are well within noise on N=1. Any claims about narrative-item capability require N≥5 repeated runs.
 
-These are near-inseparable from the refutation itself (WHY it's not a defect). The [3] clauses attempted to make this explicit, but created answer-leakage.
+### 4. HEADLINE STRUCTURAL FINDING
 
-**The honest finding**: gpt-4o-mini can INFER the refutation from pure mechanism (items [1-2] only), showing this tier has sufficient reasoning depth. gpt-4o cannot, showing a capability threshold. This is not an evidence problem—it's a reasoning-depth problem.
+**For narrative-refutation findings, the minimal factual evidence a fair adjudicator needs is near-inseparable from the refutation itself.** This is:
+- A genuine structural observation about the difficulty of scaffolding narrative refusal
+- An explanation for why this corpus CANNOT isolate evidence-help from answer-leak on items #9 and #13
+- A reason future work needs verdict-neutral corpus items where mechanism does not contain the refutation
+
+This is the publishable result from this data.
+
+### 5. Next Step: Increment 2.6
+
+To actually test narrative-item evidence-help, build a new corpus where the mechanism clause does NOT contain the refutation. Then re-run with N≥5 repeated runs per model. This is the only way to separate signal from noise on these items.
 
 ## Served Models (Mechanism-Only Run — The Honest Test)
 
@@ -112,9 +109,13 @@ These are near-inseparable from the refutation itself (WHY it's not a defect). T
 
 The increment 2.5 seam (**context_pack evidence field, --evidence-mode flag**) is **production-ready** and enables **honest, confound-free adjudication**:
 
-- ✓ No asymmetric evidence richness (symmetry guards pass)
-- ✓ No answer-leaking conclusion clauses (mechanism mode strips [3])
-- ✓ Fair, mechanism-only evidence reveals GENUINE capability tiers
-- ✓ Narrative refusals are frontier-gated, not evidence-bounded
+- ✓ Asymmetric evidence richness fixed (symmetry guards pass)
+- ✓ Answer-leaking conclusion clauses stripped (mechanism mode removes [3])
+- ✓ Four-column progression documents the confound spiral (baseline → confounded-asymmetric → balanced-leaky → mechanism-clean)
+- ✓ Overall accuracy shows modest, defensible evidence lift
 
-**The honest verdict**: Evidence enrichment genuinely helps capable model tiers (gpt-4o-mini) but cannot bridge reasoning-depth deficits in lower tiers (gpt-4o). This aligns with the original ladder hypothesis and closes the confound-driven false positive in the "87.5%–93.8% improvement" reading.
+**The honest summary**: Evidence enrichment provides ~+6% accuracy improvement for capable models, nothing for weak models. Narrative refusals (#9, #13) cannot be cleanly tested with this corpus because their mechanism clauses ARE their refutations, making items #9 and #13 structurally unsolvable for confound-free analysis. Mini's 2/2 on these items is residual leakage, not capability, confirmed by the inversion against the baseline ladder hierarchy.
+
+## Next Step: Increment 2.6
+
+**Verdict-neutral corpus rewrite + N≥5 repeated runs**: To isolate evidence-help on narrative-refutation items, build a new corpus where the mechanism clause does NOT contain the refutation. Example: item #9 mechanism should describe the mechanism (e.g., "allowlist gate operates at directory level") WITHOUT stating it fails to check contents. Then re-run each model N≥5 times at varied temperatures. This is the only way to separate signal from noise on the hardest items.
