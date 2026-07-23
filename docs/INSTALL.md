@@ -291,16 +291,16 @@ On Windows, the watchdog and refinement monitor daemons can run silently in the 
 # Register watchdog daemon (every 5m)
 powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1
 
-# Register both watchdog and monitor daemons
+# Register both watchdog and monitor daemons (monitor script is external, customize path as needed)
 powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 `
-  -MonitorCommand "bash '/C/Users/matt8/aesop/daemons/run-monitor.sh' --once"
+  -MonitorCommand "bash '/c/path/to/your/monitor/run-monitor.sh' --once"
 
 # Customize intervals and task names
 powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 `
   -TaskPrefix MyFleet `
   -WatchdogIntervalMinutes 10 `
   -MonitorIntervalMinutes 30 `
-  -MonitorCommand "bash '/C/Users/matt8/aesop/daemons/run-monitor.sh' --once"
+  -MonitorCommand "bash '/c/path/to/your/monitor/run-monitor.sh' --once"
 
 # Uninstall tasks
 powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -Uninstall
@@ -319,6 +319,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -D
 - `-MonitorCommand "bash '...' ..."` — Custom monitor command; omit to skip registering the monitor task (default: empty)
 - `-Uninstall` — Remove all registered tasks
 - `-DryRun` — Preview task configuration without registering
+
+**Constraints**:
+- Commands (`-WatchdogCommand`, `-MonitorCommand`) must NOT contain double quotes (vbs launcher contract)
+- UNC paths (e.g., `\\server\share`) are not supported; use local Windows or POSIX paths only
+- `-DryRun` mode works even if `bash.exe` or run-hidden.vbs is missing (validation downgraded to warnings for preview)
 
 ---
 

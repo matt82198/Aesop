@@ -15,6 +15,11 @@ $ErrorActionPreference = 'Stop'
 function ConvertTo-PosixPath {
     param([string]$WindowsPath)
     # Convert C:\foo\bar to /c/foo/bar
+    # Rejects UNC paths (\\server\share) — error out instead of mangling
+    if ($WindowsPath -match '^\\\\') {
+        Write-Error "UNC paths are unsupported (got: $WindowsPath). Pass -WatchdogCommand explicitly with a valid path."
+        exit 1
+    }
     $posixPath = $WindowsPath -replace '\\', '/'
     $posixPath = $posixPath -replace '^([A-Za-z]):', '/$1'
     return $posixPath
@@ -89,13 +94,16 @@ function Unregister-DaemonTask {
         if ($task) {
             Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
             Write-Host "Unregistered task: $TaskName"
+            return $true
         }
         else {
             Write-Host "Task not found: $TaskName (already unregistered or never existed)"
+            return $true
         }
     }
     catch {
-        Write-Host "Error unregistering $TaskName : $_"
+        Write-Error "Failed to unregister $TaskName : $_"
+        return $false
     }
 }
 
@@ -104,28 +112,58 @@ function Main {
     $aesopRoot = Get-WorktreeRoot
     $runHiddenVbs = Join-Path $PSScriptRoot 'run-hidden.vbs'
 
-    # Verify run-hidden.vbs exists
-    if (-not (Test-Path $runHiddenVbs)) {
-        Write-Error "run-hidden.vbs not found at: $runHiddenVbs"
+    # VALIDATION: Check for double quotes in commands (contract violation)
+    # This check runs early and always, before any operations
+    if ($WatchdogCommand -like '*"*') {
+        Write-Error "WatchdogCommand contains double quotes, which are not allowed (vbs launcher contract violation)."
+        exit 1
+    }
+    if ($MonitorCommand -like '*"*') {
+        Write-Error "MonitorCommand contains double quotes, which are not allowed (vbs launcher contract violation)."
         exit 1
     }
 
-    # Verify bash.exe exists
-    if (-not (Test-Path $BashExe)) {
-        Write-Error "bash.exe not found at: $BashExe"
-        exit 1
+    # PATH VALIDATION: Only enforce file existence checks if not in DryRun mode
+    # In DryRun, downgrade to warnings so preview works on machines without Git Bash
+    if (-not $DryRun) {
+        if (-not (Test-Path $runHiddenVbs)) {
+            Write-Error "run-hidden.vbs not found at: $runHiddenVbs"
+            exit 1
+        }
+        if (-not (Test-Path $BashExe)) {
+            Write-Error "bash.exe not found at: $BashExe"
+            exit 1
+        }
+    }
+    else {
+        if (-not (Test-Path $runHiddenVbs)) {
+            Write-Warning "run-hidden.vbs not found at: $runHiddenVbs (DryRun mode)"
+        }
+        if (-not (Test-Path $BashExe)) {
+            Write-Warning "bash.exe not found at: $BashExe (DryRun mode)"
+        }
     }
 
     # Handle Uninstall mode
     if ($Uninstall) {
-        Unregister-DaemonTask -TaskName "${TaskPrefix}WatchdogDaemon"
-        Unregister-DaemonTask -TaskName "${TaskPrefix}RefinementMonitor"
+        $watchdog_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}WatchdogDaemon"
+        $monitor_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}RefinementMonitor"
+        if (-not $watchdog_ok -or -not $monitor_ok) {
+            exit 1
+        }
         exit 0
     }
 
     # Derive default commands if not provided
     if (-not $WatchdogCommand) {
         $posixRoot = ConvertTo-PosixPath $aesopRoot
+
+        # P2: Detect apostrophe in derived path (breaks bash syntax if not escaped)
+        if ($posixRoot -like "*'*") {
+            Write-Error "Repository path contains apostrophe, which would break the derived command: $posixRoot`nPass -WatchdogCommand explicitly."
+            exit 1
+        }
+
         $WatchdogCommand = "bash '$posixRoot/daemons/run-watchdog.sh' --once >> '$posixRoot/state/cron-watchdog.log' 2>&1"
     }
 

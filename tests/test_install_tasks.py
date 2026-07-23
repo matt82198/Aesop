@@ -252,6 +252,140 @@ class TestInstallTasks(unittest.TestCase):
             f"CWD changed from {initial_cwd} to {final_cwd}",
         )
 
+    def test_run_hidden_vbs_waits_and_propagates_exit(self):
+        """
+        Test that run-hidden.vbs properly waits for child and propagates exit code.
+
+        P1 fix: vbs must use shell.Run(cmd, 0, True) with WScript.Quit rc to:
+        - Wait for the bash process to complete (not exit immediately)
+        - Propagate exit code so task LastTaskResult is meaningful
+        - Allow ExecutionTimeLimit and MultipleInstances IgnoreNew to work
+
+        Asserts:
+        - File contains ", True" (wait flag in shell.Run)
+        - File contains "WScript.Quit rc" (exit code propagation)
+        - File does NOT contain "waitForExit = False" (old broken pattern)
+        """
+        vbs_path = self.worktree_root / "daemons" / "run-hidden.vbs"
+        with open(vbs_path, "r") as f:
+            content = f.read()
+
+        # Assert wait flag is True
+        self.assertIn(
+            ", True",
+            content,
+            "run-hidden.vbs must use shell.Run(cmd, 0, True) to wait for child",
+        )
+
+        # Assert exit code propagation
+        self.assertIn(
+            "WScript.Quit rc",
+            content,
+            "run-hidden.vbs must use WScript.Quit rc to propagate exit code",
+        )
+
+        # Assert old broken pattern is gone
+        self.assertNotIn(
+            "waitForExit = False",
+            content,
+            "run-hidden.vbs must not use waitForExit = False (exits immediately)",
+        )
+
+    def test_dryrun_with_nonexistent_bash_exe(self):
+        """
+        Test DryRun works even with nonexistent -BashExe.
+
+        P1 fix: In DryRun mode, validation failures should downgrade to warnings,
+        allowing preview to work on machines without Git Bash installed.
+
+        Asserts:
+        - Exit code 0 (DryRun is a preview, not a real operation)
+        - Output contains DRYRUN lines (preview printed)
+        - No fatal error about missing BashExe
+        """
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-BashExe",
+            "C:\\nonexistent\\bash.exe",
+            "-TaskPrefix",
+            "AesopNonexistentBashTest",
+        ]
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # DryRun should succeed despite missing bash
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"DryRun should exit 0 even with nonexistent BashExe.\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}",
+        )
+
+        # But should still print the DRYRUN preview
+        output = result.stdout + result.stderr
+        self.assertIn(
+            "DRYRUN:",
+            output,
+            "DryRun should print DRYRUN preview lines even with validation warnings",
+        )
+
+    def test_command_with_double_quote_validation(self):
+        """
+        Test that commands containing double quotes are rejected.
+
+        P1 fix: The vbs launcher requires no double quotes in args (by contract).
+        If -WatchdogCommand contains ", exit 1 with validation error.
+
+        Asserts:
+        - Exit code 1 (validation failure)
+        - Output contains validation error message about double quotes
+        """
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-WatchdogCommand",
+            'bash -c "echo invalid"',
+            "-TaskPrefix",
+            "AesopQuoteTest",
+        ]
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # Should fail validation
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            "Command with double quotes should fail validation",
+        )
+
+        # Should have a clear error message
+        output = result.stdout + result.stderr
+        self.assertTrue(
+            "quote" in output.lower() or "double" in output.lower(),
+            f"Error message should mention quotes, got: {output}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
