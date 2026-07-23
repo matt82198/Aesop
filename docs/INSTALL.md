@@ -288,14 +288,19 @@ To bypass during testing: `git push --no-verify` (not recommended for production
 On Windows, the watchdog and refinement monitor daemons can run silently in the background without flashing a console window. Use the provided PowerShell installer:
 
 ```powershell
-# Register both watchdog (every 5m) and monitor (every 20m) tasks
+# Register watchdog daemon (every 5m)
 powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1
 
-# Or customize intervals and task names
+# Register both watchdog and monitor daemons
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 `
+  -MonitorCommand "bash '/C/Users/matt8/aesop/daemons/run-monitor.sh' --once"
+
+# Customize intervals and task names
 powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 `
   -TaskPrefix MyFleet `
   -WatchdogIntervalMinutes 10 `
-  -MonitorIntervalMinutes 30
+  -MonitorIntervalMinutes 30 `
+  -MonitorCommand "bash '/C/Users/matt8/aesop/daemons/run-monitor.sh' --once"
 
 # Uninstall tasks
 powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -Uninstall
@@ -309,9 +314,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -D
 **Parameters**:
 - `-TaskPrefix AesopMyFleet` — Task names: `AesopMyFleetWatchdogDaemon`, `AesopMyFleetRefinementMonitor` (default: `Aesop`)
 - `-WatchdogIntervalMinutes N` — Watchdog cycle interval in minutes (default: 5)
-- `-MonitorIntervalMinutes N` — Monitor cycle interval in minutes (default: 20; can be 0 to skip)
+- `-MonitorIntervalMinutes N` — Monitor cycle interval in minutes (default: 20)
 - `-WatchdogCommand "bash '...' ..."` — Custom watchdog command (default: `run-watchdog.sh --once >> state/cron-watchdog.log`)
-- `-MonitorCommand "bash '...' ..."` — Custom monitor command (default: none)
+- `-MonitorCommand "bash '...' ..."` — Custom monitor command; omit to skip registering the monitor task (default: empty)
 - `-Uninstall` — Remove all registered tasks
 - `-DryRun` — Preview task configuration without registering
 

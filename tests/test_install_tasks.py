@@ -25,7 +25,8 @@ class TestInstallTasks(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up test fixtures once."""
-        cls.worktree_root = Path("C:\\Users\\matt8\\aesop\\aesop-wt-hidden-tasks")
+        # Resolve repo root relative to this test file (platform-independent)
+        cls.worktree_root = Path(__file__).resolve().parents[1]
         cls.script_path = cls.worktree_root / "daemons" / "install-tasks.ps1"
 
         # Verify worktree and script exist
@@ -38,6 +39,68 @@ class TestInstallTasks(unittest.TestCase):
         """Test that run-hidden.vbs file exists in daemons/."""
         vbs_path = self.worktree_root / "daemons" / "run-hidden.vbs"
         self.assertTrue(vbs_path.exists(), f"run-hidden.vbs not found at {vbs_path}")
+
+    def test_default_command_derivation(self):
+        """
+        Test that default WatchdogCommand derivation works correctly.
+
+        When NO -WatchdogCommand is provided, the script derives it from the worktree root.
+        The derived command should:
+        - Contain NO backtick characters (path conversion must be clean)
+        - Match posix path pattern /[A-Za-z]/ (valid drive letter format)
+        - Contain 'daemons/run-watchdog.sh'
+        """
+        import re
+
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-TaskPrefix",
+            "AesopDefaultTest",
+        ]
+        # Deliberately omit -WatchdogCommand to test default derivation
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"Expected exit 0, got {result.returncode}.\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}",
+        )
+
+        output = result.stdout + result.stderr
+
+        # Assert no backtick character (path conversion must be clean)
+        self.assertNotIn(
+            "`",
+            output,
+            "Output should not contain backtick character (path conversion broken)",
+        )
+
+        # Assert posix path pattern /[A-Za-z]/ for drive letter
+        self.assertRegex(
+            output,
+            r"/[A-Za-z]/",
+            "Output should contain posix drive path like /c/ or /d/",
+        )
+
+        # Assert contains daemons/run-watchdog.sh
+        self.assertIn(
+            "daemons/run-watchdog.sh",
+            output,
+            "Output should contain 'daemons/run-watchdog.sh'",
+        )
 
     def test_dryrun_mode_prints_output(self):
         """

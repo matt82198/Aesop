@@ -16,7 +16,7 @@ function ConvertTo-PosixPath {
     param([string]$WindowsPath)
     # Convert C:\foo\bar to /c/foo/bar
     $posixPath = $WindowsPath -replace '\\', '/'
-    $posixPath = $posixPath -replace '^([A-Za-z]):', '/`$1'
+    $posixPath = $posixPath -replace '^([A-Za-z]):', '/$1'
     return $posixPath
 }
 
@@ -35,8 +35,7 @@ function Register-DaemonTask {
         [string]$Command,
         [int]$IntervalMinutes,
         [string]$RunHiddenVbs,
-        [string]$BashExe,
-        [string]$DryRunPrefix = ''
+        [string]$BashExe
     )
 
     # Build the action: wscript.exe //B //Nologo "path\to\run-hidden.vbs" "<bash>" -lc "<command>"
@@ -61,8 +60,7 @@ function Register-DaemonTask {
 
     if ($DryRun) {
         # Print DryRun output
-        $verb = "$DryRunPrefix$TaskName"
-        Write-Host "DRYRUN: $verb -> wscript.exe //B //Nologo ""$RunHiddenVbs"" ""$BashExe"" -lc ""$Command"" (interval=$IntervalMinutes`m, Hidden=True)"
+        Write-Host "DRYRUN: $TaskName -> wscript.exe //B //Nologo ""$RunHiddenVbs"" ""$BashExe"" -lc ""$Command"" (interval=$IntervalMinutes`m, Hidden=True)"
     }
     else {
         # Register the task (force overwrite if exists)
@@ -121,9 +119,7 @@ function Main {
     # Handle Uninstall mode
     if ($Uninstall) {
         Unregister-DaemonTask -TaskName "${TaskPrefix}WatchdogDaemon"
-        if ($MonitorCommand) {
-            Unregister-DaemonTask -TaskName "${TaskPrefix}RefinementMonitor"
-        }
+        Unregister-DaemonTask -TaskName "${TaskPrefix}RefinementMonitor"
         exit 0
     }
 
@@ -140,8 +136,7 @@ function Main {
         -Command $WatchdogCommand `
         -IntervalMinutes $WatchdogIntervalMinutes `
         -RunHiddenVbs $runHiddenVbs `
-        -BashExe $BashExe `
-        -DryRunPrefix $(if ($DryRun) { 'DRYRUN: ' } else { '' })
+        -BashExe $BashExe
 
     # Register monitor task if command provided
     if ($MonitorCommand) {
@@ -151,8 +146,7 @@ function Main {
             -Command $MonitorCommand `
             -IntervalMinutes $MonitorIntervalMinutes `
             -RunHiddenVbs $runHiddenVbs `
-            -BashExe $BashExe `
-            -DryRunPrefix $(if ($DryRun) { 'DRYRUN: ' } else { '' })
+            -BashExe $BashExe
     }
 
     exit 0
