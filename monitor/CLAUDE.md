@@ -11,7 +11,7 @@
 ## Files & Ownership
 
 - **collect-signals.mjs** — Deterministic signal collector (Node.js built-ins only, no Python/LLM); runs each cycle deterministically + idempotently; emits BRIEF.md + SIGNALS.json; updates .monitor-heartbeat (epoch) and .signal-state.json.
-- **BRIEF.md** — Human-readable cycle snapshot; overwritten each cycle; runtime/gitignored. Format: heartbeat status, git state, memory freshness, logs, junk sprawl, stray scripts, security alerts, respawn watch, unreviewed prompts, isolation violations.
+- **BRIEF.md** — Human-readable cycle snapshot; overwritten each cycle; runtime/gitignored. Format: heartbeat status, git state, memory freshness, logs, isolation violations, agent stalls, main CI status, extended signals checks (if enabled), security alerts, respawn watch, cost tracking, unreviewed prompts.
 - **SIGNALS.json** — Machine-readable signal metrics (same keys as BRIEF); JSON structure; overwritten each cycle; runtime/gitignored.
 - **PROPOSALS.md** — Append-only inbox for user-approval rule changes (config, policy, deletions); never edited by monitor after emission; gitignored.
 - **ACTIONS.log** — Append-only log of AUTO tier actions taken (heartbeat updates, log rotation, junk quarantine); runtime/gitignored.
@@ -33,7 +33,7 @@ Each cycle:
 
 ## Signal Contract
 
-**Signal keys collected** (14 total): heartbeats (watchdog, monitor, other loops), git (branches, unpushed, dirty), memory (stale files >30d), logs (rotation triggers), junk (script sprawl), strayRepo (scripts outside ~/scripts), alerts (SECURITY-ALERTS.log), respawnWatch (agent respawn loops), unreviewedPrompts (new spawns), isolationViolations (FIXED GOAL drift), agentStalls (silent-hang detection via stall_check.py), and others per governance.
+**Signal keys collected** (15 total): heartbeats (watchdog, monitor, other loops), git (branches, unpushed, dirty), memory (stale files >30d), logs (rotation triggers), junk (script sprawl), strayRepo (scripts outside ~/scripts), alerts (SECURITY-ALERTS.log), respawnWatch (agent respawn loops), unreviewedPrompts (new spawns), isolationViolations (FIXED GOAL drift), main_ci (main-full workflow status via `gh run list`), agentStalls (silent-hang detection via stall_check.py), and others per governance.
 
 **Output formats**:
 - **BRIEF.md**: Human-readable notes, status lines, warnings; overwritten each cycle.

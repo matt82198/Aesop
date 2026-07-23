@@ -1211,3 +1211,56 @@ test('stall check signal: BRIEF.md includes agent stalls section', async (t) => 
     fixture.cleanup();
   }
 });
+
+// === main_ci signal tests ===
+test('main_ci signal: present in SIGNALS.json', async (t) => {
+  const fixture = createFixture();
+  try {
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    assert.ok(fs.existsSync(signalsPath), 'SIGNALS.json should exist');
+
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    assert.ok(signals.main_ci, 'main_ci signal should exist in SIGNALS');
+    assert.ok(['pass', 'fail', 'running', 'unknown'].includes(signals.main_ci.state), 'main_ci.state should be one of: pass, fail, running, unknown');
+    assert.ok(signals.main_ci.checked_at, 'main_ci.checked_at timestamp should exist');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('main_ci signal: BRIEF.md includes main CI status section', async (t) => {
+  const fixture = createFixture();
+  try {
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+
+    const briefPath = path.join(fixture.monitorDir, 'BRIEF.md');
+    assert.ok(fs.existsSync(briefPath), 'BRIEF.md should exist');
+
+    const briefContent = fs.readFileSync(briefPath, 'utf8');
+    assert.ok(briefContent.includes('## Main CI status'), 'BRIEF.md should include Main CI status section');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('main_ci signal: handles gh command unavailable gracefully', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Run collector normally (gh may not be available in test environment)
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1' });
+
+    const signalsPath = path.join(fixture.monitorDir, 'SIGNALS.json');
+    assert.ok(fs.existsSync(signalsPath), 'SIGNALS.json should exist even if gh is unavailable');
+
+    const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
+    // When gh is unavailable, state should be 'unknown' (never throw)
+    assert.ok(
+      signals.main_ci.state === 'unknown' || signals.main_ci.state === 'pass' || signals.main_ci.state === 'fail',
+      'main_ci.state should have a valid value even if gh is unavailable'
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
