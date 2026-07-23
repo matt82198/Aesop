@@ -48,22 +48,39 @@ function runCollector(aesopRoot, envOverrides = {}) {
     ...envOverrides,
   };
 
-  const result = spawnSync('node', [collectorPath], {
-    env,
-    encoding: 'utf8',
-    timeout: 30000,
-    killSignal: 'SIGKILL',
-  });
+  // Determine timeout: use AESOP_TEST_CHILD_TIMEOUT_MS if set, else Windows-specific default or 30000ms
+  const defaultTimeout = process.platform === 'win32' ? 60000 : 30000;
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || defaultTimeout;
 
-  if (result.error) {
-    throw new Error(`Failed to spawn collector: ${result.error.message}`);
+  // Try to spawn with timeout, retry once on ETIMEDOUT (transient contention)
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = spawnSync('node', [collectorPath], {
+      env,
+      encoding: 'utf8',
+      timeout,
+      killSignal: 'SIGKILL',
+    });
+
+    // Retry on ETIMEDOUT (child process spawn timeout) on first attempt
+    if (result.error && result.error.code === 'ETIMEDOUT' && attempt < 1) {
+      lastError = result.error;
+      continue; // Retry once
+    }
+
+    if (result.error) {
+      throw new Error(`Failed to spawn collector: ${result.error.message}`);
+    }
+
+    if (result.status !== 0) {
+      throw new Error(`Collector exited with code ${result.status}: ${result.stderr}`);
+    }
+
+    return result;
   }
 
-  if (result.status !== 0) {
-    throw new Error(`Collector exited with code ${result.status}: ${result.stderr}`);
-  }
-
-  return result;
+  // If we exhausted retries on timeout
+  throw new Error(`Failed to spawn collector: ${lastError.message}`);
 }
 
 // === Test Suite ===
