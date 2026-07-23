@@ -9,6 +9,8 @@
   "files": [
     "bin/*.js",
     "daemons/*.sh",
+    "daemons/*.ps1",
+    "daemons/*.vbs",
     "dash/*.mjs",
     "dash/*.sh",
     "monitor/collect-signals.mjs",

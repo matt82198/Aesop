@@ -283,6 +283,40 @@ To bypass during testing: `git push --no-verify` (not recommended for production
 
 ---
 
+## Windows: Register Daemons as Hidden Scheduled Tasks
+
+On Windows, the watchdog and refinement monitor daemons can run silently in the background without flashing a console window. Use the provided PowerShell installer:
+
+```powershell
+# Register both watchdog (every 5m) and monitor (every 20m) tasks
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1
+
+# Or customize intervals and task names
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 `
+  -TaskPrefix MyFleet `
+  -WatchdogIntervalMinutes 10 `
+  -MonitorIntervalMinutes 30
+
+# Uninstall tasks
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -Uninstall
+
+# Preview without registering (dry-run mode)
+powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -DryRun
+```
+
+**How it works**: The installer creates Scheduled Tasks that launch `wscript.exe` with a hidden VBScript launcher (`daemons/run-hidden.vbs`). This avoids the console window that appears when bash.exe is run directly as a Scheduled Task action.
+
+**Parameters**:
+- `-TaskPrefix AesopMyFleet` — Task names: `AesopMyFleetWatchdogDaemon`, `AesopMyFleetRefinementMonitor` (default: `Aesop`)
+- `-WatchdogIntervalMinutes N` — Watchdog cycle interval in minutes (default: 5)
+- `-MonitorIntervalMinutes N` — Monitor cycle interval in minutes (default: 20; can be 0 to skip)
+- `-WatchdogCommand "bash '...' ..."` — Custom watchdog command (default: `run-watchdog.sh --once >> state/cron-watchdog.log`)
+- `-MonitorCommand "bash '...' ..."` — Custom monitor command (default: none)
+- `-Uninstall` — Remove all registered tasks
+- `-DryRun` — Preview task configuration without registering
+
+---
+
 ## Next Steps
 
 1. **Read [PORTING.md](PORTING.md)** — Step-by-step guide for adopting Aesop on a foreign repo (10 common failure modes)
