@@ -462,6 +462,77 @@ class TestSuccessBar(unittest.TestCase):
         )
 
 
+class TestEvidenceMechanismMode(unittest.TestCase):
+    """Test mechanism-only evidence mode (confound fix 2: answer-leakage prevention)."""
+
+    def test_mechanism_mode_strips_conclusion_clauses(self):
+        """Mechanism mode should keep only first 2 evidence items (mechanism + behavior).
+
+        The [3] conclusion/impact clause often contains the verdict direction
+        and must be stripped to prevent answer-leakage to models.
+        """
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        # Test with one item that has 3 evidence parts
+        test_item = corpus[0]
+        self.assertGreaterEqual(len(test_item.evidence), 3, "Test item must have >= 3 evidence items")
+
+        # Build pack in mechanism mode (should have only 2 evidence items)
+        repo_root = REPO_ROOT
+        conductor_root = REPO_ROOT.parent / "conductor3"
+        pack_mechanism = build_finding_context_pack(
+            test_item, str(repo_root), str(conductor_root), enriched=True, evidence_mode="mechanism"
+        )
+
+        # Verify evidence is sliced to 2 items
+        self.assertEqual(
+            len(pack_mechanism.evidence),
+            2,
+            f"Mechanism mode should have 2 evidence items, got {len(pack_mechanism.evidence)}",
+        )
+
+        # Verify full mode keeps all 3
+        pack_full = build_finding_context_pack(
+            test_item, str(repo_root), str(conductor_root), enriched=True, evidence_mode="full"
+        )
+        self.assertEqual(
+            len(pack_full.evidence),
+            3,
+            f"Full mode should have 3 evidence items, got {len(pack_full.evidence)}",
+        )
+
+    def test_mechanism_mode_no_conclusion_tokens(self):
+        """Mechanism mode must not contain the [3] conclusion clause.
+
+        The [3] items contain verdict-direction-implying content and must be
+        stripped in mechanism mode. We verify this by checking that the pack
+        has exactly 2 evidence items (no [3] conclusion).
+        """
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        repo_root = REPO_ROOT
+        conductor_root = REPO_ROOT.parent / "conductor3"
+
+        for item in corpus:
+            pack = build_finding_context_pack(
+                item, str(repo_root), str(conductor_root), enriched=True, evidence_mode="mechanism"
+            )
+
+            # Mechanism mode must have exactly 2 evidence items (no [3] conclusion)
+            self.assertEqual(
+                len(pack.evidence),
+                2,
+                f"Item {item.id}: mechanism mode must have exactly 2 evidence items "
+                f"(no [3] conclusion clause), got {len(pack.evidence)}: {list(pack.evidence.keys())}",
+            )
+
+
 class TestEvidenceSymmetry(unittest.TestCase):
     """Guard against asymmetric evidence richness across verdict classes.
 

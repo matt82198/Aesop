@@ -327,7 +327,7 @@ def load_corpus(corpus_path: str) -> List[CorpusItem]:
 
 
 def build_finding_context_pack(
-    item: CorpusItem, repo_root: str, conductor_root: str, enriched: bool = False
+    item: CorpusItem, repo_root: str, conductor_root: str, enriched: bool = False, evidence_mode: str = "full"
 ) -> ContextPack:
     """Build a context pack for adjudication (BLIND: no labels).
 
@@ -336,10 +336,14 @@ def build_finding_context_pack(
         repo_root: Repo root path.
         conductor_root: Conductor root path.
         enriched: If True, include evidence from the corpus item (increment 2.5).
+        evidence_mode: How much evidence to surface when enriched=True:
+          - 'full': all 3 parts (mechanism + behavior + impact/conclusion)
+          - 'mechanism': first 2 parts only (mechanism + behavior, no conclusions)
+          - Mechanism mode prevents answer-leakage from [3] impact clauses.
 
     Returns:
         ContextPack with finding_text + source framing (no labels).
-        If enriched, also includes evidence section.
+        If enriched, also includes evidence section (sliced per evidence_mode).
     """
     # Build sources dict: finding text + source lens.
     # This is the BLIND framing the challenger sees.
@@ -380,9 +384,18 @@ Provide evidence supporting your classification."""
 
     # Add evidence if enriched mode is enabled (increment 2.5).
     if enriched and item.evidence:
+        # Slice evidence based on mode: mechanism mode drops the [3] conclusion clause
+        # to prevent answer-leakage (confound fix).
+        evidence_list = item.evidence
+        if evidence_mode == "mechanism":
+            # Mechanism mode: keep only first 2 items (mechanism + behavior)
+            evidence_list = item.evidence[:2]
+        elif evidence_mode != "full":
+            raise ValueError(f"Unknown evidence_mode: {evidence_mode}")
+
         # Convert evidence list to a dict for build_context_pack
         evidence_dict = {}
-        for idx, evidence_item in enumerate(item.evidence):
+        for idx, evidence_item in enumerate(evidence_list):
             evidence_dict[f"evidence_{idx}"] = evidence_item
 
         # Rebuild pack with evidence
@@ -405,11 +418,12 @@ def adjudicate_one_finding(
     conductor_root: str,
     schema: Optional[Dict[str, Any]],
     enriched: bool = False,
+    evidence_mode: str = "full",
 ) -> ScorecardItem:
     """Run one adjudication decision through the driver."""
     try:
         # Build context pack (BLIND; optionally enriched with evidence).
-        pack = build_finding_context_pack(item, repo_root, conductor_root, enriched=enriched)
+        pack = build_finding_context_pack(item, repo_root, conductor_root, enriched=enriched, evidence_mode=evidence_mode)
 
         # Verify labels never reach the pack (unit test for blind adjudication).
         pack_text = json.dumps(pack.content)
@@ -696,6 +710,12 @@ def main():
         help="Use enriched context packs with evidence (increment 2.5; default: off for reproducibility)",
     )
     parser.add_argument(
+        "--evidence-mode",
+        choices=["full", "mechanism"],
+        default="full",
+        help="How much evidence to surface when --enriched is used: 'full' (all 3 parts, may leak answers), 'mechanism' (first 2 parts only, no conclusions)",
+    )
+    parser.add_argument(
         "--out-tag",
         default=None,
         help="Results filename tag (default: derived from --model); rung files never overwrite each other",
@@ -773,7 +793,7 @@ def main():
             break
 
         result = adjudicate_one_finding(
-            driver, item, str(repo_root), str(conductor_root), schema, enriched=args.enriched
+            driver, item, str(repo_root), str(conductor_root), schema, enriched=args.enriched, evidence_mode=args.evidence_mode
         )
         scorecard.append(result)
         api_call_count += 1
