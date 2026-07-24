@@ -133,17 +133,17 @@ class TestSeatedAdjudication(unittest.TestCase):
         canned_responses = [
             {
                 "verdict": "false_positive",
-                "evidence": "This is the reasoning for verdict 1",
+                "evidence": ["This is the reasoning for verdict 1"],
                 "confidence": 0.95,
             },
             {
                 "verdict": "false_positive",
-                "evidence": "This is the reasoning for verdict 2",
+                "evidence": ["This is the reasoning for verdict 2"],
                 "confidence": 0.90,
             },
             {
                 "verdict": "real_defect",
-                "evidence": "This is the reasoning for verdict 3",
+                "evidence": ["This is the reasoning for verdict 3"],
                 "confidence": 0.85,
             },
         ]
