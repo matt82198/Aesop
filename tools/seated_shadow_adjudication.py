@@ -32,6 +32,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Type stubs for context pack
+WorkerStatus = Dict[str, Any]
+WorkerRequest = Dict[str, Any]
+WorkerResult = Dict[str, Any]
+
 # Add driver/ to sys.path.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DRIVER_DIR = REPO_ROOT / "driver"
@@ -42,11 +47,106 @@ from agent_driver import CommandResult, DriverCapabilities  # noqa: E402
 from context_pack import build_context_pack, ContextPack  # noqa: E402
 from orchestrator_driver import OrchestratorDriver  # noqa: E402
 
-# Optional: Import real OpenAI transport if available
+# Import OpenAI transport
 try:
-    from openai_compatible_driver import OpenAICompatibleDriver  # noqa: E402
+    from openai_transport import default_openai_transport  # noqa: E402
 except ImportError:
-    OpenAICompatibleDriver = None
+    default_openai_transport = None
+
+
+# Simple OpenAI-compatible driver for orchestrator adjudication
+class SimpleOpenAIDriver:
+    """Minimal OpenAI-compatible driver for OrchestratorDriver.decide()."""
+
+    def __init__(self, model: str = "gpt-5.5", base_url: str = "https://api.openai.com/v1", timeout_s: float = 120.0):
+        self.model = model
+        self.base_url = base_url
+        self.timeout_s = timeout_s
+        self.last_context_pack = None
+
+    def probe_capabilities(self) -> DriverCapabilities:
+        return DriverCapabilities(
+            name="openai-compatible",
+            tool_use_accuracy=0.85,
+            recommended_verification_tier=2,
+        )
+
+    def run_command(
+        self, command: str, cwd: Optional[str] = None, shell: Optional[str] = None
+    ) -> CommandResult:
+        """Call OpenAI Chat Completions API."""
+        try:
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                return CommandResult(
+                    exit_code=1,
+                    stdout="",
+                    stderr="OPENAI_API_KEY not set",
+                )
+
+            # Build user prompt for adjudication
+            user_prompt = command
+            if command.startswith("decide:") and self.last_context_pack:
+                decision_type = command.split(":", 1)[1]
+                pack = self.last_context_pack
+                user_prompt = f"""You are the orchestrator adjudication seat for aesop.
+
+Decision type: {decision_type}
+
+File brain:
+"""
+                for source, text in pack.content.items():
+                    user_prompt += f"\n[{source}]:\n{text[:500]}\n"  # Clip for brevity
+
+                if pack.evidence:
+                    user_prompt += "\n[evidence]:\n"
+                    for name, text in pack.evidence.items():
+                        user_prompt += f"  {name}: {text[:200]}\n"
+
+                user_prompt += """
+---
+Respond with valid JSON (no markdown):
+{"verdict": "real_defect|false_positive|enhancement_opportunity|undetermined", "evidence": "...", "confidence": 0.0-1.0}
+"""
+
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "temperature": 0,
+            }
+
+            # Catch temperature rejection for reasoning models
+            try:
+                response_data = default_openai_transport(payload, timeout_s=self.timeout_s, base_url=self.base_url)
+            except Exception as e:
+                if "temperature" in str(e).lower():
+                    payload.pop("temperature", None)
+                    response_data = default_openai_transport(payload, timeout_s=self.timeout_s, base_url=self.base_url)
+                else:
+                    raise
+
+            # Extract response
+            response_text = ""
+            if "choices" in response_data and response_data["choices"]:
+                choice = response_data["choices"][0]
+                if "message" in choice and "content" in choice["message"]:
+                    response_text = choice["message"]["content"]
+
+            return CommandResult(exit_code=0, stdout=response_text, stderr="")
+        except Exception as e:
+            return CommandResult(exit_code=1, stdout="", stderr=str(e))
+
+    def worker_status(self, worker_id: str) -> Any:
+        return {"worker_id": worker_id, "alive": True}
+
+    def dispatch_worker(self, request: Any) -> Any:
+        return {"worker_id": "fake"}
+
+    def resolve_model(self, role: str) -> str:
+        return self.model
+
+    def get_tokens_spent(self) -> Optional[int]:
+        return None
 
 
 # ============================================================================
@@ -411,8 +511,8 @@ def main():
             return 1
 
         # Initialize OrchestratorDriver with OpenAI backend
-        if OpenAICompatibleDriver is None:
-            print("ERROR: OpenAICompatibleDriver not available", file=sys.stderr)
+        if default_openai_transport is None:
+            print("ERROR: default_openai_transport not available", file=sys.stderr)
             return 1
 
         seated_results = []
@@ -426,7 +526,7 @@ def main():
             print(f"Model {model_idx+1}/{len(models_to_run)}: {model}")
             print(f"{'='*70}")
 
-            driver = OpenAICompatibleDriver(model=model)
+            driver = SimpleOpenAIDriver(model=model)
             orchestrator = OrchestratorDriver(backend=driver)
 
             model_results = []
@@ -448,8 +548,9 @@ def main():
                         print(f"  ERROR building pack for {item['id']}: {e}")
                         continue
 
-                    # Make decision
+                    # Make decision (store pack in driver for prompt building)
                     try:
+                        driver.last_context_pack = pack
                         decision = orchestrator.decide(
                             decision_type="adjudicate_findings",
                             context_pack=pack,
