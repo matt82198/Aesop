@@ -32,11 +32,12 @@
   brief: paths under repo/conductor roots). Enforces cardinal rule 4 ("orchestrator reads
   only the file brain") in code. Size-bounded with deterministic truncation (oldest-first
   for logs) and manifest tracking.
-- **orchestrator_driver.py** — OrchestratorDriver seam (increment 1): mirrors AgentDriver
-  pattern for orchestrator adjudication. decide(decision_type, context_pack, schema) → JSON
-  verdict with fail-safe semantics (DECISION_FAILED after retries, never green). Backends:
-  claude, openai-compatible, codex (via AgentDriver abstraction). Schema optional (minimal
-  validation: 'verdict' + 'evidence' keys required always).
+- **orchestrator_backend.py** — OrchestratorBackend: abstract protocol for orchestrator
+  backends (increment 1.5). decide_call(prompt, schema) → raw text. Real impl:
+  OpenAICompatibleOrchestratorBackend (gpt-5 temperature fallback). Fake for tests.
+  Fixes dropped-prompt defect (prompt now passed end-to-end, not via side-channel).
+- **orchestrator_driver.py** — OrchestratorDriver: uses OrchestratorBackend.decide_call()
+  to make structured verdicts via OrchestratorBackend protocol (no AgentDriver coupling).
 - **adjudication_gate.py** — increment 3 (conservative): two-tier escalation gate — cheaper
   challenger decides; undetermined/low-conf/disallowed-type/content-seeded-spot-check calls
   escalate to the incumbent (frontier). Never emits an unconfident verdict as final.

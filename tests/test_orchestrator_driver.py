@@ -25,103 +25,13 @@ DRIVER_DIR = REPO / "driver"
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
-from agent_driver import (  # noqa: E402
-    AgentDriver,
-    CommandResult,
-    DriverCapabilities,
-    WorkerRequest,
-    WorkerResult,
-    WorkerStatus,
-)
 from context_pack import (  # noqa: E402
     ContextPack,
     ContextPackViolation,
     build_context_pack,
 )
 from orchestrator_driver import OrchestratorDriver  # noqa: E402
-
-
-# ============================================================================
-# FakeTransport: Mock backend for offline testing
-# ============================================================================
-
-
-@dataclass
-class FakeTransport:
-    """Mock AgentDriver for testing OrchestratorDriver.
-
-    Returns canned responses so we can test the decide() logic without
-    network/API keys. Supports:
-      - Successful JSON decisions.
-      - Malformed JSON (for retry testing).
-      - Command execution success/failure.
-
-    Attributes:
-        response_sequence: List of responses to return in sequence.
-                          Each item is (stdout, stderr, exit_code).
-        call_count: Tracks how many times the backend was called.
-    """
-
-    response_sequence: list = None
-    call_count: int = 0
-
-    def __post_init__(self):
-        if self.response_sequence is None:
-            self.response_sequence = []
-
-    def probe_capabilities(self) -> DriverCapabilities:
-        return DriverCapabilities(
-            name="fake",
-            tool_use_accuracy=0.99,
-            recommended_verification_tier=1,
-        )
-
-    def run_command(
-        self, command: str, cwd=None, shell=None
-    ) -> CommandResult:
-        """Return the next response in sequence."""
-        if self.call_count >= len(self.response_sequence):
-            return CommandResult(
-                exit_code=1, stdout="", stderr="No more responses"
-            )
-
-        stdout, stderr, exit_code = self.response_sequence[self.call_count]
-        self.call_count += 1
-        return CommandResult(exit_code=exit_code, stdout=stdout, stderr=stderr)
-
-    def worker_status(self, worker_id: str) -> WorkerStatus:
-        return WorkerStatus(worker_id=worker_id)
-
-    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
-        return WorkerResult(worker_id="fake")
-
-    def resolve_model(self, role: str) -> str:
-        return "fake-model"
-
-    def get_tokens_spent(self):
-        return None
-
-
-class FakeAgentDriver(AgentDriver):
-    """Full AgentDriver implementation using FakeTransport for offline testing."""
-
-    def __init__(self, transport: FakeTransport = None):
-        self.transport = transport or FakeTransport()
-
-    def probe_capabilities(self) -> DriverCapabilities:
-        return self.transport.probe_capabilities()
-
-    def run_command(self, command: str, cwd=None, shell=None) -> CommandResult:
-        return self.transport.run_command(command, cwd, shell)
-
-    def worker_status(self, worker_id: str) -> WorkerStatus:
-        return self.transport.worker_status(worker_id)
-
-    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
-        return self.transport.dispatch_worker(request)
-
-    def resolve_model(self, role: str) -> str:
-        return self.transport.resolve_model(role)
+from orchestrator_backend import FakeOrchestratorBackend  # noqa: E402
 
 
 # ============================================================================
@@ -350,19 +260,14 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
             content={"state": "# STATE"},
         )
 
-        decision_response = json.dumps(
-            {
-                "verdict": "APPROVED",
-                "evidence": "Items ranked by priority.",
-            }
-        )
-
-        transport = FakeTransport(
-            response_sequence=[
-                (decision_response, "", 0),  # Success on first try.
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "APPROVED",
+                    "evidence": "Items ranked by priority.",
+                }
             ]
         )
-        backend = FakeAgentDriver(transport)
         driver = OrchestratorDriver(backend)
 
         result = driver.decide("rank_backlog", context)
@@ -370,7 +275,7 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
         self.assertEqual(result["verdict"], "APPROVED")
         self.assertIn("evidence", result)
         self.assertEqual(result["retry_count"], 0)
-        self.assertEqual(transport.call_count, 1)
+        self.assertEqual(backend.call_count, 1)
 
     def test_decide_malformed_then_valid_retries(self):
         """Malformed JSON on first attempt, valid on second -> success."""
@@ -379,27 +284,22 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
             content={"state": "# STATE"},
         )
 
-        valid_response = json.dumps(
-            {
-                "verdict": "APPROVED",
-                "evidence": "Fixed on retry.",
-            }
-        )
-
-        transport = FakeTransport(
-            response_sequence=[
-                ("{INVALID JSON}", "", 0),  # Malformed JSON.
-                (valid_response, "", 0),  # Valid on retry.
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                "{INVALID JSON}",  # Malformed JSON
+                {
+                    "verdict": "APPROVED",
+                    "evidence": "Fixed on retry.",
+                },
             ]
         )
-        backend = FakeAgentDriver(transport)
         driver = OrchestratorDriver(backend, max_retries=2)
 
         result = driver.decide("rank_backlog", context)
 
         self.assertEqual(result["verdict"], "APPROVED")
         self.assertEqual(result["retry_count"], 1)  # Succeeded on 2nd attempt.
-        self.assertEqual(transport.call_count, 2)
+        self.assertEqual(backend.call_count, 2)
 
     def test_decide_always_malformed_fails_safe(self):
         """Always-malformed JSON -> DECISION_FAILED (never green)."""
@@ -408,14 +308,13 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
             content={"state": "# STATE"},
         )
 
-        transport = FakeTransport(
-            response_sequence=[
-                ("{INVALID1}", "", 0),
-                ("{INVALID2}", "", 0),
-                ("{INVALID3}", "", 0),
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                "{INVALID1}",
+                "{INVALID2}",
+                "{INVALID3}",
             ]
         )
-        backend = FakeAgentDriver(transport)
         driver = OrchestratorDriver(backend, max_retries=2)
 
         result = driver.decide("rank_backlog", context)
@@ -434,43 +333,83 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
         )
 
         # Missing 'evidence'.
-        bad_response = json.dumps({"verdict": "APPROVED"})
-
-        transport = FakeTransport(
-            response_sequence=[
-                (bad_response, "", 0),
-                (bad_response, "", 0),
-                (bad_response, "", 0),
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "APPROVED"},
+                {"verdict": "APPROVED"},
+                {"verdict": "APPROVED"},
             ]
         )
-        backend = FakeAgentDriver(transport)
         driver = OrchestratorDriver(backend, max_retries=2)
 
         result = driver.decide("rank_backlog", context)
 
         self.assertEqual(result["verdict"], "DECISION_FAILED")
 
-    def test_decide_backend_command_failure_retries_then_fails(self):
-        """Backend run_command returns non-zero exit code -> fail-safe."""
+    def test_decide_backend_raises_exception_fails_safe(self):
+        """Backend raises exception -> decide_call handles it -> fail-safe."""
         context = ContextPack(
             decision_type="rank_backlog",
             content={"state": "# STATE"},
         )
 
-        transport = FakeTransport(
-            response_sequence=[
-                ("", "error", 1),  # Failed execution.
-                ("", "error", 1),
-                ("", "error", 1),
-            ]
-        )
-        backend = FakeAgentDriver(transport)
+        # Create a backend that raises on decide_call
+        class FailingBackend(FakeOrchestratorBackend):
+            def decide_call(self, prompt, *, schema=None):
+                raise RuntimeError("API error")
+
+        backend = FailingBackend()
         driver = OrchestratorDriver(backend, max_retries=2)
 
         result = driver.decide("rank_backlog", context)
 
         self.assertEqual(result["verdict"], "DECISION_FAILED")
-        self.assertIn("exit", result["evidence"].lower())
+
+    def test_decide_prompt_passed_to_backend_regression_guard(self):
+        """REGRESSION: prompt is actually passed to backend.decide_call().
+
+        This is the regression guard for the dropped-prompt defect:
+        orchestrator_driver.decide() builds the prompt but must pass it to
+        the backend. The old code dropped it, relying on a side-channel
+        last_context_pack attribute. This test verifies the prompt is now
+        properly passed through the backend.decide_call() interface.
+        """
+        context = ContextPack(
+            decision_type="adjudicate_finding",
+            content={
+                "finding": "Potential security issue: missing input validation.",
+                "source": "audit_lens",
+            },
+        )
+
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "real_defect",
+                    "evidence": "Input not sanitized before database insert",
+                    "confidence": 0.95,
+                }
+            ]
+        )
+        driver = OrchestratorDriver(backend)
+
+        result = driver.decide("adjudicate_finding", context)
+
+        # Verify the decision was made successfully.
+        self.assertEqual(result["verdict"], "real_defect")
+
+        # REGRESSION GUARD: verify the prompt was actually passed to the backend.
+        # The fake backend records all received prompts in received_prompts.
+        self.assertEqual(len(backend.received_prompts), 1)
+        prompt = backend.received_prompts[0]
+
+        # The prompt must contain the context-pack content
+        # (this is the evidence that the prompt was built and passed).
+        self.assertIn("adjudicate_finding", prompt)
+        self.assertIn("finding", prompt)
+        self.assertIn("Potential security issue", prompt)
+        # Prompt should include instruction about orchestrator's role.
+        self.assertIn("orchestrator", prompt.lower())
 
 
 class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
@@ -508,14 +447,13 @@ class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
         )
 
         # Missing 'priority' field -> should fail validation.
-        bad_response = json.dumps(
-            {"verdict": "APPROVED", "evidence": "..."}
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "APPROVED", "evidence": "..."},
+                {"verdict": "APPROVED", "evidence": "..."},
+                {"verdict": "APPROVED", "evidence": "..."},
+            ]
         )
-
-        transport = FakeTransport(
-            response_sequence=[(bad_response, "", 0)] * 3
-        )
-        backend = FakeAgentDriver(transport)
         driver = OrchestratorDriver(
             backend, schema_dir=self.schema_dir, max_retries=2
         )
@@ -532,14 +470,11 @@ class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
         )
 
         # Only verdict + evidence, no other fields.
-        minimal_response = json.dumps(
-            {"verdict": "APPROVED", "evidence": "minimal decision"}
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "APPROVED", "evidence": "minimal decision"}
+            ]
         )
-
-        transport = FakeTransport(
-            response_sequence=[(minimal_response, "", 0)]
-        )
-        backend = FakeAgentDriver(transport)
         driver = OrchestratorDriver(
             backend, schema_dir=self.schema_dir, max_retries=2
         )
@@ -563,14 +498,12 @@ class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
             decision_type="test_type", content={"state": "# STATE"}
         )
 
-        valid_response = json.dumps(
-            {"verdict": "APPROVED", "evidence": "test"}
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "APPROVED", "evidence": "test"},
+                {"verdict": "APPROVED", "evidence": "test"},
+            ]
         )
-
-        transport = FakeTransport(
-            response_sequence=[(valid_response, "", 0)] * 2
-        )
-        backend = FakeAgentDriver(transport)
         driver = OrchestratorDriver(
             backend, schema_dir=self.schema_dir, max_retries=1
         )
@@ -583,9 +516,66 @@ class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
         result2 = driver.decide("test_type", context)
         self.assertEqual(result2["verdict"], "APPROVED")
 
-        # Only 2 backend calls (one per decide), not 3 (which would suggest
-        # schema re-loading).
-        self.assertEqual(transport.call_count, 2)
+        # Only 2 backend calls (one per decide).
+        self.assertEqual(backend.call_count, 2)
+
+
+class TestOrchestratorBackendTemperatureFallback(unittest.TestCase):
+    """Test temperature fallback for reasoning models (gpt-5.x)."""
+
+    def test_temperature_fallback_on_unsupported_value_error(self):
+        """On 400 unsupported_value error, retry without temperature."""
+        from orchestrator_backend import OpenAICompatibleOrchestratorBackend
+
+        # Create a fake transport that simulates the temperature error.
+        class FakeTransportWithTempError:
+            def __init__(self):
+                self.call_count = 0
+
+            def __call__(self, payload, timeout_s=120, base_url="https://api.openai.com/v1"):
+                self.call_count += 1
+                # First call: reject temperature
+                if self.call_count == 1:
+                    raise RuntimeError(
+                        "400 unsupported_value: 'temperature' not supported for this model"
+                    )
+                # Second call: succeed
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps({
+                                    "verdict": "APPROVED",
+                                    "evidence": "Decision after temperature fallback",
+                                })
+                            }
+                        }
+                    ],
+                    "model": "gpt-5.5-preview",
+                }
+
+        transport = FakeTransportWithTempError()
+        backend = OpenAICompatibleOrchestratorBackend(
+            model="gpt-5.5-preview", transport=transport
+        )
+
+        # Mock the OPENAI_API_KEY env var for testing (dummy value only).
+        from unittest import mock
+        with mock.patch.dict(
+            "os.environ", {"OPENAI_API_KEY": "test-key-dummy"}
+        ):
+            result = backend.decide_call(
+                "Test prompt",
+                schema=None,
+            )
+
+            # Should have succeeded after fallback.
+            self.assertIsNotNone(result)
+            result_dict = json.loads(result)
+            self.assertEqual(result_dict["verdict"], "APPROVED")
+
+            # Should have made 2 calls (first with temp, retry without).
+            self.assertEqual(transport.call_count, 2)
 
 
 class TestContextPackSizeCap(unittest.TestCase):
@@ -777,22 +767,6 @@ class TestContextPackEvidence(unittest.TestCase):
         self.assertIn("evidence_item", pack.evidence)
         self.assertGreater(pack.total_size_bytes, 0)
         self.assertGreater(pack.evidence_size_bytes, 0)
-
-
-class TestOrchestratorDriverCapabilities(unittest.TestCase):
-    """Test capability delegation to backend."""
-
-    def test_probe_capabilities_delegated(self):
-        """probe_capabilities() delegates to backend."""
-        transport = FakeTransport()
-        backend = FakeAgentDriver(transport)
-        driver = OrchestratorDriver(backend)
-
-        caps = driver.probe_capabilities()
-
-        self.assertEqual(caps.name, "fake")
-        self.assertEqual(caps.tool_use_accuracy, 0.99)
-        self.assertEqual(caps.recommended_verification_tier, 1)
 
 
 if __name__ == "__main__":
