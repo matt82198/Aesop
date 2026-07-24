@@ -253,9 +253,9 @@ class OrchestratorDriver:
         Minimal validation (always enforced):
           - result must be a dict.
           - must have 'verdict' key (string).
-          - must have 'evidence' key (string, may be empty).
+          - must have 'evidence' key (array of >=1 non-empty strings).
 
-        With schema: also validates structure against the schema dict.
+        With schema: also validates verdict enum and required fields.
 
         Args:
             result: Parsed decision result.
@@ -267,20 +267,32 @@ class OrchestratorDriver:
         if not isinstance(result, dict):
             return False
 
+        # Verdict must be a string.
         if not isinstance(result.get("verdict"), str):
             return False
 
-        if "evidence" not in result or not isinstance(result["evidence"], str):
+        # Evidence must be an array of non-empty strings with minItems >= 1.
+        evidence = result.get("evidence")
+        if not isinstance(evidence, list):
+            return False
+        if len(evidence) < 1:
+            return False
+        if not all(isinstance(item, str) and len(item) > 0 for item in evidence):
             return False
 
-        # If schema is provided, do deeper validation (future: jsonschema module).
-        # For now, minimal validation sufficient.
+        # If schema is provided, validate verdict enum and required fields.
         if schema:
-            # Simplified schema check: ensure required fields from schema are present.
             required = schema.get("required", [])
+            # Check all required fields are present.
             for field in required:
                 if field not in result:
                     return False
+
+            # Validate verdict enum if schema defines it.
+            verdict_schema = schema.get("properties", {}).get("verdict", {})
+            allowed_verdicts = verdict_schema.get("enum", [])
+            if allowed_verdicts and result.get("verdict") not in allowed_verdicts:
+                return False
 
         return True
 
@@ -307,10 +319,12 @@ Decision type: {decision_type}
 
 CARDINAL RULE: Verdicts require evidence citations from the context. Never invent
 findings or assume facts not in the file brain. Your output is JSON with:
-  {{"verdict": "...", "evidence": "...", ...}}
+  {{"verdict": "<enum-value>", "evidence": ["citation 1", "citation 2", ...], "confidence": 0.0-1.0, ...}}
 
-Verdict should be one of: APPROVED, REJECTED, NEEDS_CHANGES, or
-DECISION_FAILED if you cannot decide with confidence."""
+Required structure:
+  - verdict: string enum value specific to this decision type
+  - evidence: array of >=1 non-empty citation strings (mandatory)
+  - confidence: optional float 0.0-1.0 indicating confidence in the verdict"""
 
     # User context: the file brain snapshot.
     context_text = "\n\n".join(
@@ -328,7 +342,7 @@ Manifest (what was included/truncated):
 
 ---
 
-Make your decision as JSON:
+Make your decision as JSON (response must include verdict, evidence array, and optional confidence):
 """
 
     return f"{system}\n\n{user}"

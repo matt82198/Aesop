@@ -140,70 +140,9 @@
       }
     },
     "verdict": {
-      "type": "object",
-      "description": "The final merge decision",
-      "required": ["safe_to_merge"],
-      "properties": {
-        "safe_to_merge": {
-          "type": "boolean",
-          "description": "Is this item safe to merge to main?"
-        },
-        "gates_passed": {
-          "type": "array",
-          "description": "Which gates passed",
-          "items": {
-            "type": "string",
-            "enum": ["test_pass", "secret_scan", "ci_green", "branch_protection", "adversarial_review_clean"]
-          }
-        },
-        "gates_failed": {
-          "type": "array",
-          "description": "Which gates failed",
-          "items": {
-            "type": "object",
-            "properties": {
-              "gate": {
-                "type": "string"
-              },
-              "failure_reason": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "blocker_defects": {
-          "type": "array",
-          "description": "Critical issues that block merge",
-          "items": {
-            "type": "object",
-            "properties": {
-              "defect": {
-                "type": "string"
-              },
-              "impact": {
-                "type": "string",
-                "enum": ["data_loss", "security", "test_failure", "branch_protection", "other"]
-              },
-              "remediation": {
-                "type": "string",
-                "description": "How to fix before merge"
-              }
-            }
-          }
-        },
-        "hold_reason": {
-          "type": "string",
-          "description": "If not safe to merge, why not (e.g., 'test_failed', 'secret_scan_blocked', 'adversarial_review_found_defects')"
-        },
-        "escalation_needed": {
-          "type": "boolean",
-          "description": "Does this need human review before merge?"
-        },
-        "escalation_reason": {
-          "type": "string",
-          "description": "If escalation needed, why (unusual pattern, potential security issue, etc.)"
-        }
-      }
+      "type": "string",
+      "enum": ["merge", "block", "escalate", "undetermined"],
+      "description": "The final merge decision"
     },
     "confidence": {
       "type": "number",
@@ -213,33 +152,20 @@
     },
     "evidence": {
       "type": "array",
-      "description": "Citations to gate check results",
+      "description": "Citations to gate check results (mandatory, >=1 item)",
       "items": {
-        "type": "object",
-        "required": ["gate", "description"],
-        "properties": {
-          "gate": {
-            "type": "string",
-            "enum": ["test_output", "secret_scan_log", "ci_run", "branch_protection_check", "adversarial_review_report"]
-          },
-          "description": {
-            "type": "string",
-            "description": "What this gate checked and result"
-          },
-          "status": {
-            "type": "string",
-            "enum": ["passed", "failed"]
-          },
-          "log_excerpt": {
-            "type": "string",
-            "description": "Relevant output from the gate check"
-          },
-          "link": {
-            "type": "string",
-            "description": "URL to CI run, PR, or gate log if available"
-          }
-        }
-      }
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "hold_reason": {
+      "type": "string",
+      "description": "If not safe to merge, why not (e.g., 'test_failed', 'secret_scan_blocked', 'adversarial_review_found_defects')"
+    },
+    "escalation_needed": {
+      "type": "boolean",
+      "description": "Does this need human review before merge?"
     }
   }
 }

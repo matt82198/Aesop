@@ -98,54 +98,9 @@
       }
     },
     "verdict": {
-      "type": "object",
-      "description": "The adjudication decision",
-      "required": ["classification", "actionable"],
-      "properties": {
-        "classification": {
-          "type": "string",
-          "enum": ["real_defect", "false_positive", "minor_quality", "doc_drift", "enhancement_opportunity", "undetermined"],
-          "description": "Categorization of the finding"
-        },
-        "actionable": {
-          "type": "boolean",
-          "description": "Is this finding worth including in a wave backlog?"
-        },
-        "recommended_priority": {
-          "type": "string",
-          "enum": ["p0", "p1", "p2", "p3"],
-          "description": "If actionable, what priority should it have in the backlog"
-        },
-        "severity_adjusted": {
-          "type": "string",
-          "enum": ["p0", "p1", "p2", "p3"],
-          "description": "Refined severity if different from claimed"
-        },
-        "downgrade_reason": {
-          "type": "string",
-          "description": "If severity was downgraded, explain why (e.g., 'style issue, not logic defect')"
-        },
-        "why_false": {
-          "type": "string",
-          "description": "If classified as false_positive, explain the reasoning"
-        },
-        "suggested_fix_approach": {
-          "type": "string",
-          "description": "If actionable, a brief description of how to fix it (not a full implementation plan)"
-        },
-        "related_verdict": {
-          "type": "object",
-          "description": "If this finding is a duplicate/related, reference the primary",
-          "properties": {
-            "primary_finding_id": {
-              "type": "string"
-            },
-            "relationship": {
-              "type": "string"
-            }
-          }
-        }
-      }
+      "type": "string",
+      "enum": ["real_defect", "false_positive", "enhancement_opportunity", "undetermined"],
+      "description": "Categorization of the finding"
     },
     "confidence": {
       "type": "number",
@@ -155,37 +110,25 @@
     },
     "evidence": {
       "type": "array",
-      "description": "Citations supporting this adjudication",
+      "description": "Citations supporting this adjudication (mandatory, >=1 item)",
       "items": {
-        "type": "object",
-        "required": ["type", "description"],
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": ["code_location", "test_output", "prior_decision", "repro_result", "spec_reference"]
-          },
-          "file": {
-            "type": "string",
-            "description": "Source file path"
-          },
-          "lines": {
-            "type": "string",
-            "description": "Line range or number"
-          },
-          "excerpt": {
-            "type": "string",
-            "description": "Relevant code or text"
-          },
-          "description": {
-            "type": "string",
-            "description": "How this evidence supports the verdict"
-          },
-          "link": {
-            "type": "string",
-            "description": "Reference to PR, issue, commit hash, or prior wave"
-          }
-        }
-      }
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "actionable": {
+      "type": "boolean",
+      "description": "Is this finding worth including in a wave backlog?"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["p0", "p1", "p2", "p3"],
+      "description": "If actionable, what priority should it have in the backlog"
+    },
+    "suggested_fix_approach": {
+      "type": "string",
+      "description": "If actionable, a brief description of how to fix it (not a full implementation plan)"
     }
   }
 }

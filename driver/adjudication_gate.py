@@ -115,7 +115,7 @@ class AdjudicationGate:
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
             return {
                 "verdict": incumbent_result.get("verdict"),
-                "evidence": incumbent_result.get("evidence", ""),
+                "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
                 "source": "escalated-failed",
                 "challenger_verdict": challenger_result,
@@ -127,7 +127,7 @@ class AdjudicationGate:
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
             return {
                 "verdict": incumbent_result.get("verdict"),
-                "evidence": incumbent_result.get("evidence", ""),
+                "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
                 "source": "escalated-undetermined",
                 "challenger_verdict": challenger_result,
@@ -139,7 +139,7 @@ class AdjudicationGate:
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
             return {
                 "verdict": incumbent_result.get("verdict"),
-                "evidence": incumbent_result.get("evidence", ""),
+                "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
                 "source": "escalated-lowconf",
                 "challenger_verdict": challenger_result,
@@ -154,7 +154,7 @@ class AdjudicationGate:
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
             return {
                 "verdict": incumbent_result.get("verdict"),
-                "evidence": incumbent_result.get("evidence", ""),
+                "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
                 "source": "escalated-disallowed-type",
                 "challenger_verdict": challenger_result,
@@ -166,7 +166,7 @@ class AdjudicationGate:
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
             return {
                 "verdict": incumbent_result.get("verdict"),
-                "evidence": incumbent_result.get("evidence", ""),
+                "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
                 "source": "escalated-spotcheck",
                 "challenger_verdict": challenger_result,
@@ -176,7 +176,7 @@ class AdjudicationGate:
         # Accept challenger verdict.
         return {
             "verdict": challenger_verdict,
-            "evidence": challenger_result.get("evidence", ""),
+            "evidence": challenger_result.get("evidence", []),
             "confidence": challenger_confidence,
             "source": "challenger",
             "challenger_verdict": challenger_result,
