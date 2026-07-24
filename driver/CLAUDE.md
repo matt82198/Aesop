@@ -49,18 +49,11 @@
 
 ## The five operations (what the wave loop needs from ANY backend)
 
-1. `probe_capabilities() -> DriverCapabilities` — honest self-report (parallel?
-   filesystem? shell? structured output? worktree? cost tracking? accuracy? →
-   recommended verification tier). Read once; everything keys off it.
-2. `dispatch_worker(request) -> WorkerResult` — spawn ONE isolated worker over a
-   prompt + owned_files + workdir; the worker may read/write files, run a shell
-   command, and return a **structured** result (extent reported by the probe).
-3. `worker_status(worker_id) -> WorkerStatus` — liveness / stall detection for
-   the watchdog.
-4. `run_command(command, cwd, shell) -> CommandResult` — ORCHESTRATOR-side
-   command execution (tests, git, verification). Distinct from a worker shell.
-5. `resolve_model(role) -> str` — map an abstract role (`worker`/`setup`/
-   `verify`) to a concrete backend model id.
+1. `probe_capabilities() -> DriverCapabilities` — honest self-report (parallel? fs? shell? structured? worktree? cost? accuracy? → verification tier). Read once; everything keys off it.
+2. `dispatch_worker(request) -> WorkerResult` — spawn ONE isolated worker (prompt + owned_files + workdir); may read/write/run + return a **structured** result (extent per probe).
+3. `worker_status(worker_id) -> WorkerStatus` — liveness / stall detection for the watchdog.
+4. `run_command(command, cwd, shell) -> CommandResult` — ORCHESTRATOR-side exec (tests, git, verify). Distinct from a worker shell.
+5. `resolve_model(role) -> str` — map `worker`/`setup`/`verify` to a concrete backend model id.
 
 Optional (non-abstract): `get_tokens_spent()`.
 
