@@ -414,6 +414,36 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
         # Prompt should include instruction about orchestrator's role.
         self.assertIn("orchestrator", prompt.lower())
 
+    def test_evidence_channel_rendered_into_prompt_regression_guard(self):
+        """REGRESSION: the EVIDENCE channel must reach the model, not just content.
+
+        The seated tool places the finding-under-adjudication and cited code in
+        context_pack.EVIDENCE (not content). _build_decision_prompt previously
+        rendered only content, so the model got no finding to judge and returned
+        spurious 'undetermined' for every item. This guard asserts the finding
+        text AND a cited-code excerpt from the evidence channel appear in the
+        prompt actually sent to the backend.
+        """
+        context = ContextPack(
+            decision_type="adjudicate_finding",
+            content={"state": "STATE.md: phase=demo"},  # file brain
+            evidence={
+                "finding": "FINDING: health-check whitelist may weaken the secret gate.",
+                "cited_code": "secret_scan.py scans file CONTENTS via git blobs, independently.",
+            },
+        )
+        backend = FakeOrchestratorBackend(
+            canned_responses=[{"verdict": "false_positive", "evidence": ["x"], "confidence": 0.8}]
+        )
+        driver = OrchestratorDriver(backend)
+        driver.decide("adjudicate_finding", context)
+
+        prompt = backend.received_prompts[0]
+        # The finding (in the evidence channel) MUST be in the prompt.
+        self.assertIn("health-check whitelist may weaken the secret gate", prompt)
+        # The cited code (also evidence) MUST be in the prompt.
+        self.assertIn("secret_scan.py scans file CONTENTS", prompt)
+
 
 class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
     """Test schema-based validation."""

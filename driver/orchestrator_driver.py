@@ -326,18 +326,36 @@ Required structure:
   - evidence: array of >=1 non-empty citation strings (mandatory)
   - confidence: optional float 0.0-1.0 indicating confidence in the verdict"""
 
-    # User context: the file brain snapshot.
+    # User context: the file brain snapshot. Do NOT re-truncate here — the pack was
+    # already size-bounded at build time; clipping to 500 again would silently
+    # starve the model of context it was given.
     context_text = "\n\n".join(
-        f"[{source}]:\n{text[:500]}"  # Truncate large sources for readability.
+        f"[{source}]:\n{text}"
         for source, text in context_pack.content.items()
     )
 
-    user = f"""File brain (orchestrator's only input):
+    # Evidence channel: the finding under adjudication + cited code/repro. SEPARATE
+    # from content and MUST be rendered — it carries the actual thing to decide on.
+    # Rendering only content (the prior bug) left the model with no finding to judge,
+    # producing spurious 'undetermined' verdicts.
+    evidence = getattr(context_pack, "evidence", None) or {}
+    if evidence:
+        evidence_text = "\n\n".join(
+            f"[{name}]:\n{text}" for name, text in evidence.items()
+        )
+        evidence_block = (
+            "Evidence (the finding to adjudicate + supporting citations):\n"
+            f"{evidence_text}\n\n---\n\n"
+        )
+    else:
+        evidence_block = ""
+
+    user = f"""File brain (orchestrator context):
 {context_text}
 
 ---
 
-Manifest (what was included/truncated):
+{evidence_block}Manifest (what was included/truncated):
 {json.dumps(context_pack.manifest, indent=2)}
 
 ---
