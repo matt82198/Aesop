@@ -31,8 +31,10 @@ if str(TOOLS_DIR) not in sys.path:
 
 from context_pack import ContextPack  # noqa: E402
 from shadow_adjudication import (  # noqa: E402
+    AggregatedScorecardItem,
     CorpusItem,
     ScorecardItem,
+    aggregate_runs,
     build_finding_context_pack,
     compute_scorecard_stats,
     load_corpus,
@@ -595,6 +597,180 @@ class TestEvidenceSymmetry(unittest.TestCase):
                     f"Class {cls} evidence (mean {mean_len:.0f} chars) deviates {deviation:.1%} "
                     f"from overall mean {overall_mean:.0f}; expected <30% variance for fairness",
                 )
+
+
+class TestNeutralCorpus(unittest.TestCase):
+    """Tests for the verdict-neutral corpus (increment 2.6).
+
+    The neutral corpus must:
+    1. Contain only mechanism/behavior facts, not verdict-implying conclusions
+    2. Pass a grep filter excluding conclusion words
+    3. Have no label leak (same as original corpus)
+    """
+
+    def test_neutral_corpus_file_exists(self):
+        """Verify neutral corpus file exists."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-neutral-2026-07-24.jsonl"
+        )
+        self.assertTrue(
+            corpus_path.exists(), f"Neutral corpus file not found: {corpus_path}"
+        )
+
+    def test_neutral_corpus_has_16_items(self):
+        """Neutral corpus must have exactly 16 items."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-neutral-2026-07-24.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+        self.assertEqual(len(corpus), 16, f"Expected 16 items, got {len(corpus)}")
+
+    def test_neutral_corpus_no_conclusion_words(self):
+        """Evidence clauses must not contain verdict-implying conclusion words.
+
+        Banned words (case-insensitive): 'therefore','so the','not a real','correctly catch',
+        'would fail','masquerad','misleads','defeats','not in scope','still scanned',
+        'Impact:','Semantic'.
+        """
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-neutral-2026-07-24.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        banned_words = [
+            "therefore",
+            "so the",
+            "not a real",
+            "correctly catch",
+            "would fail correctly",
+            "masquerad",
+            "misleads",
+            "defeats",
+            "not in scope",
+            "still scanned",
+            "impact:",
+            "semantic:",
+        ]
+
+        for item in corpus:
+            evidence_text = "\n".join(item.evidence).lower()
+            for banned_word in banned_words:
+                self.assertNotIn(
+                    banned_word.lower(),
+                    evidence_text,
+                    f"Item {item.id}: evidence contains banned conclusion word '{banned_word}'",
+                )
+
+    def test_neutral_corpus_no_label_leak(self):
+        """Neutral corpus items must not contain label strings (same as orig corpus)."""
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-neutral-2026-07-24.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+
+        label_strings = [
+            "false_positive",  # As a label, not as a ground truth
+            "real_defect",     # As a label, not as a ground truth
+            "incumbent_verdict",
+            "ground_truth",
+            "gt_note",
+        ]
+
+        for item in corpus:
+            evidence_text = "\n".join(item.evidence)
+            # Check evidence only (labels are OK in the labels object)
+            for label_str in label_strings:
+                self.assertNotIn(
+                    label_str,
+                    evidence_text,
+                    f"Item {item.id}: evidence contains label string '{label_str}'",
+                )
+
+
+class TestRepeatAggregation(unittest.TestCase):
+    """Tests for N-repeat run aggregation (increment 2.6)."""
+
+    def test_aggregate_runs_modal_verdict(self):
+        """Test modal verdict computation across runs."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+            CorpusItem("id2", "text2", "lens2", "false_positive", "false_positive", ""),
+        ]
+
+        # Simulate 3 runs: id1 gets [real_defect, real_defect, false_positive]
+        # id2 gets [false_positive, false_positive, false_positive]
+        run1 = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+            ScorecardItem("id2", "false_positive", False, 0, True, 0, True, True),
+        ]
+        run2 = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+            ScorecardItem("id2", "false_positive", False, 0, True, 0, True, True),
+        ]
+        run3 = [
+            ScorecardItem("id1", "false_positive", False, 0, True, 0, False, False),
+            ScorecardItem("id2", "false_positive", False, 0, True, 0, True, True),
+        ]
+
+        result = aggregate_runs([run1, run2, run3], corpus, 3)
+
+        # id1 modal: real_defect (2/3)
+        id1_agg = next(a for a in result["per_item"] if a.id == "id1")
+        self.assertEqual(id1_agg.modal_verdict, "real_defect")
+        self.assertAlmostEqual(id1_agg.stability, 2.0 / 3, places=2)
+        self.assertEqual(id1_agg.verdict_counts["real_defect"], 2)
+
+        # id2 modal: false_positive (3/3, stable)
+        id2_agg = next(a for a in result["per_item"] if a.id == "id2")
+        self.assertEqual(id2_agg.modal_verdict, "false_positive")
+        self.assertAlmostEqual(id2_agg.stability, 1.0, places=2)
+
+    def test_aggregate_runs_stability_calculation(self):
+        """Test stability (fraction agreeing with mode) is computed correctly."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "false_positive", "false_positive", ""),
+        ]
+
+        # 5 runs: 3 say false_positive, 2 say real_defect
+        runs = [
+            [ScorecardItem("id1", "false_positive", False, 0, True, 0, True, True)],
+            [ScorecardItem("id1", "false_positive", False, 0, True, 0, True, True)],
+            [ScorecardItem("id1", "false_positive", False, 0, True, 0, True, True)],
+            [ScorecardItem("id1", "real_defect", False, 0, True, 0, False, False)],
+            [ScorecardItem("id1", "real_defect", False, 0, True, 0, False, False)],
+        ]
+
+        result = aggregate_runs(runs, corpus, 5)
+
+        item = result["per_item"][0]
+        self.assertEqual(item.modal_verdict, "false_positive")
+        self.assertAlmostEqual(item.stability, 3.0 / 5, places=2)
+        self.assertEqual(item.correct_count, 1)  # Mode matches ground truth
+
+    def test_aggregate_runs_overall_stats(self):
+        """Test that aggregate overall stats are computed from modal verdicts."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+            CorpusItem("id2", "text2", "lens2", "real_defect", "real_defect", ""),
+        ]
+
+        # 2 runs
+        run1 = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+            ScorecardItem("id2", "false_positive", False, 0, True, 0, False, False),
+        ]
+        run2 = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+            ScorecardItem("id2", "real_defect", False, 0, True, 0, True, True),
+        ]
+
+        result = aggregate_runs([run1, run2], corpus, 2)
+        stats = result["overall_stats"]
+
+        # Overall accuracy: 1.5 correct out of 2 on average (id1: both correct, id2: split 50/50)
+        # But modal mode: id1 real_defect (correct), id2 real_defect (correct) = 2/2 = 100%
+        self.assertGreaterEqual(stats["overall_agreement_pct"], 50.0)
+        self.assertEqual(stats["num_runs"], 2)
 
 
 if __name__ == "__main__":
