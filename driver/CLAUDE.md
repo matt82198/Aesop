@@ -37,6 +37,10 @@
   verdict with fail-safe semantics (DECISION_FAILED after retries, never green). Backends:
   claude, openai-compatible, codex (via AgentDriver abstraction). Schema optional (minimal
   validation: 'verdict' + 'evidence' keys required always).
+- **adjudication_gate.py** — OrchestratorDriver increment 3 (conservative): two-tier escalation
+  gate where a cheaper challenger model decides, but undetermined/low-confidence/disallowed-type/
+  spot-check calls escalate to incumbent (frontier) for safety. Never emits an unconfident
+  verdict as final (incumbent-safe by construction).
 - **decisions/** — Decision type schema registry (sibling lane owns schemas; orchestrator
   reads them at runtime; increment 1 treats absent schemas as optional).
 - **../tests/test_agent_driver.py** — the contract's test suite.
@@ -87,6 +91,10 @@ Optional (non-abstract): `get_tokens_spent()`.
 - **Fail-safe verdicts**: `OrchestratorDriver.decide()` returns `{'verdict':
   'DECISION_FAILED', ...}` after retries exhausted; never fabricates a passing
   verdict (mirrors the worker seat's never-green principle).
+- **AdjudicationGate safety invariant** (increment 3): the gate's final verdict is EITHER
+  a confident challenger verdict OR the incumbent's verdict. It NEVER emits an undetermined/
+  DECISION_FAILED/low-confidence challenger verdict as final. The gate is incumbent-safe
+  by construction: every escalation to the incumbent preserves correctness.
 - stdlib-only (`abc`, `dataclasses`, `typing`, `subprocess`), ASCII-only,
   Windows + Linux safe. Concrete adapters own any provider SDK, not this layer.
 

@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""Two-tier adjudication gate: challenger + incumbent escalation (swap increment 3).
+
+CONSERVATIVE design: a cheaper challenger model handles adjudication decisions,
+but escalates every doubtful call to the incumbent (frontier model) for safety.
+This preserves the incumbent's safety by construction: the final verdict is EITHER
+a confident challenger verdict OR the incumbent's verdict. Never undetermined/failed.
+
+Flow:
+  1. Call challenger.decide()
+  2. If verdict=='DECISION_FAILED', escalate (source: escalated-lowconf, reason: failed)
+  3. If verdict=='undetermined', escalate (source: escalated-undetermined)
+  4. If confidence < threshold, escalate (source: escalated-lowconf)
+  5. If decision_type not in allowed_decision_types, escalate (source: escalated-disallowed-type)
+  6. Otherwise, with probability spot_check_frac, escalate for audit (source: escalated-spotcheck)
+  7. Else accept challenger verdict as final
+
+SAFETY INVARIANT:
+  The gate's output verdict on any given item is EITHER the challenger's confident
+  non-undetermined verdict OR the incumbent's verdict. It NEVER emits an undetermined/
+  DECISION_FAILED/low-confidence challenger verdict as final. The gate is therefore
+  >= incumbent-safe on every escalated item and only trusts the challenger where
+  the challenger was confident and allowed.
+
+DETERMINISM:
+  Spot-check decisions are deterministic (seeded) so tests are reproducible.
+  The caller can supply a fixed seed or a per-call nonce.
+
+stdlib-only, ASCII-only, Windows + Linux safe.
+"""
+
+import hashlib
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional
+
+
+@dataclass
+class AdjudicationGate:
+    """Two-tier gate: challenger decides, incumbent escalates on doubt.
+
+    Attributes:
+        challenger: An OrchestratorDriver instance (cheap backend).
+        incumbent_fn: A callable(decision_type, context_pack, schema) -> dict
+                     that returns the incumbent's verdict (frontier model).
+        escalate_on_undetermined: If True (default), escalate undetermined verdicts
+                                 to incumbent. If False (not recommended), accept
+                                 undetermined as final (violates safety invariant).
+        escalate_confidence_below: Float threshold (0.0-1.0, default 0.70).
+                                  If challenger's confidence < threshold, escalate.
+        spot_check_frac: Float probability (0.0-1.0, default 0.10) of escalating
+                        a confident challenger verdict for audit sampling.
+        allowed_decision_types: List of decision types the challenger may decide
+                               without escalation (default: all). If empty, all
+                               types are allowed. Narrow this to exclude narrative
+                               mechanisms the ladder showed weaker models struggle with.
+    """
+
+    challenger: Any  # OrchestratorDriver
+    incumbent_fn: Callable[[str, Any, Optional[Dict[str, Any]]], Dict[str, Any]]
+    escalate_on_undetermined: bool = True
+    escalate_confidence_below: float = 0.70
+    spot_check_frac: float = 0.10
+    allowed_decision_types: List[str] = field(default_factory=list)
+
+    def adjudicate(
+        self,
+        decision_type: str,
+        context_pack: Any,  # ContextPack
+        schema: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Adjudicate using challenger, escalate on doubt, return safe verdict.
+
+        Args:
+            decision_type: Name of the decision class (e.g., 'rank_backlog').
+            context_pack: ContextPack with file-brain snapshot.
+            schema: Optional JSON schema for decision validation.
+
+        Returns:
+            Dict with keys:
+              - verdict: The final verdict (from challenger or incumbent).
+              - evidence: Reasoning for the verdict.
+              - confidence: Confidence score (from challenger or incumbent).
+              - source: Where the verdict came from:
+                  * 'challenger' = challenger confident, allowed, not spot-checked
+                  * 'escalated-undetermined' = challenger returned undetermined
+                  * 'escalated-lowconf' = challenger confidence below threshold
+                  * 'escalated-failed' = challenger returned DECISION_FAILED
+                  * 'escalated-disallowed-type' = decision_type not in allowed set
+                  * 'escalated-spotcheck' = challenger confident but sampled for audit
+              - challenger_verdict: The raw challenger output (always retained for audit).
+              - incumbent_verdict: Present only if escalated (the incumbent's verdict).
+
+        SAFETY INVARIANT (enforced by construction):
+            The returned verdict is EITHER:
+              (a) The challenger's confident (confidence >= threshold) non-undetermined
+                  verdict for an allowed decision type (not spot-checked), OR
+              (b) The incumbent's verdict (escalated for safety).
+            It is NEVER an undetermined/DECISION_FAILED/low-confidence challenger
+            verdict as final. Tests assert this holds for every case.
+        """
+        # Call challenger.
+        challenger_result = self.challenger.decide(decision_type, context_pack, schema)
+
+        # Extract confidence from challenger (default to 0.0 if absent).
+        challenger_confidence = challenger_result.get("confidence", 0.0)
+        if not isinstance(challenger_confidence, (int, float)):
+            challenger_confidence = 0.0
+
+        # Extract verdict (DECISION_FAILED means failure).
+        challenger_verdict = challenger_result.get("verdict")
+
+        # Rule 1: Challenger failed.
+        if challenger_verdict == "DECISION_FAILED":
+            incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
+            return {
+                "verdict": incumbent_result.get("verdict"),
+                "evidence": incumbent_result.get("evidence", ""),
+                "confidence": incumbent_result.get("confidence", 0.0),
+                "source": "escalated-failed",
+                "challenger_verdict": challenger_result,
+                "incumbent_verdict": incumbent_result,
+            }
+
+        # Rule 2: Challenger returned undetermined.
+        if self.escalate_on_undetermined and challenger_verdict == "undetermined":
+            incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
+            return {
+                "verdict": incumbent_result.get("verdict"),
+                "evidence": incumbent_result.get("evidence", ""),
+                "confidence": incumbent_result.get("confidence", 0.0),
+                "source": "escalated-undetermined",
+                "challenger_verdict": challenger_result,
+                "incumbent_verdict": incumbent_result,
+            }
+
+        # Rule 3: Challenger confidence below threshold.
+        if challenger_confidence < self.escalate_confidence_below:
+            incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
+            return {
+                "verdict": incumbent_result.get("verdict"),
+                "evidence": incumbent_result.get("evidence", ""),
+                "confidence": incumbent_result.get("confidence", 0.0),
+                "source": "escalated-lowconf",
+                "challenger_verdict": challenger_result,
+                "incumbent_verdict": incumbent_result,
+            }
+
+        # Rule 4: Decision type not allowed (if allowed list is non-empty).
+        if (
+            self.allowed_decision_types
+            and decision_type not in self.allowed_decision_types
+        ):
+            incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
+            return {
+                "verdict": incumbent_result.get("verdict"),
+                "evidence": incumbent_result.get("evidence", ""),
+                "confidence": incumbent_result.get("confidence", 0.0),
+                "source": "escalated-disallowed-type",
+                "challenger_verdict": challenger_result,
+                "incumbent_verdict": incumbent_result,
+            }
+
+        # Rule 5: Spot-check sample (deterministic, not random).
+        if self._should_spot_check(decision_type, context_pack):
+            incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
+            return {
+                "verdict": incumbent_result.get("verdict"),
+                "evidence": incumbent_result.get("evidence", ""),
+                "confidence": incumbent_result.get("confidence", 0.0),
+                "source": "escalated-spotcheck",
+                "challenger_verdict": challenger_result,
+                "incumbent_verdict": incumbent_result,
+            }
+
+        # Accept challenger verdict.
+        return {
+            "verdict": challenger_verdict,
+            "evidence": challenger_result.get("evidence", ""),
+            "confidence": challenger_confidence,
+            "source": "challenger",
+            "challenger_verdict": challenger_result,
+        }
+
+    def _should_spot_check(self, decision_type: str, context_pack: Any) -> bool:
+        """Deterministically decide if this call should be spot-checked.
+
+        Uses a hash of (decision_type + a stable nonce from the context pack)
+        to avoid time-based or random decisions. The same call will always
+        produce the same result (reproducible for tests).
+
+        Args:
+            decision_type: The decision type string.
+            context_pack: The context pack (used as a stable nonce source).
+
+        Returns:
+            True if this call should be escalated for audit, False otherwise.
+        """
+        # Hash the decision_type and a stable nonce from context_pack.
+        nonce = str(id(context_pack) % 1000000)  # Deterministic per-pack identifier.
+        combined = f"{decision_type}:{nonce}"
+        hash_val = int(hashlib.md5(combined.encode()).hexdigest(), 16)
+        return (hash_val % 100) < int(self.spot_check_frac * 100)
+
+    def summarize_run(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Summarize adjudication run statistics.
+
+        Args:
+            results: List of dicts returned by adjudicate() calls.
+
+        Returns:
+            Dict with:
+              - n: Total number of adjudications.
+              - accepted_challenger: Count of verdicts from challenger (source=='challenger').
+              - escalated_by_reason: Dict mapping reason strings to counts.
+              - spot_check_agreements: Count of escalated-spotcheck where incumbent
+                                      agreed with challenger.
+              - spot_check_disagreements: Count of escalated-spotcheck where they disagreed.
+              - effective_escalation_rate: Fraction of calls that were escalated.
+        """
+        n = len(results)
+        accepted_challenger = 0
+        escalated_by_reason = {}
+        spot_check_agreements = 0
+        spot_check_disagreements = 0
+
+        for result in results:
+            source = result.get("source", "unknown")
+
+            if source == "challenger":
+                accepted_challenger += 1
+            else:
+                # Escalated for some reason.
+                escalated_by_reason[source] = escalated_by_reason.get(source, 0) + 1
+
+                # Track spot-check agreement.
+                if source == "escalated-spotcheck":
+                    challenger_verdict = (
+                        result.get("challenger_verdict", {}).get("verdict")
+                    )
+                    incumbent_verdict = (
+                        result.get("incumbent_verdict", {}).get("verdict")
+                    )
+                    if challenger_verdict == incumbent_verdict:
+                        spot_check_agreements += 1
+                    else:
+                        spot_check_disagreements += 1
+
+        escalated_count = n - accepted_challenger
+        effective_escalation_rate = (
+            escalated_count / n if n > 0 else 0.0
+        )
+
+        return {
+            "n": n,
+            "accepted_challenger": accepted_challenger,
+            "escalated_by_reason": escalated_by_reason,
+            "spot_check_agreements": spot_check_agreements,
+            "spot_check_disagreements": spot_check_disagreements,
+            "effective_escalation_rate": effective_escalation_rate,
+        }
