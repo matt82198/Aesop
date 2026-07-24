@@ -264,71 +264,84 @@ class TestAdjudicationGate(unittest.TestCase):
         # Verdict is from incumbent (even though challenger was confident).
         self.assertEqual(result["verdict"], "false_positive")
 
-    def test_spot_check_escalates_confident_verdict_for_audit(self):
-        """Spot-check: confident verdict sampled -> escalated for audit -> record agreement/disagreement.
+    def test_spot_check_frac_sampled_correctly(self):
+        """Property test: approximately spot_check_frac of ITEMS are sampled.
 
-        Even a confident challenger verdict is escalated for audit sampling.
-        Spot-check decision is deterministic per decision_type (not per call).
-        This records whether incumbent agrees when spot-checked.
+        With frac=0.25 and N>=200 distinct context packs, the law of large numbers
+        ensures sampled count is within ±8% (tolerance for 200 items).
+        This tests that spot-check is per-item (content-seeded), not per-type.
         """
-        self.challenger.verdicts["spotcheck_type_1"] = {
-            "verdict": "approved",
-            "evidence": "All checks pass",
-            "confidence": 0.92,
-        }
-        self.incumbent.correct_verdicts["spotcheck_type_1"] = {
-            "verdict": "approved",
-            "evidence": "Confirmed",
-            "confidence": 0.95,
-        }
-
         gate = AdjudicationGate(
             challenger=self.challenger,
             incumbent_fn=self.incumbent,
-            spot_check_frac=0.50,  # High frac so we hit spot-check for some types.
+            spot_check_frac=0.25,
         )
 
-        # Try multiple decision types and look for a spot-check hit.
-        hit_spot_check = False
-        for i in range(30):
-            decision_type = f"test_decision_type_{i}"
-            self.challenger.verdicts[decision_type] = {
-                "verdict": "approved",
-                "evidence": "Confident",
-                "confidence": 0.90,
-            }
-            self.incumbent.correct_verdicts[decision_type] = {
-                "verdict": "approved",
-                "evidence": "Incumbent agrees",
-                "confidence": 0.95,
-            }
-            result = gate.adjudicate(decision_type, self.context_pack)
+        # Create 200+ distinct context packs with different content.
+        n_items = 200
+        sampled_count = 0
+        decision_type = "sample_property_test"
+
+        self.challenger.verdicts[decision_type] = {
+            "verdict": "approved",
+            "evidence": "Test",
+            "confidence": 0.88,
+        }
+        self.incumbent.correct_verdicts[decision_type] = {
+            "verdict": "approved",
+            "evidence": "Incumbent agrees",
+            "confidence": 0.95,
+        }
+
+        for i in range(n_items):
+            # Each context pack has different content (i-th item).
+            context_pack = type(
+                "ContextPack", (), {"content": {"item_id": str(i), "index": i}}
+            )()
+            result = gate.adjudicate(decision_type, context_pack)
             if result["source"] == "escalated-spotcheck":
-                hit_spot_check = True
-                # Verify spot-check escalated correctly.
-                self.assertEqual(result["verdict"], "approved")
-                self.assertIn("incumbent_verdict", result)
-                break
+                sampled_count += 1
 
-        self.assertTrue(
-            hit_spot_check, "Expected at least one spot-check hit in 30 decision types"
+        # Observed fraction should be within ±0.08 of target 0.25.
+        # With N=200, expected variance is sqrt(p(1-p)/N) ~ 0.03, so ±0.08 is loose.
+        observed_frac = sampled_count / n_items
+        expected_frac = 0.25
+        tolerance = 0.08
+
+        self.assertGreaterEqual(
+            observed_frac,
+            expected_frac - tolerance,
+            f"Sampled {sampled_count}/{n_items} = {observed_frac:.3f}, "
+            f"expected ~{expected_frac} ±{tolerance}",
+        )
+        self.assertLessEqual(
+            observed_frac,
+            expected_frac + tolerance,
+            f"Sampled {sampled_count}/{n_items} = {observed_frac:.3f}, "
+            f"expected ~{expected_frac} ±{tolerance}",
         )
 
-    def test_spot_check_is_deterministic(self):
-        """Spot-check is deterministic: same decision_type -> same result.
+    def test_spot_check_is_deterministic_per_item(self):
+        """Spot-check is deterministic: same item content -> same result (across runs).
 
-        The spot-check uses a stable hash of decision_type alone (not context pack).
-        Repeating with the same decision_type will produce the same spot-check decision,
-        even with different context packs or on different runs.
+        The spot-check uses a stable hash of (decision_type + context_pack content).
+        Repeating with identical item content produces the same spot-check decision,
+        proving reproducibility and that the sampler is not time-based or random.
         """
-        self.challenger.verdicts["deterministic_type"] = {
+        self.challenger.verdicts["det_type"] = {
             "verdict": "approved",
             "evidence": "Test",
             "confidence": 0.85,
         }
 
-        context_pack_a = type("ContextPack", (), {"content": {}})()
-        context_pack_b = type("ContextPack", (), {"content": {}})()
+        # Create identical context packs (same content).
+        content_a = {"state": "ready", "batch_id": "12345"}
+        context_pack_a = type("ContextPack", (), {"content": content_a})()
+        context_pack_a_again = type("ContextPack", (), {"content": content_a})()
+
+        # Create a different context pack (different content).
+        content_b = {"state": "ready", "batch_id": "67890"}
+        context_pack_b = type("ContextPack", (), {"content": content_b})()
 
         gate = AdjudicationGate(
             challenger=self.challenger,
@@ -336,16 +349,21 @@ class TestAdjudicationGate(unittest.TestCase):
             spot_check_frac=0.50,
         )
 
-        # Call with same decision_type, different context packs.
-        result1 = gate.adjudicate("deterministic_type", context_pack_a)
-        result2 = gate.adjudicate("deterministic_type", context_pack_b)
-        # Should have same source (deterministic per decision_type).
-        self.assertEqual(result1["source"], result2["source"])
+        # Call with same content twice (should be identical decision).
+        result1 = gate.adjudicate("det_type", context_pack_a)
+        result2 = gate.adjudicate("det_type", context_pack_a_again)
+        # Same item (same content) -> same spot-check decision (deterministic).
+        self.assertEqual(
+            result1["source"],
+            result2["source"],
+            "Same item content should produce identical spot-check decision",
+        )
 
-        # Call with different decision_type (may have different spot-check result).
-        result3 = gate.adjudicate("different_type", context_pack_a)
-        # Different decision_type may have different spot-check decision (that's OK).
-        # The invariant is: same decision_type -> same spot-check decision.
+        # Call with different content (different decision_type doesn't matter;
+        # different content = independent draw).
+        result3 = gate.adjudicate("det_type", context_pack_b)
+        # Different items may have different spot-check decisions (that's OK).
+        # The invariant is: same content -> same decision.
 
     def test_safety_invariant_never_returns_undetermined_as_final(self):
         """Safety invariant: never emit undetermined as final verdict.
@@ -606,6 +624,7 @@ class TestAdjudicationGate(unittest.TestCase):
             challenger=challenger,
             incumbent_fn=incumbent,
             allowed_decision_types=["mechanism_1", "spotcheck_1", "failed_1", "lowconf_1"],
+            spot_check_frac=0.0,  # Disable spot-check for this proof test.
         )
 
         results = []
@@ -650,6 +669,65 @@ class TestAdjudicationGate(unittest.TestCase):
         self.assertGreaterEqual(summary["accepted_challenger"], 1)
         self.assertGreaterEqual(summary["effective_escalation_rate"], 0.5)
         self.assertIn("escalated-undetermined", summary["escalated_by_reason"])
+
+    def test_spot_check_frac_zero_never_samples(self):
+        """Boundary: spot_check_frac=0.0 never escalates for spot-check.
+
+        With frac=0.0, confident verdicts are never sampled for audit.
+        """
+        self.challenger.verdicts["never_sample"] = {
+            "verdict": "approved",
+            "evidence": "Confident",
+            "confidence": 0.90,
+        }
+
+        gate = AdjudicationGate(
+            challenger=self.challenger,
+            incumbent_fn=self.incumbent,
+            spot_check_frac=0.0,  # Never sample.
+        )
+
+        # Try 50 distinct items; none should be spot-checked.
+        for i in range(50):
+            ctx = type("ContextPack", (), {"content": {"id": i}})()
+            result = gate.adjudicate("never_sample", ctx)
+            self.assertNotEqual(
+                result["source"],
+                "escalated-spotcheck",
+                f"Item {i} should never be spot-checked with frac=0.0",
+            )
+
+    def test_spot_check_frac_one_always_samples(self):
+        """Boundary: spot_check_frac=1.0 always escalates for spot-check.
+
+        With frac=1.0, all confident verdicts are sampled for audit.
+        """
+        self.challenger.verdicts["always_sample"] = {
+            "verdict": "rejected",
+            "evidence": "Confident",
+            "confidence": 0.92,
+        }
+        self.incumbent.correct_verdicts["always_sample"] = {
+            "verdict": "rejected",
+            "evidence": "Incumbent agrees",
+            "confidence": 0.95,
+        }
+
+        gate = AdjudicationGate(
+            challenger=self.challenger,
+            incumbent_fn=self.incumbent,
+            spot_check_frac=1.0,  # Always sample.
+        )
+
+        # Try 20 distinct items; all should be spot-checked.
+        for i in range(20):
+            ctx = type("ContextPack", (), {"content": {"id": i}})()
+            result = gate.adjudicate("always_sample", ctx)
+            self.assertEqual(
+                result["source"],
+                "escalated-spotcheck",
+                f"Item {i} should always be spot-checked with frac=1.0",
+            )
 
 
 if __name__ == "__main__":

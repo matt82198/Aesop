@@ -30,6 +30,7 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 """
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -184,19 +185,39 @@ class AdjudicationGate:
     def _should_spot_check(self, decision_type: str, context_pack: Any) -> bool:
         """Deterministically decide if this call should be spot-checked.
 
-        Uses a hash of decision_type alone to avoid time-based or random decisions.
-        The same decision_type will always produce the same spot-check result,
-        making tests reproducible and operators predictable.
+        Spot-check is seeded per ITEM (not per decision_type). Each distinct item
+        (context_pack with different content) gets an independent draw at the
+        configured fraction. The same item content always produces the same decision
+        (deterministic, reproducible across runs). Different items produce independent
+        decisions, so approximately spot_check_frac of all items get sampled.
 
         Args:
             decision_type: The decision type string.
-            context_pack: Not used for the hash (only decision_type matters).
+            context_pack: The context pack, used to build a stable content digest.
 
         Returns:
             True if this call should be escalated for audit, False otherwise.
         """
-        # Hash only the decision_type for deterministic per-type spot-check.
-        hash_val = int(hashlib.md5(decision_type.encode()).hexdigest(), 16)
+        # Build a stable per-item key from (decision_type + context_pack content).
+        # Extract content digest from the pack (try .content attr, fall back to str).
+        canonical = decision_type + "|"
+        if hasattr(context_pack, "content") and isinstance(context_pack.content, dict):
+            # Sorted JSON of content items for stable serialization.
+            try:
+                content_text = json.dumps(
+                    sorted(context_pack.content.items()), separators=(",", ":")
+                )
+                canonical += content_text
+            except (TypeError, ValueError):
+                # If JSON encoding fails, fall back to str.
+                canonical += str(context_pack)
+        else:
+            # No .content attr; use string representation.
+            canonical += str(context_pack)
+
+        # Hash the canonical key to get a deterministic integer.
+        hash_val = int(hashlib.md5(canonical.encode()).hexdigest(), 16)
+        # Sample at the configured fraction (0.0-1.0).
         return (hash_val % 100) < int(self.spot_check_frac * 100)
 
     def summarize_run(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
