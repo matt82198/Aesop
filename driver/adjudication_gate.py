@@ -184,21 +184,19 @@ class AdjudicationGate:
     def _should_spot_check(self, decision_type: str, context_pack: Any) -> bool:
         """Deterministically decide if this call should be spot-checked.
 
-        Uses a hash of (decision_type + a stable nonce from the context pack)
-        to avoid time-based or random decisions. The same call will always
-        produce the same result (reproducible for tests).
+        Uses a hash of decision_type alone to avoid time-based or random decisions.
+        The same decision_type will always produce the same spot-check result,
+        making tests reproducible and operators predictable.
 
         Args:
             decision_type: The decision type string.
-            context_pack: The context pack (used as a stable nonce source).
+            context_pack: Not used for the hash (only decision_type matters).
 
         Returns:
             True if this call should be escalated for audit, False otherwise.
         """
-        # Hash the decision_type and a stable nonce from context_pack.
-        nonce = str(id(context_pack) % 1000000)  # Deterministic per-pack identifier.
-        combined = f"{decision_type}:{nonce}"
-        hash_val = int(hashlib.md5(combined.encode()).hexdigest(), 16)
+        # Hash only the decision_type for deterministic per-type spot-check.
+        hash_val = int(hashlib.md5(decision_type.encode()).hexdigest(), 16)
         return (hash_val % 100) < int(self.spot_check_frac * 100)
 
     def summarize_run(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -267,18 +267,16 @@ class TestAdjudicationGate(unittest.TestCase):
     def test_spot_check_escalates_confident_verdict_for_audit(self):
         """Spot-check: confident verdict sampled -> escalated for audit -> record agreement/disagreement.
 
-        Even a confident challenger verdict is escalated for audit sampling
-        (default 10%). This records whether incumbent agrees.
+        Even a confident challenger verdict is escalated for audit sampling.
+        Spot-check decision is deterministic per decision_type (not per call).
+        This records whether incumbent agrees when spot-checked.
         """
-        # Use a specific context pack so we can predict the spot-check decision.
-        context_pack = type("ContextPack", (), {"content": {}, "_spot_id": 0})()
-
-        self.challenger.verdicts["sample_decision"] = {
+        self.challenger.verdicts["spotcheck_type_1"] = {
             "verdict": "approved",
             "evidence": "All checks pass",
             "confidence": 0.92,
         }
-        self.incumbent.correct_verdicts["sample_decision"] = {
+        self.incumbent.correct_verdicts["spotcheck_type_1"] = {
             "verdict": "approved",
             "evidence": "Confirmed",
             "confidence": 0.95,
@@ -287,14 +285,24 @@ class TestAdjudicationGate(unittest.TestCase):
         gate = AdjudicationGate(
             challenger=self.challenger,
             incumbent_fn=self.incumbent,
-            spot_check_frac=0.50,  # High frac so we hit spot-check in test.
+            spot_check_frac=0.50,  # High frac so we hit spot-check for some types.
         )
 
-        # Make several calls and look for a spot-check hit.
+        # Try multiple decision types and look for a spot-check hit.
         hit_spot_check = False
-        for i in range(20):
-            ctx = type("ContextPack", (), {"content": {}, "_spot_id": i})()
-            result = gate.adjudicate("sample_decision", ctx)
+        for i in range(30):
+            decision_type = f"test_decision_type_{i}"
+            self.challenger.verdicts[decision_type] = {
+                "verdict": "approved",
+                "evidence": "Confident",
+                "confidence": 0.90,
+            }
+            self.incumbent.correct_verdicts[decision_type] = {
+                "verdict": "approved",
+                "evidence": "Incumbent agrees",
+                "confidence": 0.95,
+            }
+            result = gate.adjudicate(decision_type, self.context_pack)
             if result["source"] == "escalated-spotcheck":
                 hit_spot_check = True
                 # Verify spot-check escalated correctly.
@@ -303,35 +311,41 @@ class TestAdjudicationGate(unittest.TestCase):
                 break
 
         self.assertTrue(
-            hit_spot_check, "Expected at least one spot-check in 20 calls"
+            hit_spot_check, "Expected at least one spot-check hit in 30 decision types"
         )
 
     def test_spot_check_is_deterministic(self):
-        """Spot-check is deterministic: same context_pack -> same decision.
+        """Spot-check is deterministic: same decision_type -> same result.
 
-        The spot-check uses a stable hash of (decision_type, nonce), not random.
-        Repeating with the same context pack should produce the same result.
+        The spot-check uses a stable hash of decision_type alone (not context pack).
+        Repeating with the same decision_type will produce the same spot-check decision,
+        even with different context packs or on different runs.
         """
+        self.challenger.verdicts["deterministic_type"] = {
+            "verdict": "approved",
+            "evidence": "Test",
+            "confidence": 0.85,
+        }
+
         context_pack_a = type("ContextPack", (), {"content": {}})()
         context_pack_b = type("ContextPack", (), {"content": {}})()
 
-        # Make a gate that might spot-check (high frac).
         gate = AdjudicationGate(
             challenger=self.challenger,
             incumbent_fn=self.incumbent,
             spot_check_frac=0.50,
         )
 
-        # Call with same context twice.
-        result1 = gate.adjudicate("test_type_a", context_pack_a)
-        result2 = gate.adjudicate("test_type_a", context_pack_a)
-        # Should have same source (deterministic).
+        # Call with same decision_type, different context packs.
+        result1 = gate.adjudicate("deterministic_type", context_pack_a)
+        result2 = gate.adjudicate("deterministic_type", context_pack_b)
+        # Should have same source (deterministic per decision_type).
         self.assertEqual(result1["source"], result2["source"])
 
-        # Call with different context.
-        result3 = gate.adjudicate("test_type_a", context_pack_b)
-        # May differ from result1 (different nonce).
-        # The point is: result1 and result2 are identical.
+        # Call with different decision_type (may have different spot-check result).
+        result3 = gate.adjudicate("different_type", context_pack_a)
+        # Different decision_type may have different spot-check decision (that's OK).
+        # The invariant is: same decision_type -> same spot-check decision.
 
     def test_safety_invariant_never_returns_undetermined_as_final(self):
         """Safety invariant: never emit undetermined as final verdict.
@@ -469,21 +483,32 @@ class TestAdjudicationGate(unittest.TestCase):
         self.assertEqual(result["source"], "escalated-failed")
 
     def test_empty_allowed_list_means_all_allowed(self):
-        """Empty allowed_decision_types means all types are allowed."""
-        self.challenger.verdicts["any_type"] = {
+        """Empty allowed_decision_types means all types are allowed (unless spot-checked).
+
+        With empty allowed list, the gate checks: undetermined? no. Low-conf? no.
+        Disallowed type? no (list is empty). Spot-check? Maybe. If not spot-checked,
+        accept. If spot-checked, escalate.
+        """
+        self.challenger.verdicts["permit_test_type"] = {
             "verdict": "approved",
-            "evidence": "Any type allowed",
-            "confidence": 0.85,
+            "evidence": "Type is allowed",
+            "confidence": 0.88,
+        }
+        self.incumbent.correct_verdicts["permit_test_type"] = {
+            "verdict": "approved",
+            "evidence": "Incumbent agrees",
+            "confidence": 0.95,
         }
 
         gate = AdjudicationGate(
             challenger=self.challenger,
             incumbent_fn=self.incumbent,
-            allowed_decision_types=[],  # Empty means all allowed.
+            allowed_decision_types=[],  # Empty means all types are allowed.
+            spot_check_frac=0.0,  # Disable spot-check for this test.
         )
 
-        result = gate.adjudicate("any_type", self.context_pack)
-        # Should accept challenger (confident, type is allowed).
+        result = gate.adjudicate("permit_test_type", self.context_pack)
+        # Should accept challenger (confident, type is allowed, not spot-checked).
         self.assertEqual(result["source"], "challenger")
 
     def test_offline_proof_end_to_end(self):
