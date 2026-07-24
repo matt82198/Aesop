@@ -32,11 +32,12 @@
   brief: paths under repo/conductor roots). Enforces cardinal rule 4 ("orchestrator reads
   only the file brain") in code. Size-bounded with deterministic truncation (oldest-first
   for logs) and manifest tracking.
-- **orchestrator_driver.py** — OrchestratorDriver seam (increment 1): mirrors AgentDriver
-  pattern for orchestrator adjudication. decide(decision_type, context_pack, schema) → JSON
-  verdict with fail-safe semantics (DECISION_FAILED after retries, never green). Backends:
-  claude, openai-compatible, codex (via AgentDriver abstraction). Schema optional (minimal
-  validation: 'verdict' + 'evidence' keys required always).
+- **orchestrator_backend.py** — OrchestratorBackend: abstract protocol for orchestrator
+  backends (increment 1.5). decide_call(prompt, schema) → raw text. Real impl:
+  OpenAICompatibleOrchestratorBackend (gpt-5 temperature fallback). Fake for tests.
+  Fixes dropped-prompt defect (prompt now passed end-to-end, not via side-channel).
+- **orchestrator_driver.py** — OrchestratorDriver: uses OrchestratorBackend.decide_call()
+  to make structured verdicts via OrchestratorBackend protocol (no AgentDriver coupling).
 - **adjudication_gate.py** — increment 3 (conservative): two-tier escalation gate — cheaper
   challenger decides; undetermined/low-conf/disallowed-type/content-seeded-spot-check calls
   escalate to the incumbent (frontier). Never emits an unconfident verdict as final.
@@ -48,18 +49,11 @@
 
 ## The five operations (what the wave loop needs from ANY backend)
 
-1. `probe_capabilities() -> DriverCapabilities` — honest self-report (parallel?
-   filesystem? shell? structured output? worktree? cost tracking? accuracy? →
-   recommended verification tier). Read once; everything keys off it.
-2. `dispatch_worker(request) -> WorkerResult` — spawn ONE isolated worker over a
-   prompt + owned_files + workdir; the worker may read/write files, run a shell
-   command, and return a **structured** result (extent reported by the probe).
-3. `worker_status(worker_id) -> WorkerStatus` — liveness / stall detection for
-   the watchdog.
-4. `run_command(command, cwd, shell) -> CommandResult` — ORCHESTRATOR-side
-   command execution (tests, git, verification). Distinct from a worker shell.
-5. `resolve_model(role) -> str` — map an abstract role (`worker`/`setup`/
-   `verify`) to a concrete backend model id.
+1. `probe_capabilities() -> DriverCapabilities` — honest self-report (parallel? fs? shell? structured? worktree? cost? accuracy? → verification tier). Read once; everything keys off it.
+2. `dispatch_worker(request) -> WorkerResult` — spawn ONE isolated worker (prompt + owned_files + workdir); may read/write/run + return a **structured** result (extent per probe).
+3. `worker_status(worker_id) -> WorkerStatus` — liveness / stall detection for the watchdog.
+4. `run_command(command, cwd, shell) -> CommandResult` — ORCHESTRATOR-side exec (tests, git, verify). Distinct from a worker shell.
+5. `resolve_model(role) -> str` — map `worker`/`setup`/`verify` to a concrete backend model id.
 
 Optional (non-abstract): `get_tokens_spent()`.
 

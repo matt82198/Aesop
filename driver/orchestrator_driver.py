@@ -30,6 +30,7 @@ if str(DRIVER_DIR) not in sys.path:
 
 from agent_driver import AgentDriver, CommandResult, DriverCapabilities
 from context_pack import ContextPack
+from orchestrator_backend import OrchestratorBackend
 
 
 class DecisionFailed(Exception):
@@ -41,7 +42,7 @@ class DecisionFailed(Exception):
 class OrchestratorDriver:
     """Backend-agnostic orchestrator decision-making seam.
 
-    Wraps an AgentDriver and uses it to make structured judgments about
+    Wraps an OrchestratorBackend and uses it to make structured judgments about
     orchestration: ranking backlog items, adjudicating audit findings,
     reviewing diffs, and deciding merge eligibility.
 
@@ -56,14 +57,14 @@ class OrchestratorDriver:
 
     def __init__(
         self,
-        backend: AgentDriver,
+        backend: OrchestratorBackend,
         schema_dir: Optional[str] = None,
         max_retries: int = 2,
     ):
         """Initialize an OrchestratorDriver.
 
         Args:
-            backend: An AgentDriver instance (claude, codex, openai-compatible, etc.).
+            backend: An OrchestratorBackend instance (openai-compatible, etc.).
             schema_dir: Optional path to a directory containing decision schemas
                        (decisions/<type>.schema.json). If provided, schemas are
                        loaded and used to validate decisions. Absent schemas are
@@ -75,10 +76,6 @@ class OrchestratorDriver:
         self.schema_dir = schema_dir
         self.max_retries = max_retries
         self._schemas = {}  # Cache loaded schemas.
-
-    def probe_capabilities(self) -> DriverCapabilities:
-        """Return the backend's capabilities (delegated to AgentDriver)."""
-        return self.backend.probe_capabilities()
 
     def decide(
         self,
@@ -143,18 +140,17 @@ class OrchestratorDriver:
         # Dispatch and retry on malformed output.
         for attempt in range(1 + self.max_retries):
             try:
-                # Call the backend with structured output request.
-                verdict_dict = self.backend.run_command(
-                    command=f"decide:{decision_type}",  # Pseudo-command for logging.
-                    cwd=None,
-                )
-                if verdict_dict.exit_code != 0:
-                    # Backend execution failed.
+                # Call the backend with the built prompt and schema.
+                # decide_call() returns raw text; we parse it.
+                try:
+                    response_text = self.backend.decide_call(prompt, schema=schema)
+                except Exception as backend_error:
+                    # Backend call failed (network, API error, etc.).
                     if attempt < self.max_retries:
                         continue
                     return {
                         "verdict": "DECISION_FAILED",
-                        "evidence": f"Backend execution failed (exit {verdict_dict.exit_code})",
+                        "evidence": f"Backend error after {attempt + 1} attempts: {backend_error}",
                         "decision_type": decision_type,
                         "retry_count": attempt,
                         "schema_validated": False,
@@ -162,7 +158,7 @@ class OrchestratorDriver:
 
                 # Parse output as JSON.
                 try:
-                    result = json.loads(verdict_dict.stdout)
+                    result = json.loads(response_text)
                 except json.JSONDecodeError as e:
                     if attempt < self.max_retries:
                         continue
@@ -194,6 +190,7 @@ class OrchestratorDriver:
                 return result
 
             except Exception as e:
+                # Unexpected exception (should not happen if logic above is correct).
                 if attempt < self.max_retries:
                     continue
                 raise DecisionFailed(

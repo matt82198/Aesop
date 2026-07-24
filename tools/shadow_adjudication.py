@@ -26,240 +26,52 @@ DRIVER_DIR = REPO_ROOT / "driver"
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
-from agent_driver import (  # noqa: E402
-    AgentDriver,
-    CommandResult,
-    DriverCapabilities,
-    WorkerRequest,
-    WorkerResult,
-    WorkerStatus,
-)
 from context_pack import build_context_pack, ContextPack  # noqa: E402
 from orchestrator_driver import OrchestratorDriver  # noqa: E402
+from orchestrator_backend import (  # noqa: E402
+    FakeOrchestratorBackend,
+    OpenAICompatibleOrchestratorBackend,
+)
 from openai_transport import default_openai_transport  # noqa: E402
 
 
 # ============================================================================
-# FakeTransport (offline testing)
+# Enhanced backend wrapper to track served models and tokens
 # ============================================================================
 
 
-@dataclass
-class FakeTransport:
-    """Mock transport for offline testing."""
+class ShadowAdjudicationBackend:
+    """Wrapper around OrchestratorBackend to track served models and tokens.
 
-    response_sequence: List = field(default_factory=list)
-    call_count: int = 0
-
-    def __call__(self, payload: dict) -> dict:
-        """Return canned response."""
-        if self.call_count >= len(self.response_sequence):
-            raise RuntimeError("No more canned responses in FakeTransport")
-        response = self.response_sequence[self.call_count]
-        self.call_count += 1
-        return response
-
-
-class FakeOpenAIDriver(AgentDriver):
-    """OpenAI-compatible backend using FakeTransport for offline testing."""
-
-    def __init__(self, transport: FakeTransport):
-        self.transport = transport
-
-    def probe_capabilities(self) -> DriverCapabilities:
-        return DriverCapabilities(
-            name="fake-openai",
-            tool_use_accuracy=0.85,
-            recommended_verification_tier=2,
-        )
-
-    def run_command(
-        self, command: str, cwd: Optional[str] = None, shell: Optional[str] = None
-    ) -> CommandResult:
-        """Invoke the transport and return formatted result."""
-        try:
-            # Build a minimal OpenAI Chat Completions payload.
-            payload = {
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": command}],
-                "temperature": 0,
-            }
-            response_data = self.transport(payload)
-            # Format as JSON string in stdout.
-            response_json = json.dumps(response_data)
-            return CommandResult(exit_code=0, stdout=response_json, stderr="")
-        except Exception as e:
-            return CommandResult(exit_code=1, stdout="", stderr=str(e))
-
-    def worker_status(self, worker_id: str) -> WorkerStatus:
-        return WorkerStatus(worker_id=worker_id)
-
-    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
-        return WorkerResult(worker_id="fake")
-
-    def resolve_model(self, role: str) -> str:
-        return "gpt-4o-mini"
-
-    def get_tokens_spent(self) -> Optional[int]:
-        return None
-
-
-class OpenAICompatibleDriver(AgentDriver):
-    """OpenAI-compatible backend (live or custom base_url)."""
+    Decorates the real backend to record which model the API reports as having
+    served each decision (evidence of which brain answered).
+    """
 
     def __init__(
         self,
-        base_url: str = "https://api.openai.com/v1",
-        timeout_s: float = 120.0,
+        backend: "OrchestratorBackend",
         model: str = "gpt-4o-mini",
     ):
-        self.base_url = base_url
-        self.timeout_s = timeout_s
+        self.backend = backend
         self.model = model
         self.tokens_spent = 0
-        self.last_context_pack = None
-        # Evidence: the model id the API reports as having SERVED each call
-        # (response body "model" field). Recorded so every rung's scorecard can
-        # prove which brain actually answered, not just which was requested.
         self.served_models: List[str] = []
 
-    def probe_capabilities(self) -> DriverCapabilities:
-        return DriverCapabilities(
-            name="openai-compatible",
-            tool_use_accuracy=0.85,
-            recommended_verification_tier=2,
-        )
+    def decide_call(self, prompt: str, *, schema=None) -> str:
+        """Call the backend and record telemetry."""
+        response_text = self.backend.decide_call(prompt, schema=schema)
 
-    def run_command(
-        self, command: str, cwd: Optional[str] = None, shell: Optional[str] = None
-    ) -> CommandResult:
-        """Call OpenAI Chat Completions API for decision-making."""
+        # Try to extract served model from the response if it's JSON.
         try:
-            # Ensure env var is set BEFORE accessing it (runtime check).
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if not api_key:
-                return CommandResult(
-                    exit_code=1,
-                    stdout="",
-                    stderr="OPENAI_API_KEY environment variable not set",
-                )
+            response_json = json.loads(response_text)
+            if isinstance(response_json, dict) and "model" in response_json:
+                served = response_json.get("model")
+                if served:
+                    self.served_models.append(str(served))
+        except (json.JSONDecodeError, ValueError):
+            pass
 
-            # If this is a decision command, build a proper prompt.
-            if command.startswith("decide:"):
-                decision_type = command.split(":", 1)[1]
-                # Use the last context pack if available.
-                if self.last_context_pack:
-                    pack = self.last_context_pack
-                    user_prompt = f"""You are the orchestrator adjudication seat for aesop.
-
-Decision type: {decision_type}
-
-File brain (orchestrator's only input):
-"""
-                    # Include main content (NO 500-char clip; pack's own size bounds apply).
-                    for source, text in pack.content.items():
-                        user_prompt += f"\n[{source}]:\n{text}\n"
-
-                    # Include evidence section if present (increment 2.5).
-                    if pack.evidence:
-                        user_prompt += "\n[evidence]:\n"
-                        for evidence_name, evidence_text in pack.evidence.items():
-                            user_prompt += f"  {evidence_name}:\n{evidence_text}\n"
-
-                    user_prompt += """
-
----
-
-Respond with valid JSON (no code blocks, no markdown). Must include:
-- verdict (string): "real_defect", "false_positive", "enhancement_opportunity", or "undetermined"
-- evidence (string): your reasoning explaining the classification
-- confidence (float 0.0-1.0): your confidence in this classification
-
-Example:
-{"verdict": "real_defect", "evidence": "Explanation of why this is a real defect", "confidence": 0.95}
-
-Classify this finding."""
-                else:
-                    user_prompt = command
-
-            else:
-                user_prompt = command
-
-            # Build the payload with temperature 0 for consistency. Reasoning-family
-            # models (gpt-5.x) reject non-default temperature; on that specific 400
-            # we drop the key and remember (recorded in scorecard as a parity note).
-            payload = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": user_prompt}],
-            }
-            if not getattr(self, "omit_temperature", False):
-                payload["temperature"] = 0
-
-            try:
-                response_data = default_openai_transport(
-                    payload, timeout_s=self.timeout_s, base_url=self.base_url
-                )
-            except Exception as te:
-                if "temperature" in str(te) and "unsupported_value" in str(te).lower():
-                    self.omit_temperature = True
-                    payload.pop("temperature", None)
-                    response_data = default_openai_transport(
-                        payload, timeout_s=self.timeout_s, base_url=self.base_url
-                    )
-                else:
-                    raise
-
-            # Track tokens if available.
-            if isinstance(response_data, dict) and "usage" in response_data:
-                usage = response_data.get("usage", {})
-                self.tokens_spent += usage.get("total_tokens", 0)
-
-            # Record the served model id (evidence of which brain answered).
-            if isinstance(response_data, dict) and response_data.get("model"):
-                self.served_models.append(str(response_data["model"]))
-
-            # Extract the completion text and try to parse as JSON decision.
-            if isinstance(response_data, dict) and "choices" in response_data:
-                choices = response_data.get("choices", [])
-                if choices and "message" in choices[0]:
-                    completion_text = choices[0]["message"].get("content", "")
-                    # Try to extract JSON from the completion.
-                    try:
-                        import re
-                        # Try to extract JSON from markdown code blocks first.
-                        code_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', completion_text, re.DOTALL)
-                        if code_match:
-                            decision_json = json.loads(code_match.group(1))
-                            return CommandResult(exit_code=0, stdout=json.dumps(decision_json), stderr="")
-
-                        # Try to extract raw JSON object.
-                        json_match = re.search(r'\{.*\}', completion_text, re.DOTALL)
-                        if json_match:
-                            decision_json = json.loads(json_match.group())
-                            return CommandResult(exit_code=0, stdout=json.dumps(decision_json), stderr="")
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-                    # If no JSON found, return the text as-is for error handling.
-                    return CommandResult(exit_code=1, stdout=completion_text, stderr="Failed to parse JSON from response")
-
-            # Fallback: return the raw response.
-            response_json = json.dumps(response_data)
-            return CommandResult(exit_code=0, stdout=response_json, stderr="")
-
-        except Exception as e:
-            return CommandResult(exit_code=1, stdout="", stderr=str(e))
-
-    def worker_status(self, worker_id: str) -> WorkerStatus:
-        return WorkerStatus(worker_id=worker_id)
-
-    def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
-        return WorkerResult(worker_id="fake")
-
-    def resolve_model(self, role: str) -> str:
-        return self.model
-
-    def get_tokens_spent(self) -> Optional[int]:
-        return self.tokens_spent
+        return response_text
 
 
 # ============================================================================
@@ -448,11 +260,7 @@ def adjudicate_one_finding(
                 )
                 raise ValueError(f"Blind adjudication violated: {label_key} in pack")
 
-        # Pass the context pack to the backend so it can use it in API calls.
-        if hasattr(driver.backend, "last_context_pack"):
-            driver.backend.last_context_pack = pack
-
-        # Call the driver.
+        # Call the driver (context pack is now passed through OrchestratorDriver.decide()).
         decision = driver.decide("adjudicate_finding", pack, schema=schema)
 
         # Parse decision.
@@ -910,11 +718,18 @@ def main():
             print(f"Warning: failed to load schema: {e}", file=sys.stderr)
 
     if args.offline:
-        print("Running in OFFLINE mode (FakeTransport)")
-        # For offline mode, use canned responses (real-world would use FakeTransport here).
-        # For now, just create a fake driver that returns placeholder responses.
-        transport = FakeTransport()
-        backend = FakeOpenAIDriver(transport)
+        print("Running in OFFLINE mode (FakeOrchestratorBackend)")
+        # Offline mode: use canned responses for testing.
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "real_defect",
+                    "evidence": "Test response",
+                    "confidence": 0.95,
+                }
+                for _ in range(16)
+            ]
+        )
     elif args.live:
         print("Running in LIVE mode (OpenAI API)")
         # Check for API key at runtime.
@@ -924,12 +739,15 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
-        backend = OpenAICompatibleDriver(model=args.model)
+        real_backend = OpenAICompatibleOrchestratorBackend(
+            model=args.model, transport=default_openai_transport
+        )
+        backend = ShadowAdjudicationBackend(real_backend, model=args.model)
     else:
         print("Error: specify --offline or --live", file=sys.stderr)
         sys.exit(1)
 
-    # Create OrchestratorDriver.
+    # Create OrchestratorDriver with the new backend.
     driver = OrchestratorDriver(backend, schema_dir=str(DRIVER_DIR), max_retries=2)
 
     # Run adjudications (with --repeat support).
@@ -972,9 +790,13 @@ def main():
     # Served-model receipts: what the API says actually answered each call.
     served = sorted(set(getattr(backend, "served_models", [])))
     stats["served_models"] = served
-    stats["temperature_omitted"] = bool(getattr(backend, "omit_temperature", False))
+    # Check for temperature fallback (on real backend).
+    temperature_omitted = False
+    if hasattr(backend, "backend") and hasattr(backend.backend, "omit_temperature"):
+        temperature_omitted = bool(backend.backend.omit_temperature)
+    stats["temperature_omitted"] = temperature_omitted
     print(f"\nServed models (API-reported): {served or 'NONE RECORDED (offline mode?)'}")
-    if stats["temperature_omitted"]:
+    if temperature_omitted:
         print("PARITY NOTE: model rejected temperature=0; ran at API default (recorded in scorecard)")
 
     # Aggregate across runs if N > 1 (increment 2.6)
@@ -1034,8 +856,10 @@ def main():
         print(f"Runs completed: {args.repeat}")
     print("=" * 60)
 
-    # Get tokens spent (if available).
-    tokens = backend.get_tokens_spent()
+    # Get tokens spent (if available from wrapped backend).
+    tokens = None
+    if hasattr(backend, "tokens_spent"):
+        tokens = backend.tokens_spent
     if tokens:
         print(f"Total tokens spent: {tokens}")
 
