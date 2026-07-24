@@ -112,19 +112,31 @@ class TestDecisionSchemas(unittest.TestCase):
                     f"{schema_file}: 'verdict' property missing"
                 )
 
-    def test_verdict_field_is_object(self):
-        """Verdict field must be of type object."""
+    def test_verdict_field_is_string(self):
+        """Verdict field must be of type string with enum."""
         for schema_file in self.schema_files:
             with self.subTest(schema=schema_file.name):
                 schema = json.loads(schema_file.read_text(encoding='utf-8'))
                 verdict_prop = schema.get("properties", {}).get("verdict", {})
                 self.assertEqual(
-                    verdict_prop.get("type"), "object",
-                    f"{schema_file}: verdict is not type 'object'"
+                    verdict_prop.get("type"), "string",
+                    f"{schema_file}: verdict is not type 'string'"
+                )
+                self.assertIn(
+                    "enum", verdict_prop,
+                    f"{schema_file}: verdict missing enum array"
+                )
+                self.assertIsInstance(
+                    verdict_prop.get("enum"), list,
+                    f"{schema_file}: verdict enum is not a list"
+                )
+                self.assertGreater(
+                    len(verdict_prop.get("enum", [])), 0,
+                    f"{schema_file}: verdict enum is empty"
                 )
 
     def test_evidence_field_is_array(self):
-        """Evidence field must be of type array."""
+        """Evidence field must be of type array with minItems >= 1 and string items."""
         for schema_file in self.schema_files:
             with self.subTest(schema=schema_file.name):
                 schema = json.loads(schema_file.read_text(encoding='utf-8'))
@@ -132,6 +144,19 @@ class TestDecisionSchemas(unittest.TestCase):
                 self.assertEqual(
                     evidence_prop.get("type"), "array",
                     f"{schema_file}: evidence is not type 'array'"
+                )
+                self.assertEqual(
+                    evidence_prop.get("minItems"), 1,
+                    f"{schema_file}: evidence minItems should be 1"
+                )
+                items_schema = evidence_prop.get("items", {})
+                self.assertEqual(
+                    items_schema.get("type"), "string",
+                    f"{schema_file}: evidence items should be strings"
+                )
+                self.assertGreaterEqual(
+                    items_schema.get("minLength", 0), 1,
+                    f"{schema_file}: evidence items should have minLength >= 1"
                 )
 
     def test_readme_documents_all_schemas(self):

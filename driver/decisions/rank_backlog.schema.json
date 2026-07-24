@@ -3,7 +3,7 @@
   "title": "Rank Backlog Decision",
   "description": "Orchestrator S2 decision: intake audit findings, feature ideation, fleet-ops recommendations, and prior backlog; rank them by precedence for the current wave. Produces an ordered list of items with priority scores and justifications.",
   "type": "object",
-  "required": ["verdict", "evidence", "ranked_items"],
+  "required": ["verdict", "evidence"],
   "properties": {
     "decision_type": {
       "type": "string",
@@ -83,68 +83,9 @@
       }
     },
     "verdict": {
-      "type": "object",
-      "description": "The ranking decision and scope for the wave",
-      "required": ["scope_locked", "wave_items"],
-      "properties": {
-        "scope_locked": {
-          "type": "boolean",
-          "description": "True if this ranking will be locked for the wave (no new additions unless user overrides)"
-        },
-        "wave_items": {
-          "type": "array",
-          "description": "Ranked list of items selected for this wave, ordered by priority",
-          "items": {
-            "type": "object",
-            "required": ["rank", "item_id", "priority", "estimated_cost"],
-            "properties": {
-              "rank": {
-                "type": "integer",
-                "description": "Execution order (1 = highest priority)"
-              },
-              "item_id": {
-                "type": "string",
-                "description": "Identifier from audit/backlog"
-              },
-              "priority": {
-                "type": "string",
-                "enum": ["p0", "p1", "p2", "p3"]
-              },
-              "reason": {
-                "type": "string",
-                "description": "Why this item is at this rank"
-              },
-              "estimated_cost": {
-                "type": "number",
-                "description": "Estimated cost in dollars"
-              },
-              "dependencies": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Item IDs that must ship before this one"
-              }
-            }
-          }
-        },
-        "deferred_items": {
-          "type": "array",
-          "description": "Items deemed out-of-scope for this wave",
-          "items": {
-            "type": "object",
-            "properties": {
-              "item_id": {
-                "type": "string"
-              },
-              "defer_reason": {
-                "type": "string",
-                "description": "Why deferred (cost, capacity, dependency, low priority)"
-              }
-            }
-          }
-        }
-      }
+      "type": "string",
+      "enum": ["ranked", "completed", "undetermined"],
+      "description": "Ranking decision: items ranked and ready to dispatch, or ranking incomplete?"
     },
     "confidence": {
       "type": "number",
@@ -154,29 +95,46 @@
     },
     "evidence": {
       "type": "array",
-      "description": "Citations to files and line ranges that support this decision",
+      "description": "Citations to files and line ranges that support this decision (mandatory, >=1 item)",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "ranked_items": {
+      "type": "array",
+      "description": "Ranked list of items selected for this wave, ordered by priority",
       "items": {
         "type": "object",
-        "required": ["file", "description"],
+        "required": ["rank", "item_id", "priority"],
         "properties": {
-          "file": {
-            "type": "string",
-            "description": "Relative path to control file (e.g., STATE.md, AUDIT-PRIMER.md, tracker.json)"
+          "rank": {
+            "type": "integer",
+            "description": "Execution order (1 = highest priority)"
           },
-          "lines": {
+          "item_id": {
             "type": "string",
-            "description": "Line range (e.g., '45-67') or line number"
+            "description": "Identifier from audit/backlog"
           },
-          "excerpt": {
+          "priority": {
             "type": "string",
-            "description": "Quoted text supporting this citation"
+            "enum": ["p0", "p1", "p2", "p3"]
           },
-          "description": {
+          "reason": {
             "type": "string",
-            "description": "How this evidence supports the decision"
+            "description": "Why this item is at this rank"
+          },
+          "estimated_cost": {
+            "type": "number",
+            "description": "Estimated cost in dollars"
           }
         }
       }
+    },
+    "total_estimated_cost": {
+      "type": "number",
+      "description": "Sum of estimated costs for ranked items"
     }
   }
 }

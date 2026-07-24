@@ -103,67 +103,9 @@
       }
     },
     "verdict": {
-      "type": "object",
-      "description": "The code review decision",
-      "required": ["approval_status"],
-      "properties": {
-        "approval_status": {
-          "type": "string",
-          "enum": ["approved", "approved_with_minor_nits", "request_changes", "undetermined"],
-          "description": "Can this diff be merged?"
-        },
-        "implements_intent": {
-          "type": "boolean",
-          "description": "Does the diff correctly implement the requested change?"
-        },
-        "issues_found": {
-          "type": "array",
-          "description": "Any defects, style issues, or oversights discovered",
-          "items": {
-            "type": "object",
-            "properties": {
-              "severity": {
-                "type": "string",
-                "enum": ["blocker", "major", "minor", "nit"]
-              },
-              "file": {
-                "type": "string",
-                "description": "File affected"
-              },
-              "line": {
-                "type": "integer",
-                "description": "Line number (approx)"
-              },
-              "issue_type": {
-                "type": "string",
-                "enum": ["logic_defect", "style", "performance", "test_gap", "doc_drift", "ownership_violation", "security", "other"]
-              },
-              "description": {
-                "type": "string"
-              },
-              "suggested_fix": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "out_of_scope_detected": {
-          "type": "boolean",
-          "description": "Did the worker modify files outside its owned set?"
-        },
-        "test_coverage_adequate": {
-          "type": "boolean",
-          "description": "Are changes backed by adequate tests?"
-        },
-        "requires_revision": {
-          "type": "boolean",
-          "description": "Should this be sent back to the worker for revision?"
-        },
-        "revision_notes": {
-          "type": "string",
-          "description": "If revision required, what should be fixed"
-        }
-      }
+      "type": "string",
+      "enum": ["approve", "reject", "needs_changes", "undetermined"],
+      "description": "Can this diff be merged?"
     },
     "confidence": {
       "type": "number",
@@ -173,37 +115,24 @@
     },
     "evidence": {
       "type": "array",
-      "description": "Citations supporting this review verdict",
+      "description": "Citations supporting this review verdict (mandatory, >=1 item)",
       "items": {
-        "type": "object",
-        "required": ["type", "description"],
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": ["code_location", "test_failure", "contract_spec", "prior_review", "test_output"]
-          },
-          "file": {
-            "type": "string",
-            "description": "File path in the diff"
-          },
-          "lines": {
-            "type": "string",
-            "description": "Line range in the diff"
-          },
-          "excerpt": {
-            "type": "string",
-            "description": "Relevant code snippet"
-          },
-          "description": {
-            "type": "string",
-            "description": "Why this evidence matters to the review"
-          },
-          "link": {
-            "type": "string",
-            "description": "Link to spec, prior PR, or contract"
-          }
-        }
-      }
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "implements_intent": {
+      "type": "boolean",
+      "description": "Does the diff correctly implement the requested change?"
+    },
+    "defects_found": {
+      "type": "integer",
+      "description": "Number of defects discovered"
+    },
+    "revision_notes": {
+      "type": "string",
+      "description": "If revision required, what should be fixed"
     }
   }
 }
