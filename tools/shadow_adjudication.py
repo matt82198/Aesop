@@ -18,7 +18,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Add driver/ to sys.path.
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -300,6 +300,19 @@ class ScorecardItem:
     challenger_evidence: List[Dict[str, str]] = field(default_factory=list)
 
 
+@dataclass
+class AggregatedScorecardItem:
+    """Per-item results aggregated across multiple runs."""
+
+    id: str
+    ground_truth: str
+    verdict_counts: Dict[str, int] = field(default_factory=dict)  # verdict -> count across runs
+    stability: float = 0.0  # fraction of runs agreeing with mode
+    modal_verdict: str = "undetermined"  # most common verdict across runs
+    correct_count: int = 0  # runs where modal_verdict == ground_truth
+    num_runs: int = 1
+
+
 def load_corpus(corpus_path: str) -> List[CorpusItem]:
     """Load corpus from jsonl file (now with optional evidence field)."""
     items = []
@@ -568,6 +581,98 @@ def compute_scorecard_stats(
     }
 
 
+def aggregate_runs(
+    all_run_scorecards: List[List[ScorecardItem]], corpus: List[CorpusItem], num_runs: int
+) -> Dict[str, Any]:
+    """Aggregate scorecard results across multiple runs.
+
+    Args:
+        all_run_scorecards: List of scorecards, one per run
+        corpus: The corpus items
+        num_runs: Number of runs
+
+    Returns:
+        Dict with:
+        - per_item: List[AggregatedScorecardItem] with stability data
+        - overall_stats: Aggregated metrics across all runs
+    """
+    # Group verdicts by item id across runs
+    item_verdicts = {}  # id -> List[verdict]
+    for corpus_item in corpus:
+        item_verdicts[corpus_item.id] = []
+
+    for run_scorecard in all_run_scorecards:
+        for scorecard_item in run_scorecard:
+            if scorecard_item.id in item_verdicts:
+                item_verdicts[scorecard_item.id].append(
+                    scorecard_item.challenger_classification
+                )
+
+    # Compute per-item aggregations
+    aggregated_items = []
+    for corpus_item in corpus:
+        verdicts = item_verdicts.get(corpus_item.id, [])
+
+        # Count verdicts
+        verdict_counts = {}
+        for v in verdicts:
+            verdict_counts[v] = verdict_counts.get(v, 0) + 1
+
+        # Modal verdict (most frequent)
+        if verdict_counts:
+            modal_verdict = max(verdict_counts, key=verdict_counts.get)
+            modal_count = verdict_counts[modal_verdict]
+            stability = modal_count / num_runs if num_runs > 0 else 0.0
+            correct_count = 1 if modal_verdict.lower() == corpus_item.ground_truth.lower() else 0
+        else:
+            modal_verdict = "undetermined"
+            modal_count = 0
+            stability = 0.0
+            correct_count = 0
+
+        agg_item = AggregatedScorecardItem(
+            id=corpus_item.id,
+            ground_truth=corpus_item.ground_truth,
+            verdict_counts=verdict_counts,
+            stability=stability,
+            modal_verdict=modal_verdict,
+            correct_count=correct_count,
+            num_runs=num_runs,
+        )
+        aggregated_items.append(agg_item)
+
+    # Compute overall stats across all runs
+    all_scores_flat = []
+    for run_scorecard in all_run_scorecards:
+        all_scores_flat.extend(run_scorecard)
+
+    # Create a single-run scorecard view for stats computation
+    # (treat aggregated modal verdicts as the scorecard)
+    synthetic_scorecard = []
+    for agg in aggregated_items:
+        synthetic_item = ScorecardItem(
+            id=agg.id,
+            challenger_classification=agg.modal_verdict,
+            challenger_actionable=False,
+            evidence_count=0,
+            schema_valid=True,
+            retries_used=0,
+            agreement_with_incumbent=agg.modal_verdict.lower() == corpus[
+                next(i for i, c in enumerate(corpus) if c.id == agg.id)
+            ].incumbent_verdict.lower(),
+            correct_vs_ground_truth=agg.correct_count == 1,
+        )
+        synthetic_scorecard.append(synthetic_item)
+
+    overall_stats = compute_scorecard_stats(synthetic_scorecard, corpus)
+    overall_stats["num_runs"] = num_runs
+
+    return {
+        "per_item": aggregated_items,
+        "overall_stats": overall_stats,
+    }
+
+
 def write_scorecard_json(
     scorecard: List[ScorecardItem],
     stats: Dict[str, Any],
@@ -603,14 +708,21 @@ def write_scorecard_md(
     stats: Dict[str, Any],
     output_path: str,
     model: str = "gpt-4o-mini",
+    aggregated_data: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Write human-readable scorecard as Markdown."""
+    """Write human-readable scorecard as Markdown.
+
+    Args:
+        aggregated_data: If provided, includes stability table for repeated runs (increment 2.6)
+    """
+    num_runs = aggregated_data["overall_stats"].get("num_runs", 1) if aggregated_data else 1
     lines = [
         "# Shadow Adjudication Wave — Scorecard Report",
         "",
-        "**Date**: 2026-07-23",
+        "**Date**: 2026-07-24",
         f"**Challenger Model**: {model} (OpenAI-compatible)",
-        "**Corpus Size**: 16 items",
+        f"**Corpus Size**: 16 items",
+        f"**Runs**: {num_runs} (increment 2.6: verdict-neutral corpus)",
         "",
         "## Aggregate Statistics",
         "",
@@ -621,9 +733,44 @@ def write_scorecard_md(
         f"- **Schema Validity Rate**: {stats.get('schema_valid_pct', 0):.1f}%",
         f"- **DECISION_FAILED Count**: {stats.get('decision_failed_count', 0)}",
         "",
+    ]
+
+    # Add stability table for N>1 runs (items 9 and 13)
+    if aggregated_data and num_runs > 1:
+        lines.extend([
+            "## Narrative-Refusal Stability (Items 9, 13)",
+            "",
+            "**Item 9 (whitelist-gate-weakening, gt=false_positive)**:",
+            "",
+        ])
+        item_9 = next((i for i in aggregated_data["per_item"] if i.id == "whitelist-gate-weakening"), None)
+        if item_9:
+            lines.append(f"| Verdict | Runs | Stability |")
+            lines.append(f"|---|---|---|")
+            for verdict, count in sorted(item_9.verdict_counts.items()):
+                stability_pct = (count / num_runs) * 100
+                lines.append(f"| {verdict} | {count}/{num_runs} | {stability_pct:.0f}% |")
+            lines.append("")
+            lines.append(f"**Modal verdict**: {item_9.modal_verdict} ({item_9.verdict_counts.get(item_9.modal_verdict, 0)}/{num_runs} runs)")
+            lines.append("")
+
+        lines.append("**Item 13 (fixreview-backtick-test, gt=false_positive)**:")
+        lines.append("")
+        item_13 = next((i for i in aggregated_data["per_item"] if i.id == "fixreview-backtick-test"), None)
+        if item_13:
+            lines.append(f"| Verdict | Runs | Stability |")
+            lines.append(f"|---|---|---|")
+            for verdict, count in sorted(item_13.verdict_counts.items()):
+                stability_pct = (count / num_runs) * 100
+                lines.append(f"| {verdict} | {count}/{num_runs} | {stability_pct:.0f}% |")
+            lines.append("")
+            lines.append(f"**Modal verdict**: {item_13.modal_verdict} ({item_13.verdict_counts.get(item_13.modal_verdict, 0)}/{num_runs} runs)")
+            lines.append("")
+
+    lines.extend([
         "## Success Bar Results",
         "",
-    ]
+    ])
 
     # Check success criteria.
     real_defect_pct = stats.get("real_defect_agreement_pct", 0)
@@ -716,9 +863,15 @@ def main():
         help="How much evidence to surface when --enriched is used: 'full' (all 3 parts, may leak answers), 'mechanism' (first 2 parts only, no conclusions)",
     )
     parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Number of times to repeat the entire corpus (increment 2.6: N>=5 for stability; default: 1)",
+    )
+    parser.add_argument(
         "--out-tag",
         default=None,
-        help="Results filename tag (default: derived from --model); rung files never overwrite each other",
+        help="Results filename tag (default: derived from --model and --repeat); rung files never overwrite each other",
     )
 
     args = parser.parse_args()
@@ -779,28 +932,40 @@ def main():
     # Create OrchestratorDriver.
     driver = OrchestratorDriver(backend, schema_dir=str(DRIVER_DIR), max_retries=2)
 
-    # Run adjudications.
-    scorecard = []
+    # Run adjudications (with --repeat support).
+    all_run_scorecards = []
     api_call_count = 0
-    max_calls = 40
+    max_calls_per_run = 16  # 16 items per corpus
+    max_calls_total = args.repeat * max_calls_per_run  # N*16 for N runs
 
-    for item in corpus:
-        if api_call_count >= max_calls:
-            print(
-                f"Reached max API calls ({max_calls}). Stopping adjudication.",
-                file=sys.stderr,
+    print(f"Running {args.repeat} iteration(s) of the corpus (max {max_calls_total} API calls)")
+
+    for run_num in range(args.repeat):
+        print(f"\n--- Run {run_num + 1}/{args.repeat} ---")
+        run_scorecard = []
+
+        for item in corpus:
+            if api_call_count >= max_calls_total:
+                print(
+                    f"Reached max API calls ({max_calls_total}). Stopping adjudication.",
+                    file=sys.stderr,
+                )
+                break
+
+            result = adjudicate_one_finding(
+                driver, item, str(repo_root), str(conductor_root), schema, enriched=args.enriched, evidence_mode=args.evidence_mode
             )
-            break
+            run_scorecard.append(result)
+            api_call_count += 1
 
-        result = adjudicate_one_finding(
-            driver, item, str(repo_root), str(conductor_root), schema, enriched=args.enriched, evidence_mode=args.evidence_mode
-        )
-        scorecard.append(result)
-        api_call_count += 1
+            print(f"  [{api_call_count:2d}] {item.id}: {result.challenger_classification}")
 
-        print(f"  [{api_call_count:2d}] {item.id}: {result.challenger_classification}")
+        all_run_scorecards.append(run_scorecard)
 
-    # Compute stats.
+    # Use the last run's scorecard for backward compatibility stats
+    scorecard = all_run_scorecards[-1] if all_run_scorecards else []
+
+    # Compute stats for the last run.
     stats = compute_scorecard_stats(scorecard, corpus[: len(scorecard)])
     stats["challenger_model_requested"] = args.model
     stats["challenger_model"] = args.model
@@ -808,29 +973,45 @@ def main():
     served = sorted(set(getattr(backend, "served_models", [])))
     stats["served_models"] = served
     stats["temperature_omitted"] = bool(getattr(backend, "omit_temperature", False))
-    print(f"Served models (API-reported): {served or 'NONE RECORDED (offline mode?)'}")
+    print(f"\nServed models (API-reported): {served or 'NONE RECORDED (offline mode?)'}")
     if stats["temperature_omitted"]:
         print("PARITY NOTE: model rejected temperature=0; ran at API default (recorded in scorecard)")
+
+    # Aggregate across runs if N > 1 (increment 2.6)
+    aggregated_data = None
+    if args.repeat > 1:
+        aggregated_data = aggregate_runs(all_run_scorecards, corpus, args.repeat)
+        print(f"\nAggregated {args.repeat} runs:")
+        print(f"  Per-item modal verdicts computed")
+        print(f"  Stability (mode agreement): per-item")
 
     # Write outputs.
     results_dir = REPO_ROOT / "bench" / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Per-rung output files: default tag from model id so ladder runs never clobber.
-    # If enriched mode is on, add "-enriched" to tag.
-    # Rung 1 (gpt-4o-mini) keeps its original untagged filenames for continuity.
+    # Per-rung output files: clean naming scheme
+    # Format: shadow-adjudication-neutral-<date>-<model>[_suffix].json
     if args.out_tag:
-        tag = args.out_tag
+        # Custom tag: use as-is (user provides full model tag)
+        model_tag = args.out_tag
     else:
-        base_tag = "" if args.model == "gpt-4o-mini" else "-" + args.model.replace("/", "_")
-        enriched_suffix = "-enriched" if args.enriched else ""
-        tag = base_tag + enriched_suffix
+        # Auto-generate model tag from model id (clean)
+        model_clean = args.model.replace("/", "_").lower()
+        model_tag = model_clean
 
-    json_path = results_dir / f"shadow-adjudication-2026-07-23{tag}.json"
-    md_path = results_dir / f"shadow-adjudication-2026-07-23{tag}.md"
+    # Optional suffixes (use underscores for clarity)
+    repeat_suffix = f"_repeat{args.repeat}" if args.repeat > 1 else ""
+    enriched_suffix = "_enriched" if args.enriched else ""
+    full_tag = model_tag + repeat_suffix + enriched_suffix
+
+    # Date: use 2026-07-24 for repeated runs (increment 2.6), else 2026-07-23
+    date_tag = "2026-07-24" if args.repeat > 1 else "2026-07-23"
+
+    json_path = results_dir / f"shadow-adjudication-neutral-{date_tag}-{full_tag}.json"
+    md_path = results_dir / f"shadow-adjudication-neutral-{date_tag}-{full_tag}.md"
 
     write_scorecard_json(scorecard, stats, str(json_path))
-    write_scorecard_md(scorecard, corpus[: len(scorecard)], stats, str(md_path), model=args.model)
+    write_scorecard_md(scorecard, corpus[: len(scorecard)], stats, str(md_path), model=args.model, aggregated_data=aggregated_data)
 
     # Print summary.
     print("")
@@ -849,6 +1030,8 @@ def main():
     )
     print(f"Schema Validity: {stats.get('schema_valid_pct', 0):.1f}%")
     print(f"DECISION_FAILED: {stats.get('decision_failed_count', 0)}")
+    if args.repeat > 1:
+        print(f"Runs completed: {args.repeat}")
     print("=" * 60)
 
     # Get tokens spent (if available).
