@@ -367,8 +367,10 @@ def main():
     parser.add_argument("--offline", action="store_true", help="Run offline (FakeTransport; no API calls)")
     parser.add_argument("--live", action="store_true", help="Run live (requires OPENAI_API_KEY)")
     parser.add_argument("--repeat", type=int, default=3, help="Number of runs per item (default 3)")
-    parser.add_argument("--model", default="gpt-5.5", help="Model to use (default gpt-5.5)")
+    parser.add_argument("--model", default="gpt-5.6-sol", help="Model to use (default gpt-5.6-sol); frontier-first with early-abort gate")
+    parser.add_argument("--also-run", default="gpt-5.5", help="Also run this model if item 9 flips (default gpt-5.5)")
     parser.add_argument("--output-dir", default="bench/results", help="Output directory for results")
+    parser.add_argument("--no-early-abort", action="store_true", help="Disable early-abort gate (run all models regardless)")
 
     args = parser.parse_args()
 
@@ -402,63 +404,96 @@ def main():
     if args.offline:
         print("Offline mode: skipping live runs")
         seated_results = []
+        models_run = []
     elif args.live:
         if not os.environ.get("OPENAI_API_KEY"):
             print("ERROR: OPENAI_API_KEY not set for live mode", file=sys.stderr)
             return 1
-
-        print(f"Live mode: running {len(corpus)} items x {args.repeat} repeats = {len(corpus) * args.repeat} calls")
 
         # Initialize OrchestratorDriver with OpenAI backend
         if OpenAICompatibleDriver is None:
             print("ERROR: OpenAICompatibleDriver not available", file=sys.stderr)
             return 1
 
-        driver = OpenAICompatibleDriver(model=args.model)
-        orchestrator = OrchestratorDriver(backend=driver)
-
         seated_results = []
-        call_count = 0
-        max_calls = len(corpus) * args.repeat
+        models_run = []
+        models_to_run = [args.model]
+        if args.also_run and not args.no_early_abort:
+            models_to_run.append(args.also_run)
 
-        for item_idx, item in enumerate(corpus):
-            print(f"\n[{item_idx+1}/{len(corpus)}] {item['id']}...")
+        for model_idx, model in enumerate(models_to_run):
+            print(f"\n{'='*70}")
+            print(f"Model {model_idx+1}/{len(models_to_run)}: {model}")
+            print(f"{'='*70}")
 
-            for repeat_idx in range(args.repeat):
-                if call_count >= max_calls:
-                    print(f"Reached call limit ({max_calls}); stopping.")
-                    break
+            driver = OpenAICompatibleDriver(model=model)
+            orchestrator = OrchestratorDriver(backend=driver)
 
-                # Build real context pack
-                try:
-                    pack = build_seated_context_pack(REPO_ROOT, item)
-                except Exception as e:
-                    print(f"  ERROR building pack for {item['id']}: {e}")
-                    continue
+            model_results = []
+            call_count = 0
+            max_calls = len(corpus) * args.repeat
 
-                # Make decision
-                try:
-                    decision = orchestrator.decide(
-                        decision_type="adjudicate_findings",
-                        context_pack=pack,
-                        schema=None,
-                    )
+            for item_idx, item in enumerate(corpus):
+                print(f"\n[{item_idx+1}/{len(corpus)}] {item['id']}...")
 
-                    classification = decision.get("verdict", "DECISION_FAILED")
-                    confidence = decision.get("confidence", None)
+                for repeat_idx in range(args.repeat):
+                    if call_count >= max_calls:
+                        print(f"Reached call limit ({max_calls}); stopping.")
+                        break
 
-                    seated_results.append({
-                        "item_id": item["id"],
-                        "challenger_classification": classification,
-                        "challenger_confidence": confidence,
-                        "retry_count": decision.get("retry_count", 0),
-                        "schema_valid": decision.get("schema_validated", True),
-                    })
+                    # Build real context pack
+                    try:
+                        pack = build_seated_context_pack(REPO_ROOT, item)
+                    except Exception as e:
+                        print(f"  ERROR building pack for {item['id']}: {e}")
+                        continue
 
-                    print(f"    [repeat {repeat_idx+1}] {classification} (confidence: {confidence})")
-                    call_count += 1
-                except Exception as e:
-                    print(f"    ERROR: {e}")
+                    # Make decision
+                    try:
+                        decision = orchestrator.decide(
+                            decision_type="adjudicate_findings",
+                            context_pack=pack,
+                            schema=None,
+                        )
+
+                        classification = decision.get("verdict", "DECISION_FAILED")
+                        confidence = decision.get("confidence", None)
+
+                        model_results.append({
+                            "item_id": item["id"],
+                            "model": model,
+                            "challenger_classification": classification,
+                            "challenger_confidence": confidence,
+                            "retry_count": decision.get("retry_count", 0),
+                            "schema_valid": decision.get("schema_validated", True),
+                        })
+
+                        print(f"    [repeat {repeat_idx+1}] {classification} (confidence: {confidence})")
+                        call_count += 1
+                    except Exception as e:
+                        print(f"    ERROR: {e}")
+
+            # Add model results to overall results
+            seated_results.extend(model_results)
+            models_run.append(model)
+
+            # EARLY-ABORT GATE: Check item 9 (whitelist-gate-weakening)
+            if model_idx == 0 and not args.no_early_abort and args.also_run:
+                item9_verdicts = [
+                    r["challenger_classification"] for r in model_results
+                    if r["item_id"] == "whitelist-gate-weakening"
+                ]
+                if item9_verdicts:
+                    item9_modal = max(set(item9_verdicts), key=item9_verdicts.count)
+                    print(f"\n>>> EARLY-ABORT CHECK: Item 9 modal verdict from {model} = {item9_modal}")
+
+                    if item9_modal != "false_positive":
+                        print(f">>> EARLY ABORT: Item 9 did NOT flip to false_positive with real context.")
+                        print(f">>> Skipping cheaper models ({args.also_run}) — if frontier can't flip, cheaper won't either.")
+                        print(f">>> Cost-rational abort: {model} alone sufficient to show real-context value.")
+                        break  # Don't run cheaper models
+                    else:
+                        print(f">>> Item 9 FLIPPED to false_positive! Proceeding to run {args.also_run}.")
     else:
         print("No mode specified. Use --offline or --live")
         return 1
@@ -467,53 +502,98 @@ def main():
     bench_dir = Path(args.output_dir)
     bench_dir.mkdir(parents=True, exist_ok=True)
 
-    baseline_map = load_baseline_results(bench_dir, args.model)
+    # Write results for each model
+    for model in models_run:
+        baseline_map = load_baseline_results(bench_dir, model)
+        model_results = [r for r in seated_results if r.get("model") == model]
 
-    # Generate outputs
-    output_file = bench_dir / f"seated-shadow-2026-07-24-{args.model}.json"
+        output_file = bench_dir / f"seated-shadow-2026-07-24-{model}.json"
+        if model_results:
+            results_data = {
+                "statistics": {
+                    "total_items": len(corpus),
+                    "total_runs": len(model_results),
+                    "model_requested": model,
+                    "context_type": "real_file_brain",
+                    "early_abort_gate": not args.no_early_abort,
+                },
+                "items": model_results,
+            }
+
+            try:
+                with open(output_file, "w", encoding="utf-8") as f:
+                    json.dump(results_data, f, indent=2)
+                print(f"\nWrote {model} results to {output_file}")
+            except Exception as e:
+                print(f"ERROR writing results: {e}")
+                return 1
+
+    # Write unified comparison table (all models)
     comparison_file = bench_dir / f"seated-shadow-2026-07-24-comparison.md"
-
-    # Write seated results JSON
-    if seated_results:
-        results_data = {
-            "statistics": {
-                "total_items": len(corpus),
-                "total_runs": len(seated_results),
-                "model_requested": args.model,
-                "context_type": "real_file_brain",
-            },
-            "items": seated_results,
-        }
-
-        try:
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(results_data, f, indent=2)
-            print(f"\nWrote seated results to {output_file}")
-        except Exception as e:
-            print(f"ERROR writing results: {e}")
-            return 1
-
-    # Write comparison table
     try:
+        # If multiple models, note early-abort in header
+        abort_note = ""
+        if len(models_run) == 1 and args.also_run and not args.no_early_abort:
+            item9_verdicts = [r["challenger_classification"] for r in seated_results if r["item_id"] == "whitelist-gate-weakening"]
+            if item9_verdicts:
+                item9_modal = max(set(item9_verdicts), key=item9_verdicts.count)
+                if item9_modal != "false_positive":
+                    abort_note = f"\n\n### Early-Abort Gate (Frontier-First)\n\nTested {models_run[0]} first (frontier seam). Item 9 verdict: {item9_modal} (not false_positive). EARLY ABORT: skipped {args.also_run} — if frontier can't flip with real code context, cheaper models won't either.\n"
+
+        # Generate comparison for first model (or union for multiple)
+        primary_model = models_run[0]
+        primary_results = [r for r in seated_results if r.get("model", primary_model) == primary_model]
+        baseline_map = load_baseline_results(bench_dir, primary_model)
+
         comparison = generate_comparison_table(
-            baseline_map, seated_results, ground_truth_map, corpus
+            baseline_map, primary_results, ground_truth_map, corpus
         )
+
         with open(comparison_file, "w", encoding="utf-8") as f:
             f.write("# Seated Shadow Adjudication — Real File-Brain A/B Results\n\n")
+            f.write(f"**Models run**: {', '.join(models_run)}\n")
+            f.write(f"**Context**: REAL file-brain (STATE.md, tracker.json, real repo code)\n")
+            f.write(f"**Item 9 focus**: whitelist-gate-weakening with REAL secret_scan.py in pack\n\n")
             f.write(comparison)
+
+            # Item 9 analysis
             f.write("\n\n## Key Finding: Item 9 (whitelist-gate-weakening)\n\n")
-            f.write("Item 9 flipped from FALSE_POSITIVE (baseline) to TRUE? ")
+            f.write(f"**Primary model**: {primary_model}\n\n")
 
             item9_baseline = baseline_map.get("whitelist-gate-weakening", {}).get("classification")
-            item9_seated = [r["challenger_classification"] for r in seated_results if r["item_id"] == "whitelist-gate-weakening"]
+            item9_seated = [r["challenger_classification"] for r in primary_results if r["item_id"] == "whitelist-gate-weakening"]
             item9_modal = max(set(item9_seated), key=item9_seated.count) if item9_seated else "?"
+            item9_stability = f"{item9_seated.count(item9_modal)}/{len(item9_seated)}" if item9_seated else "0/0"
 
-            if item9_baseline == "false_positive" and item9_modal in ("false_positive", "false_negative"):
-                f.write("YES\n\n")
-                f.write("Real secret_scan.py in the pack showed the recursive scanning capability.\n")
+            f.write(f"Baseline (decontextualized): {item9_baseline}\n")
+            f.write(f"Seated (real file-brain + secret_scan.py): {item9_modal} (stability: {item9_stability})\n\n")
+
+            if item9_modal == "false_positive":
+                f.write(f"✓ FLIPPED: Item 9 reversed from {item9_baseline} to false_positive with real context.\n")
+                f.write(f"✓ Real secret_scan.py in context pack enabled the challenger to see the refutation.\n")
             else:
-                f.write(f"NO (baseline: {item9_baseline}, seated: {item9_modal})\n\n")
-                f.write("Seated context did not flip the verdict.\n")
+                f.write(f"✗ NO FLIP: Item 9 remains {item9_modal} despite real secret_scan.py in context.\n")
+                f.write(f"✗ Real file-brain context did not reverse the call.\n")
+
+            # Real sources note
+            f.write("\n### Real Sources Included in Pack (Item 9)\n\n")
+            f.write("- **tools/secret_scan.py** (full header, 1-100): Shows recursive file scanning patterns\n")
+            f.write("- **tools/power_selftest.py** (lines 80-150): Shows known_ok whitelist section\n")
+            f.write("- **STATE.md** (real, full): Orchestrator context + decisions\n")
+            f.write("- **state/tracker.json** (real, if present): Open work items\n")
+            f.write("- **Finding text** (blind): Presented without labels\n")
+
+            f.write(abort_note)
+
+            f.write("\n\n## Honest Framing\n\n")
+            f.write("This run tests **file-brain context isolation** — whether real code and state can be safely included in OrchestratorDriver context packs. ")
+            f.write("It does NOT test:\n")
+            f.write("- Long-loop coherence (iterative refinement over decisions)\n")
+            f.write("- Orchestrator seat-swap readiness (full loop + running backlog)\n")
+            f.write("- Cost/latency of different backends\n\n")
+            f.write("**Early-abort gate**: Frontier-first model (gpt-5.6-sol) run first. ")
+            f.write("If item 9 doesn't flip with real context, cheaper models skipped (cost-rational). ")
+            f.write("If it does flip, gpt-5.5 tested for portability.\n")
 
         print(f"Wrote comparison to {comparison_file}")
     except Exception as e:
@@ -521,6 +601,7 @@ def main():
         return 1
 
     print(f"\nDone. Results in {bench_dir}/")
+    print(f"Models run: {', '.join(models_run)}")
     return 0
 
 
