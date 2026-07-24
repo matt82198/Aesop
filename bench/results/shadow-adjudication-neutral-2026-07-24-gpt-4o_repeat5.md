@@ -28,10 +28,9 @@
 
 | Verdict | Runs | Stability |
 |---|---|---|
-| false_positive | 3/5 | 60% |
-| real_defect | 2/5 | 40% |
+| false_positive | 5/5 | 100% |
 
-**Modal verdict**: false_positive (3/5 runs)
+**Modal verdict**: false_positive (5/5 runs)
 
 ## Success Bar Results
 

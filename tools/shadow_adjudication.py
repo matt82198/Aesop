@@ -989,20 +989,26 @@ def main():
     results_dir = REPO_ROOT / "bench" / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Per-rung output files: default tag from model id + repeat count.
-    # If enriched mode is on, add "-enriched" to tag.
-    # Rung 1 (gpt-4o-mini) keeps its original untagged filenames for continuity.
+    # Per-rung output files: clean naming scheme
+    # Format: shadow-adjudication-neutral-<date>-<model>[_suffix].json
     if args.out_tag:
-        tag = args.out_tag
+        # Custom tag: use as-is (user provides full model tag)
+        model_tag = args.out_tag
     else:
-        base_tag = "" if args.model == "gpt-4o-mini" else "-" + args.model.replace("/", "_")
-        repeat_suffix = f"-repeat{args.repeat}" if args.repeat > 1 else ""
-        enriched_suffix = "-enriched" if args.enriched else ""
-        tag = base_tag + repeat_suffix + enriched_suffix
+        # Auto-generate model tag from model id (clean)
+        model_clean = args.model.replace("/", "_").lower()
+        model_tag = model_clean
 
-    date_tag = "2026-07-24" if args.repeat > 1 else "2026-07-23"  # Use 2026-07-24 for repeated runs
-    json_path = results_dir / f"shadow-adjudication{date_tag}-neutral{tag}.json"
-    md_path = results_dir / f"shadow-adjudication{date_tag}-neutral{tag}.md"
+    # Optional suffixes (use underscores for clarity)
+    repeat_suffix = f"_repeat{args.repeat}" if args.repeat > 1 else ""
+    enriched_suffix = "_enriched" if args.enriched else ""
+    full_tag = model_tag + repeat_suffix + enriched_suffix
+
+    # Date: use 2026-07-24 for repeated runs (increment 2.6), else 2026-07-23
+    date_tag = "2026-07-24" if args.repeat > 1 else "2026-07-23"
+
+    json_path = results_dir / f"shadow-adjudication-neutral-{date_tag}-{full_tag}.json"
+    md_path = results_dir / f"shadow-adjudication-neutral-{date_tag}-{full_tag}.md"
 
     write_scorecard_json(scorecard, stats, str(json_path))
     write_scorecard_md(scorecard, corpus[: len(scorecard)], stats, str(md_path), model=args.model, aggregated_data=aggregated_data)

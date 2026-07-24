@@ -45,14 +45,14 @@
 | vbs-waitforexit | real_defect | real_defect | ✓ | 0.90 | ✓ |
 | dryrun-blocked | real_defect | real_defect | ✓ | 0.90 | ✓ |
 | uninstall-exit0 | real_defect | real_defect | ✓ | 0.90 | ✓ |
-| quote-validation | real_defect | real_defect | ✓ | 0.90 | ✓ |
+| quote-validation | real_defect | real_defect | ✓ | 0.95 | ✓ |
 | apostrophe-path | real_defect | real_defect | ✓ | 0.90 | ✓ |
 | unc-paths | real_defect | real_defect | ✓ | 0.90 | ✓ |
 | hardcoded-username | real_defect | real_defect | ✓ | 0.90 | ✓ |
 | audit-log-observability | real_defect | enhancement_opportunity | ✗ | 0.90 | ✓ |
 | whitelist-gate-weakening | real_defect | false_positive | ✗ | 0.90 | ✓ |
 | ps1-syntax-gate | real_defect | enhancement_opportunity | ✗ | 0.90 | ✓ |
-| test-hardcoded-path | real_defect | real_defect | ✓ | 0.95 | ✓ |
+| test-hardcoded-path | real_defect | real_defect | ✓ | 0.90 | ✓ |
 | fixreview-parents1 | real_defect | false_positive | ✗ | 0.90 | ✓ |
 | fixreview-backtick-test | false_positive | false_positive | ✓ | 0.85 | ✓ |
 | regression-ui-suite | real_defect | false_positive | ✗ | 0.90 | ✓ |
