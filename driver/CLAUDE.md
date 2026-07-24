@@ -37,22 +37,14 @@
   verdict with fail-safe semantics (DECISION_FAILED after retries, never green). Backends:
   claude, openai-compatible, codex (via AgentDriver abstraction). Schema optional (minimal
   validation: 'verdict' + 'evidence' keys required always).
-- **adjudication_gate.py** — OrchestratorDriver increment 3 (conservative): two-tier escalation
-  gate where a cheaper challenger model decides, but undetermined/low-confidence/disallowed-type/
-  spot-check calls escalate to incumbent (frontier) for safety. Never emits an unconfident
-  verdict as final (incumbent-safe by construction).
-- **decisions/** — Decision type schema registry (sibling lane owns schemas; orchestrator
-  reads them at runtime; increment 1 treats absent schemas as optional).
-- **../tests/test_agent_driver.py** — the contract's test suite.
-- **../tests/test_codex_driver_e2e.py** — Phase 2 end-to-end offline tests
-  (FakeTransport, red-to-green verification, retry logic, ownership enforcement)
-  + gated live test (AESOP_CODEX_LIVE env var).
-- **../tests/test_wave_bridge.py** — Phase 3 offline e2e: manifest building, routing,
-  fail-safe, ownership, headline red-stub-to-green test (honest green: exit 0 only).
-- **../tests/test_orchestrator_driver.py** — OrchestratorDriver increment 1 tests (20 suites):
-  context_pack allowlist enforcement (arbitrary paths -> ContextPackViolation), size
-  capping + truncation, decide() happy path + malformed JSON retry + fail-safe, schema
-  loading/caching + validation, all offline (FakeTransport, no API keys/network).
+- **adjudication_gate.py** — increment 3 (conservative): two-tier escalation gate — cheaper
+  challenger decides; undetermined/low-conf/disallowed-type/content-seeded-spot-check calls
+  escalate to the incumbent (frontier). Never emits an unconfident verdict as final.
+- **decisions/** — Decision type schema registry (sibling lane owns schemas; absent = optional).
+- **../tests/** — test_agent_driver (contract), test_codex_driver_e2e (Phase 2 offline + gated
+  live), test_wave_bridge (Phase 3 honest-green e2e), test_orchestrator_driver (increment 1:
+  allowlist/ContextPackViolation, size cap, decide() retry+fail-safe, schema — all offline),
+  test_adjudication_gate (increment 3: escalation + safety invariant + spot-check sampling).
 
 ## The five operations (what the wave loop needs from ANY backend)
 
