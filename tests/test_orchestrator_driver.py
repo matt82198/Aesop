@@ -263,8 +263,9 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
         backend = FakeOrchestratorBackend(
             canned_responses=[
                 {
-                    "verdict": "APPROVED",
-                    "evidence": "Items ranked by priority.",
+                    "verdict": "ranked",
+                    "evidence": ["Items ranked by priority.", "Cost ceiling respected."],
+                    "confidence": 0.95,
                 }
             ]
         )
@@ -272,8 +273,9 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
 
         result = driver.decide("rank_backlog", context)
 
-        self.assertEqual(result["verdict"], "APPROVED")
+        self.assertEqual(result["verdict"], "ranked")
         self.assertIn("evidence", result)
+        self.assertIsInstance(result["evidence"], list)
         self.assertEqual(result["retry_count"], 0)
         self.assertEqual(backend.call_count, 1)
 
@@ -288,8 +290,8 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
             canned_responses=[
                 "{INVALID JSON}",  # Malformed JSON
                 {
-                    "verdict": "APPROVED",
-                    "evidence": "Fixed on retry.",
+                    "verdict": "ranked",
+                    "evidence": ["Fixed on retry."],
                 },
             ]
         )
@@ -297,7 +299,7 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
 
         result = driver.decide("rank_backlog", context)
 
-        self.assertEqual(result["verdict"], "APPROVED")
+        self.assertEqual(result["verdict"], "ranked")
         self.assertEqual(result["retry_count"], 1)  # Succeeded on 2nd attempt.
         self.assertEqual(backend.call_count, 2)
 
@@ -332,18 +334,19 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
             content={"state": "# STATE"},
         )
 
-        # Missing 'evidence'.
+        # Missing 'evidence' (returns only verdict).
         backend = FakeOrchestratorBackend(
             canned_responses=[
-                {"verdict": "APPROVED"},
-                {"verdict": "APPROVED"},
-                {"verdict": "APPROVED"},
+                {"verdict": "ranked"},
+                {"verdict": "ranked"},
+                {"verdict": "ranked"},
             ]
         )
         driver = OrchestratorDriver(backend, max_retries=2)
 
         result = driver.decide("rank_backlog", context)
 
+        # Should fail because evidence is required and missing.
         self.assertEqual(result["verdict"], "DECISION_FAILED")
 
     def test_decide_backend_raises_exception_fails_safe(self):
@@ -386,7 +389,7 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
             canned_responses=[
                 {
                     "verdict": "real_defect",
-                    "evidence": "Input not sanitized before database insert",
+                    "evidence": ["Input not sanitized before database insert"],
                     "confidence": 0.95,
                 }
             ]
@@ -410,6 +413,36 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
         self.assertIn("Potential security issue", prompt)
         # Prompt should include instruction about orchestrator's role.
         self.assertIn("orchestrator", prompt.lower())
+
+    def test_evidence_channel_rendered_into_prompt_regression_guard(self):
+        """REGRESSION: the EVIDENCE channel must reach the model, not just content.
+
+        The seated tool places the finding-under-adjudication and cited code in
+        context_pack.EVIDENCE (not content). _build_decision_prompt previously
+        rendered only content, so the model got no finding to judge and returned
+        spurious 'undetermined' for every item. This guard asserts the finding
+        text AND a cited-code excerpt from the evidence channel appear in the
+        prompt actually sent to the backend.
+        """
+        context = ContextPack(
+            decision_type="adjudicate_finding",
+            content={"state": "STATE.md: phase=demo"},  # file brain
+            evidence={
+                "finding": "FINDING: health-check whitelist may weaken the secret gate.",
+                "cited_code": "secret_scan.py scans file CONTENTS via git blobs, independently.",
+            },
+        )
+        backend = FakeOrchestratorBackend(
+            canned_responses=[{"verdict": "false_positive", "evidence": ["x"], "confidence": 0.8}]
+        )
+        driver = OrchestratorDriver(backend)
+        driver.decide("adjudicate_finding", context)
+
+        prompt = backend.received_prompts[0]
+        # The finding (in the evidence channel) MUST be in the prompt.
+        self.assertIn("health-check whitelist may weaken the secret gate", prompt)
+        # The cited code (also evidence) MUST be in the prompt.
+        self.assertIn("secret_scan.py scans file CONTENTS", prompt)
 
 
 class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
@@ -464,15 +497,15 @@ class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
         self.assertEqual(result["verdict"], "DECISION_FAILED")
 
     def test_schema_absent_minimal_validation(self):
-        """Absent schema: only requires 'verdict' and 'evidence'."""
+        """Absent schema: only requires 'verdict' (string) and 'evidence' (array)."""
         context = ContextPack(
             decision_type="rank_backlog", content={"state": "# STATE"}
         )
 
-        # Only verdict + evidence, no other fields.
+        # Only verdict + evidence (array), no other fields.
         backend = FakeOrchestratorBackend(
             canned_responses=[
-                {"verdict": "APPROVED", "evidence": "minimal decision"}
+                {"verdict": "ranked", "evidence": ["minimal decision"]}
             ]
         )
         driver = OrchestratorDriver(
@@ -482,13 +515,20 @@ class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
         # Schema file does not exist; minimal validation used.
         result = driver.decide("rank_backlog", context)
 
-        self.assertEqual(result["verdict"], "APPROVED")
+        self.assertEqual(result["verdict"], "ranked")
         # No schema file -> schema_validated is False (minimal validation only).
         self.assertFalse(result["schema_validated"])
 
     def test_schema_caching(self):
         """Loaded schemas are cached."""
-        schema = {"type": "object", "required": ["verdict", "evidence"]}
+        schema = {
+            "type": "object",
+            "required": ["verdict", "evidence"],
+            "properties": {
+                "verdict": {"type": "string", "enum": ["approve", "reject"]},
+                "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+            }
+        }
         schema_file = (
             Path(self.schema_dir) / "decisions" / "test_type.schema.json"
         )
@@ -500,8 +540,8 @@ class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
 
         backend = FakeOrchestratorBackend(
             canned_responses=[
-                {"verdict": "APPROVED", "evidence": "test"},
-                {"verdict": "APPROVED", "evidence": "test"},
+                {"verdict": "approve", "evidence": ["test"]},
+                {"verdict": "approve", "evidence": ["test"]},
             ]
         )
         driver = OrchestratorDriver(
@@ -510,11 +550,11 @@ class TestOrchestratorDriverSchemaValidation(unittest.TestCase):
 
         # First call loads schema.
         result1 = driver.decide("test_type", context)
-        self.assertEqual(result1["verdict"], "APPROVED")
+        self.assertEqual(result1["verdict"], "approve")
 
         # Second call uses cached schema.
         result2 = driver.decide("test_type", context)
-        self.assertEqual(result2["verdict"], "APPROVED")
+        self.assertEqual(result2["verdict"], "approve")
 
         # Only 2 backend calls (one per decide).
         self.assertEqual(backend.call_count, 2)
@@ -545,8 +585,8 @@ class TestOrchestratorBackendTemperatureFallback(unittest.TestCase):
                         {
                             "message": {
                                 "content": json.dumps({
-                                    "verdict": "APPROVED",
-                                    "evidence": "Decision after temperature fallback",
+                                    "verdict": "approve",
+                                    "evidence": ["Decision after temperature fallback"],
                                 })
                             }
                         }
@@ -572,7 +612,7 @@ class TestOrchestratorBackendTemperatureFallback(unittest.TestCase):
             # Should have succeeded after fallback.
             self.assertIsNotNone(result)
             result_dict = json.loads(result)
-            self.assertEqual(result_dict["verdict"], "APPROVED")
+            self.assertEqual(result_dict["verdict"], "approve")
 
             # Should have made 2 calls (first with temp, retry without).
             self.assertEqual(transport.call_count, 2)
@@ -767,6 +807,214 @@ class TestContextPackEvidence(unittest.TestCase):
         self.assertIn("evidence_item", pack.evidence)
         self.assertGreater(pack.total_size_bytes, 0)
         self.assertGreater(pack.evidence_size_bytes, 0)
+
+
+class TestSchemaConformantValidation(unittest.TestCase):
+    """Regression guard: schema-conformant responses now pass validation.
+
+    REGRESSION FIXED: Prior _validate_decision required evidence to be a STRING,
+    so even schema-conformant responses (evidence as ARRAY) were rejected.
+    Now verdict MUST be a string enum, and evidence MUST be an array of
+    non-empty strings with minItems >= 1.
+    """
+
+    def setUp(self):
+        """Create temp fixtures."""
+        self.temp_repo = tempfile.TemporaryDirectory()
+        self.repo_root = self.temp_repo.name
+
+        # Create a simple schema for testing.
+        self.temp_schema_dir = tempfile.TemporaryDirectory()
+        self.schema_dir = self.temp_schema_dir.name
+        decisions_dir = Path(self.schema_dir) / "decisions"
+        decisions_dir.mkdir(parents=True)
+
+        adjudicate_schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "title": "Adjudicate Finding",
+            "type": "object",
+            "required": ["verdict", "evidence"],
+            "properties": {
+                "verdict": {
+                    "type": "string",
+                    "enum": ["real_defect", "false_positive", "enhancement_opportunity", "undetermined"]
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1
+                },
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+        }
+        schema_file = decisions_dir / "adjudicate_finding.schema.json"
+        schema_file.write_text(json.dumps(adjudicate_schema), encoding="utf-8")
+
+    def tearDown(self):
+        """Clean up temp dirs."""
+        self.temp_repo.cleanup()
+        self.temp_schema_dir.cleanup()
+
+    def test_schema_conformant_response_passes_validation(self):
+        """REGRESSION GUARD: schema-conformant response (verdict=string, evidence=array) passes.
+
+        Before the fix, this response would be rejected because evidence was not
+        a string. Now it should pass because:
+          - verdict is a string in the enum
+          - evidence is an array of >=1 non-empty strings
+          - schema is properly validated
+        """
+        context = ContextPack(
+            decision_type="adjudicate_finding",
+            content={"finding": "Potential security issue"},
+        )
+
+        # Schema-conformant response: verdict is string, evidence is array.
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "false_positive",
+                    "evidence": ["reason a", "reason b"],
+                    "confidence": 0.85,
+                }
+            ]
+        )
+        driver = OrchestratorDriver(
+            backend, schema_dir=self.schema_dir, max_retries=1
+        )
+
+        result = driver.decide("adjudicate_finding", context)
+
+        # Should succeed with schema validation.
+        self.assertEqual(result["verdict"], "false_positive")
+        self.assertEqual(result["evidence"], ["reason a", "reason b"])
+        self.assertEqual(result["confidence"], 0.85)
+        self.assertTrue(result["schema_validated"])
+        self.assertEqual(result["retry_count"], 0)
+
+    def test_mismatched_evidence_string_still_fails(self):
+        """Evidence as string (old shape) should still fail validation."""
+        context = ContextPack(
+            decision_type="adjudicate_finding",
+            content={"finding": "Potential security issue"},
+        )
+
+        # Old-style response: evidence is a string (WRONG).
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "false_positive",
+                    "evidence": "reason a",  # STRING instead of ARRAY
+                    "confidence": 0.85,
+                },
+                {
+                    "verdict": "false_positive",
+                    "evidence": "reason a",
+                    "confidence": 0.85,
+                },
+            ]
+        )
+        driver = OrchestratorDriver(
+            backend, schema_dir=self.schema_dir, max_retries=1
+        )
+
+        result = driver.decide("adjudicate_finding", context)
+
+        # Should fail validation because evidence is not an array.
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
+    def test_verdict_not_in_enum_fails(self):
+        """Verdict not in schema enum should fail validation."""
+        context = ContextPack(
+            decision_type="adjudicate_finding",
+            content={"finding": "Potential security issue"},
+        )
+
+        # Wrong verdict: not in the enum.
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "invalid_value",  # NOT in enum
+                    "evidence": ["reason a"],
+                    "confidence": 0.85,
+                },
+                {
+                    "verdict": "invalid_value",
+                    "evidence": ["reason a"],
+                    "confidence": 0.85,
+                },
+            ]
+        )
+        driver = OrchestratorDriver(
+            backend, schema_dir=self.schema_dir, max_retries=1
+        )
+
+        result = driver.decide("adjudicate_finding", context)
+
+        # Should fail because verdict is not in schema enum.
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
+    def test_empty_evidence_array_fails(self):
+        """Evidence array with minItems < 1 should fail."""
+        context = ContextPack(
+            decision_type="adjudicate_finding",
+            content={"finding": "Potential security issue"},
+        )
+
+        # Empty evidence array (violates minItems: 1).
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "false_positive",
+                    "evidence": [],  # Empty, violates minItems
+                    "confidence": 0.85,
+                },
+                {
+                    "verdict": "false_positive",
+                    "evidence": [],
+                    "confidence": 0.85,
+                },
+            ]
+        )
+        driver = OrchestratorDriver(
+            backend, schema_dir=self.schema_dir, max_retries=1
+        )
+
+        result = driver.decide("adjudicate_finding", context)
+
+        # Should fail because evidence array is empty.
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
+    def test_evidence_with_empty_strings_fails(self):
+        """Evidence array with empty strings should fail."""
+        context = ContextPack(
+            decision_type="adjudicate_finding",
+            content={"finding": "Potential security issue"},
+        )
+
+        # Evidence with empty string items (violates minLength: 1).
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "false_positive",
+                    "evidence": ["reason a", ""],  # Empty string in array
+                    "confidence": 0.85,
+                },
+                {
+                    "verdict": "false_positive",
+                    "evidence": ["reason a", ""],
+                    "confidence": 0.85,
+                },
+            ]
+        )
+        driver = OrchestratorDriver(
+            backend, schema_dir=self.schema_dir, max_retries=1
+        )
+
+        result = driver.decide("adjudicate_finding", context)
+
+        # Should fail because evidence contains empty strings.
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
 
 
 if __name__ == "__main__":
